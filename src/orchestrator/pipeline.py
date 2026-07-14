@@ -1,0 +1,255 @@
+"""Orchestrator turn pipeline with bounded input and stale segment rejection."""
+
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal, Protocol
+
+from orchestrator.ids import SegmentId, TurnId
+from orchestrator.llm import (
+    CancellationToken,
+    LLMAdapter,
+    LLMChunk,
+    LLMError,
+    LLMFinal,
+    build_llm_request,
+)
+from orchestrator.modes import AnswerCandidate, AudienceInput, AudienceSource
+from orchestrator.pipeline_contracts import (
+    ASRAudienceEvent,
+    AudienceEvent,
+    CancelCommand,
+    CommentAudienceEvent,
+    PipelineConfig,
+    SoundPlayCommand,
+    TTSChunkEvent,
+    TTSCommand,
+    TTSDoneEvent,
+    TTSObservation,
+    TurnResult,
+    VtuberActionCommand,
+    VtuberCaptionCommand,
+    VtuberSegmentCommands,
+)
+from orchestrator.retrieval import RetrievalProvider
+
+
+class AnswerPolicy(Protocol):
+    """Mode policy capability used by the turn pipeline."""
+
+    def select_answer_candidate(
+        self,
+        audience_inputs: tuple[AudienceInput, ...],
+    ) -> AnswerCandidate | None:
+        """Select the audience input that should drive the next turn."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineAdapters:
+    """Provider seams used by the Orchestrator turn pipeline."""
+
+    mode_policy: AnswerPolicy
+    llm: LLMAdapter
+    retrieval: RetrievalProvider
+
+
+class OrchestratorTurnPipeline:
+    """Routes audience input through mode policy, LLM, and command records."""
+
+    def __init__(
+        self,
+        *,
+        adapters: PipelineAdapters,
+        config: PipelineConfig,
+    ) -> None:
+        """Create an empty turn pipeline with bounded input capacity."""
+        self._mode_policy: AnswerPolicy = adapters.mode_policy
+        self._llm: LLMAdapter = adapters.llm
+        self._retrieval: RetrievalProvider = adapters.retrieval
+        self._queue_capacity: int = config.queue_capacity
+        self._turn_id_prefix: str = config.turn_id_prefix
+        self._segment_id_prefix: str = config.segment_id_prefix
+        self._queue: deque[AudienceEvent] = deque()
+        self._turn_seq: int = 0
+        self._active: _ActiveTurn | None = None
+        self._stale_segments: set[SegmentId] = set()
+        self._rejections: list[str] = []
+        self._cancel_commands: list[CancelCommand] = []
+
+    @property
+    def rejections(self) -> tuple[str, ...]:
+        """Return deterministic backpressure rejection reasons."""
+        return tuple(self._rejections)
+
+    @property
+    def cancel_commands(self) -> tuple[CancelCommand, ...]:
+        """Return cancellation commands emitted by interruption policy."""
+        return tuple(self._cancel_commands)
+
+    def accept_audience_input(self, event: AudienceEvent) -> bool:
+        """Accept normalized ASR/comment input unless the bounded queue is full."""
+        if self._active is not None:
+            self._cancel_active(reason="user_interrupt")
+        if len(self._queue) >= self._queue_capacity:
+            self._rejections.append("queue_full")
+            return False
+        self._queue.append(event)
+        return True
+
+    def process_next_turn(self) -> TurnResult | None:
+        """Process one queued input through policy, retrieval, LLM, and TTS command."""
+        if len(self._queue) == 0:
+            return None
+        audience_input = _to_audience_input(self._queue.popleft())
+        candidate = self._mode_policy.select_answer_candidate((audience_input,))
+        if candidate is None:
+            return None
+        self._turn_seq += 1
+        turn_id = TurnId(f"{self._turn_id_prefix}-{self._turn_seq:04d}")
+        segment_id = SegmentId(f"{self._segment_id_prefix}-{self._turn_seq:04d}")
+        token = CancellationToken()
+        text_parts: list[str] = []
+        final: LLMFinal | None = None
+        request = build_llm_request(
+            candidate,
+            context_refs=self._retrieval.retrieve(candidate),
+        )
+        for llm_event in self._llm.stream(
+            request,
+            cancellation=token,
+        ):
+            match llm_event:
+                case LLMChunk(text=text):
+                    text_parts.append(text)
+                case LLMError() as error:
+                    if error.cancel_pending_tts:
+                        self._cancel_commands.append(
+                            _cancel(
+                                _CancelIntent(
+                                    turn_id,
+                                    segment_id,
+                                    "tts",
+                                    "llm_timeout",
+                                ),
+                            ),
+                        )
+                case LLMFinal() as llm_final:
+                    final = llm_final
+        answer_text = final.text if final is not None else "".join(text_parts)
+        tts_command = TTSCommand(
+            turn_id=turn_id,
+            segment_id=segment_id,
+            request_id=f"tts-{segment_id}",
+            text=answer_text,
+            voice="raspberry-default",
+        )
+        self._active = _ActiveTurn(
+            turn_id=turn_id,
+            segment_id=segment_id,
+            text=answer_text,
+            cancellation=token,
+        )
+        return TurnResult(
+            turn_id=turn_id,
+            segment_id=segment_id,
+            tts_command=tts_command,
+            used_fallback=final.used_fallback if final is not None else False,
+        )
+
+    def accept_tts_event(
+        self,
+        event: TTSObservation,
+    ) -> SoundPlayCommand | VtuberSegmentCommands | None:
+        """Route fresh TTS observations and reject cancelled stale segments."""
+        active = self._active
+        if active is None or event.segment_id in self._stale_segments:
+            return None
+        if event.turn_id != active.turn_id or event.segment_id != active.segment_id:
+            return None
+        match event:
+            case TTSChunkEvent() as chunk:
+                return SoundPlayCommand(
+                    turn_id=chunk.turn_id,
+                    segment_id=chunk.segment_id,
+                    command_id=f"sound-{chunk.segment_id}-{chunk.chunk_id}",
+                    uri=chunk.uri,
+                    audio=chunk.audio,
+                )
+            case TTSDoneEvent():
+                return VtuberSegmentCommands(
+                    caption=VtuberCaptionCommand(
+                        turn_id=active.turn_id,
+                        segment_id=active.segment_id,
+                        text=active.text,
+                    ),
+                    action=VtuberActionCommand(
+                        turn_id=active.turn_id,
+                        segment_id=active.segment_id,
+                        action="speak",
+                    ),
+                )
+
+    def _cancel_active(self, *, reason: str) -> None:
+        active = self._active
+        if active is None:
+            return
+        _ = active.cancellation.cancel(reason=reason)
+        self._stale_segments.add(active.segment_id)
+        self._cancel_commands.extend(
+            (
+                _cancel(
+                    _CancelIntent(active.turn_id, active.segment_id, target, reason),
+                )
+                for target in ("tts", "sound", "vtuber")
+            ),
+        )
+        self._active = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ActiveTurn:
+    turn_id: TurnId
+    segment_id: SegmentId
+    text: str
+    cancellation: CancellationToken
+
+
+@dataclass(frozen=True, slots=True)
+class _CancelIntent:
+    turn_id: TurnId
+    segment_id: SegmentId
+    target: Literal["tts", "sound", "vtuber"]
+    reason: str
+
+
+def _to_audience_input(event: AudienceEvent) -> AudienceInput:
+    match event:
+        case CommentAudienceEvent(text=text, timestamp=timestamp):
+            return AudienceInput(
+                source=AudienceSource.COMMENT,
+                text=text,
+                received_at_ms=_timestamp_ms(timestamp),
+            )
+        case ASRAudienceEvent(text=text, received_at_ms=received_at_ms):
+            return AudienceInput(
+                source=AudienceSource.ASR,
+                text=text,
+                received_at_ms=received_at_ms,
+            )
+
+
+def _timestamp_ms(raw_timestamp: str) -> int:
+    parsed = datetime.fromisoformat(raw_timestamp)
+    return int(parsed.timestamp() * 1000)
+
+
+def _cancel(intent: _CancelIntent) -> CancelCommand:
+    match intent.target:
+        case "tts" | "sound" | "vtuber":
+            return CancelCommand(
+                turn_id=intent.turn_id,
+                segment_id=intent.segment_id,
+                target=intent.target,
+                reason=intent.reason,
+            )
