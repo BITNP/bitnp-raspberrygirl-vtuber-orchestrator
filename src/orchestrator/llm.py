@@ -4,8 +4,11 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, Self, TypedDict, assert_never, override
 
+from orchestrator.media_adapters import OpenAICompatibleASRAdapter, VllmOmniTTSAdapter
 from orchestrator.modes import AnswerCandidate, OrchestratorMode
 from orchestrator.retrieval import KnowledgeRef
+
+__all__ = ["OpenAICompatibleASRAdapter", "VllmOmniTTSAdapter"]
 
 DEFAULT_TEMPERATURE: Final = 0.2
 DEFAULT_TIMEOUT_SECONDS: Final = 30.0
@@ -89,7 +92,7 @@ class LLMError:
 
     code: str
     message: str
-    cancel_pending_tts: bool
+    cancel_pending_media: bool
 
 
 type LLMStreamEvent = LLMChunk | LLMFinal | LLMError
@@ -209,7 +212,7 @@ class FallbackLLMAdapter:
             yield LLMError(
                 code="llm_timeout",
                 message=str(error),
-                cancel_pending_tts=True,
+                cancel_pending_media=True,
             )
             if not _is_cancelled(cancellation):
                 yield LLMFinal(text=self.fallback_text, used_fallback=True)

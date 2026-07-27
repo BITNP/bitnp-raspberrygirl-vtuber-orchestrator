@@ -49,7 +49,7 @@ def test_timeout_adapter_returns_error_and_fallback_caption_deterministically() 
         LLMError(
             code="llm_timeout",
             message="provider deadline exceeded",
-            cancel_pending_tts=True,
+            cancel_pending_media=True,
         ),
         LLMFinal(
             text="I am having trouble answering right now.",

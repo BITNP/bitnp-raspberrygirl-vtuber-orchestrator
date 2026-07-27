@@ -62,17 +62,9 @@ def test_observability_helpers_emit_json_logs_and_metrics() -> None:
 
 
 def test_env_examples_do_not_commit_real_secrets() -> None:
-    repo_root = Path(__file__).resolve().parents[2]
-    examples = sorted(repo_root.glob("*/.env.example"))
+    repo_root = Path(__file__).resolve().parents[1]
+    examples = (repo_root / ".env.example",)
 
-    assert {path.parent.name for path in examples} == {
-        "asr",
-        "comments",
-        "mic",
-        "orchestrator",
-        "sound",
-        "tts",
-    }
     for path in examples:
         text = path.read_text(encoding="utf-8")
         assert "placeholder" in text
