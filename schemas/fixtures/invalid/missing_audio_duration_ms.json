@@ -1,0 +1,1 @@
+{"schema_version":"1.0.0","event_type":"tts.chunk","event_id":"evt-invalid-missing-audio-duration","source":"tts","time":"2026-07-08T00:00:00Z","trace_id":"trace-invalid-audio","session_id":"session-001","seq":2,"data":{"request_id":"tts-invalid","chunk_id":"chunk-invalid","audio":{"sample_rate":24000,"channels":1,"codec":"pcm_s16le"}}}

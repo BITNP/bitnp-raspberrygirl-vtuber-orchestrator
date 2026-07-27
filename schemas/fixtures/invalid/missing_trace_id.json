@@ -1,0 +1,1 @@
+{"schema_version":"1.0.0","event_type":"audience.input","event_id":"evt-invalid-missing-trace","source":"comments","time":"2026-07-08T00:00:00Z","session_id":"session-001","seq":1,"data":{"input_id":"input-001","origin":"comment","text":"hello","received_at":"2026-07-08T00:00:00Z"}}

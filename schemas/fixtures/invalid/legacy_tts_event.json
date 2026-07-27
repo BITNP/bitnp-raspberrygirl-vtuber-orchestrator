@@ -1,0 +1,1 @@
+{"schema_version":"1.0.0","event_type":"tts.done","event_id":"evt-invalid-legacy-tts","source":"orchestrator","time":"2026-07-08T00:00:00Z","trace_id":"trace-invalid-legacy","session_id":"session-001","seq":1,"data":{"request_id":"tts-legacy-001","audio":{"sample_rate":24000,"channels":1,"codec":"pcm_s16le","duration_ms":1000}}}

@@ -1,0 +1,1 @@
+{"schema_version":"1.0.0","event_type":"asr.final","event_id":"evt-invalid-legacy-asr","source":"mic","time":"2026-07-08T00:00:00Z","trace_id":"trace-invalid-legacy","session_id":"session-001","seq":1,"data":{"segment_id":"segment-legacy-001","text":"Legacy ASR runtime event.","confidence":1,"audio":{"sample_rate":16000,"channels":1,"codec":"pcm_s16le","duration_ms":1000}}}

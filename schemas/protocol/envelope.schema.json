@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bitnp.local/schemas/protocol/envelope.schema.json",
+  "title": "Distributed AI VTuber Protocol Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_type", "event_id", "source", "time", "trace_id", "session_id", "seq", "data"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"}, "event_type": {"type": "string", "minLength": 1},
+    "event_id": {"type": "string", "minLength": 1}, "source": {"type": "string", "minLength": 1},
+    "time": {"type": "string", "format": "date-time"}, "trace_id": {"type": "string", "minLength": 1},
+    "session_id": {"type": "string", "minLength": 1}, "seq": {"type": "integer", "minimum": 0},
+    "turn_id": {"type": "string", "minLength": 1}, "segment_id": {"type": "string", "minLength": 1},
+    "traceparent": {"type": "string", "minLength": 1}, "data": {"type": "object"}
+  }
+}
