@@ -25,9 +25,8 @@ from orchestrator.retrieval import RetrievalFixtureProvider
 
 from .e2e_replay_harness import ModuleEdge, ReplayHarness, ScenarioSummary
 
-ROOT: Final = Path(__file__).resolve().parents[3]
 COMMENT_FIXTURE: Final = (
-    ROOT / "comments" / "tests" / "fixtures" / "bilibili_comments.jsonl"
+    Path(__file__).resolve().parents[1] / "fixtures" / "bilibili_comments.jsonl"
 )
 COMMENT_FIELD_PATTERN: Final = re.compile(
     r'"(?P<key>platform|source|user|text|timestamp)"\s*:\s*"(?P<value>[^"]*)"',
@@ -47,7 +46,7 @@ def negative_peer_harness() -> ReplayHarness:
     harness = _harness("negative_peer", ModePolicy.onsite_explainer())
     harness.submit(ASRAudienceEvent("question", 1, "asr-neg", 1))
     _ = harness.finish_turn()
-    harness.inject_edge(ModuleEdge("asr", "tts", "forbidden.peer"))
+    harness.inject_edge(ModuleEdge("asr", "sound", "forbidden.peer"))
     return harness
 
 
@@ -92,7 +91,7 @@ def _lecturer_interruption() -> ScenarioSummary:
     harness.submit(ASRAudienceEvent("Please repeat", 1_000, "asr-int-1", 1))
     first = harness.start_next_turn()
     harness.submit(ASRAudienceEvent("Actually, define BitNet", 1_100, "asr-int-2", 2))
-    harness.reject_stale_tts(first)
+    harness.reject_stale_synthesis(first)
     _ = harness.finish_turn()
     harness.assert_no_peer_edges()
     return harness.summary()

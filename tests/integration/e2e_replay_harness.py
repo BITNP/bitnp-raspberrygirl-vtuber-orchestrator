@@ -6,24 +6,19 @@ from orchestrator.pipeline_contracts import (
     ASRAudienceEvent,
     AudioMetadata,
     CommentAudienceEvent,
-    SoundPlayCommand,
-    TTSChunkEvent,
-    TTSDoneEvent,
+    MediaStreamState,
+    MockSynthesisResult,
+    SynthesisCueResult,
     TurnResult,
-    VtuberSegmentCommands,
 )
 
 AUDIENCE_REJECTED: Final = "audience input was rejected"
 EXPECTED_TURN: Final = "expected replay turn"
 STALE_ACCEPTED: Final = "stale segment was accepted"
 PEER_EDGE_RECORDED: Final = "peer communication edge recorded"
-CHUNK_REJECTED: Final = "fresh TTS chunk was rejected"
-CHUNK_TO_VTUBER: Final = "TTS chunk routed to vtuber"
-DONE_REJECTED: Final = "fresh TTS completion was rejected"
-DONE_TO_SOUND: Final = "TTS completion routed to sound"
+SYNTHESIS_REJECTED: Final = "fresh synthesis result was rejected"
 
-type ServiceName = Literal["comments", "asr", "tts", "orchestrator", "sound", "vtuber"]
-type TargetName = Literal["orchestrator", "tts", "sound", "vtuber"]
+type ServiceName = Literal["comments", "asr", "orchestrator", "sound", "frontend"]
 type ReplayEvent = CommentAudienceEvent | ASRAudienceEvent
 
 
@@ -39,7 +34,7 @@ class ReplayError(Exception):
 @dataclass(frozen=True, slots=True)
 class ModuleEdge:
     source: ServiceName
-    target: TargetName
+    target: ServiceName
     event_type: str
 
 
@@ -55,8 +50,8 @@ class TimelineEvent:
 @dataclass(frozen=True, slots=True)
 class ReplayTurnOutput:
     turn: TurnResult
-    sound: SoundPlayCommand
-    vtuber: VtuberSegmentCommands
+    cues: SynthesisCueResult
+    state: MediaStreamState
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,7 +65,7 @@ class ScenarioSummary:
 
 @final
 class ReplayHarness:
-    """Mutable deterministic E2E driver for the Orchestrator pipeline."""
+    """Mutable deterministic E2E driver for canonical media-stream events."""
 
     def __init__(self, *, name: str, pipeline: OrchestratorTurnPipeline) -> None:
         self._name: str = name
@@ -94,50 +89,57 @@ class ReplayHarness:
             raise ReplayError(EXPECTED_TURN)
         self._turn_ids.append(str(turn.turn_id))
         self._segment_ids.append(str(turn.segment_id))
-        self._edges.append(
-            ModuleEdge("orchestrator", "tts", turn.tts_command.event_type),
+        return turn
+
+    def finish_turn(self) -> ReplayTurnOutput:
+        turn = self.start_next_turn()
+        cues = self._complete(turn)
+        self._record_cues(cues)
+        media = cues.media
+        if media is None:
+            raise ReplayError(SYNTHESIS_REJECTED)
+        state = MediaStreamState(
+            turn.turn_id,
+            turn.segment_id,
+            media.stream_id,
+            "finished",
+            media.audio.duration_ms,
         )
+        self._edges.append(ModuleEdge("sound", "orchestrator", state.event_type))
         self._timeline.append(
             TimelineEvent(
-                "tts_request",
-                turn.tts_command.event_type,
+                "media_state",
+                state.event_type,
                 turn.turn_id,
                 turn.segment_id,
                 0,
             ),
         )
-        return turn
+        return ReplayTurnOutput(turn, cues, state)
 
-    def finish_turn(self) -> ReplayTurnOutput:
-        turn = self.start_next_turn()
-        return ReplayTurnOutput(
-            turn=turn,
-            sound=self._sound_for(turn),
-            vtuber=self._vtuber_for(turn),
-        )
-
-    def reject_stale_tts(self, turn: TurnResult) -> None:
-        stale = self._pipeline.accept_tts_event(
-            TTSDoneEvent(turn_id=turn.turn_id, segment_id=turn.segment_id),
+    def reject_stale_synthesis(self, turn: TurnResult) -> None:
+        stale = self._pipeline.complete_synthesis(
+            _synthesis(turn),
+            rtp_stream_start_ms=0,
+            stream_id=f"rtp-{turn.segment_id}",
         )
         if stale is not None:
             raise ReplayError(STALE_ACCEPTED)
         self._timeline.append(
             TimelineEvent(
                 "stale_rejected",
-                "tts.done",
+                "media.stream.command",
                 turn.turn_id,
                 turn.segment_id,
                 0,
             ),
         )
 
-    def require_vtuber_commands(self, turn: TurnResult) -> VtuberSegmentCommands:
-        return self._vtuber_for(turn)
+    def require_synthesis_cues(self, turn: TurnResult) -> SynthesisCueResult:
+        return self._complete(turn)
 
     def assert_no_peer_edges(self) -> None:
-        peer_edges = tuple(edge for edge in self._edges if is_peer_edge(edge))
-        if len(peer_edges) > 0:
+        if any(is_peer_edge(edge) for edge in self._edges):
             raise ReplayError(PEER_EDGE_RECORDED)
 
     def summary(self) -> ScenarioSummary:
@@ -152,71 +154,41 @@ class ReplayHarness:
     def inject_edge(self, edge: ModuleEdge) -> None:
         self._edges.append(edge)
 
-    def _sound_for(self, turn: TurnResult) -> SoundPlayCommand:
-        chunk = TTSChunkEvent(
-            turn.turn_id,
-            turn.segment_id,
-            "chunk-001",
-            AudioMetadata(24_000, 1, "pcm_s16le", 120, 5_760),
-            f"segment://{turn.segment_id}/chunk-001",
+    def _complete(self, turn: TurnResult) -> SynthesisCueResult:
+        cues = self._pipeline.complete_synthesis(
+            _synthesis(turn),
+            rtp_stream_start_ms=0,
+            stream_id=f"rtp-{turn.segment_id}",
         )
-        routed = self._pipeline.accept_tts_event(chunk)
-        match routed:
-            case SoundPlayCommand() as sound:
-                self._edges.append(ModuleEdge("tts", "orchestrator", chunk.event_type))
-                self._edges.append(
-                    ModuleEdge("orchestrator", "sound", sound.event_type),
-                )
-                self._timeline.append(
-                    TimelineEvent(
-                        "sound_play",
-                        sound.event_type,
-                        sound.turn_id,
-                        sound.segment_id,
-                        0,
-                    ),
-                )
-                return sound
-            case None:
-                raise ReplayError(CHUNK_REJECTED)
-            case VtuberSegmentCommands():
-                raise ReplayError(CHUNK_TO_VTUBER)
+        if cues is None:
+            raise ReplayError(SYNTHESIS_REJECTED)
+        return cues
 
-    def _vtuber_for(self, turn: TurnResult) -> VtuberSegmentCommands:
-        done = TTSDoneEvent(turn_id=turn.turn_id, segment_id=turn.segment_id)
-        routed = self._pipeline.accept_tts_event(done)
-        match routed:
-            case VtuberSegmentCommands() as vtuber:
-                self._edges.append(ModuleEdge("tts", "orchestrator", done.event_type))
-                self._edges.append(
-                    ModuleEdge("orchestrator", "vtuber", vtuber.caption.event_type),
-                )
-                self._edges.append(
-                    ModuleEdge("orchestrator", "vtuber", vtuber.action.event_type),
-                )
-                self._timeline.append(
-                    TimelineEvent(
-                        "vtuber_caption",
-                        vtuber.caption.event_type,
-                        vtuber.caption.turn_id,
-                        vtuber.caption.segment_id,
-                        0,
-                    ),
-                )
-                self._timeline.append(
-                    TimelineEvent(
-                        "vtuber_action",
-                        vtuber.action.event_type,
-                        vtuber.action.turn_id,
-                        vtuber.action.segment_id,
-                        0,
-                    ),
-                )
-                return vtuber
-            case None:
-                raise ReplayError(DONE_REJECTED)
-            case SoundPlayCommand():
-                raise ReplayError(DONE_TO_SOUND)
+    def _record_cues(self, cues: SynthesisCueResult) -> None:
+        media = cues.media
+        if media is None:
+            raise ReplayError(SYNTHESIS_REJECTED)
+        self._edges.append(ModuleEdge("orchestrator", "sound", media.event_type))
+        self._timeline.append(
+            TimelineEvent(
+                "media_command",
+                media.event_type,
+                media.turn_id,
+                media.segment_id,
+                0,
+            ),
+        )
+        for cue in (cues.caption, cues.expression, cues.action, cues.scene):
+            self._edges.append(ModuleEdge("orchestrator", "frontend", cue.event_type))
+            self._timeline.append(
+                TimelineEvent(
+                    "frontend_cue",
+                    cue.event_type,
+                    cue.turn_id,
+                    cue.segment_id,
+                    0,
+                ),
+            )
 
 
 def event_types(summary: ScenarioSummary, event_type: str) -> tuple[str, ...]:
@@ -227,6 +199,18 @@ def event_types(summary: ScenarioSummary, event_type: str) -> tuple[str, ...]:
 
 def is_peer_edge(edge: ModuleEdge) -> bool:
     return edge.source != "orchestrator" and edge.target != "orchestrator"
+
+
+def _synthesis(turn: TurnResult) -> MockSynthesisResult:
+    return MockSynthesisResult(
+        turn.turn_id,
+        turn.segment_id,
+        AudioMetadata(24_000, 1, "pcm_s16le", 120, 5_760),
+        "smile",
+        "speak",
+        "presentation",
+        1,
+    )
 
 
 def _source_for(event: ReplayEvent) -> ServiceName:
