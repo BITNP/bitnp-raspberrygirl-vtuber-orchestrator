@@ -34,7 +34,7 @@ def test_bounded_queue_rejects_overflow_without_sleeping() -> None:
     assert pipeline.rejections == ("queue_full",)
 
 
-def test_llm_timeout_emits_fallback_tts_command_without_wall_clock() -> None:
+def test_llm_timeout_emits_fallback_answer_without_wall_clock() -> None:
     # Given: the provider times out and the adapter has deterministic fallback text.
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
@@ -58,8 +58,8 @@ def test_llm_timeout_emits_fallback_tts_command_without_wall_clock() -> None:
     # When: the turn is processed.
     turn = pipeline.process_next_turn()
 
-    # Then: fallback text is routed to TTS and timeout cancels pending downstream work.
+    # Then: fallback text is retained and timeout cancels pending media work.
     assert turn is not None
-    assert turn.tts_command.text == "Fallback answer."
+    assert turn.answer_text == "Fallback answer."
     assert turn.used_fallback is True
-    assert [command.target for command in pipeline.cancel_commands] == ["tts"]
+    assert [command.target for command in pipeline.cancel_commands] == ["media_stream"]

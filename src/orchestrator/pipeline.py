@@ -20,16 +20,15 @@ from orchestrator.pipeline_contracts import (
     AudienceEvent,
     CancelCommand,
     CommentAudienceEvent,
+    MediaStreamCommand,
+    MockSynthesisResult,
     PipelineConfig,
-    SoundPlayCommand,
-    TTSChunkEvent,
-    TTSCommand,
-    TTSDoneEvent,
-    TTSObservation,
+    SynthesisCueResult,
     TurnResult,
     VtuberActionCommand,
     VtuberCaptionCommand,
-    VtuberSegmentCommands,
+    VtuberExpressionCommand,
+    VtuberSceneCommand,
 )
 from orchestrator.retrieval import RetrievalProvider
 
@@ -98,7 +97,7 @@ class OrchestratorTurnPipeline:
         return True
 
     def process_next_turn(self) -> TurnResult | None:
-        """Process one queued input through policy, retrieval, LLM, and TTS command."""
+        """Process one queued input through policy, retrieval, and the LLM."""
         if len(self._queue) == 0:
             return None
         audience_input = _to_audience_input(self._queue.popleft())
@@ -123,13 +122,13 @@ class OrchestratorTurnPipeline:
                 case LLMChunk(text=text):
                     text_parts.append(text)
                 case LLMError() as error:
-                    if error.cancel_pending_tts:
+                    if error.cancel_pending_media:
                         self._cancel_commands.append(
                             _cancel(
                                 _CancelIntent(
                                     turn_id,
                                     segment_id,
-                                    "tts",
+                                    "media_stream",
                                     "llm_timeout",
                                 ),
                             ),
@@ -137,13 +136,6 @@ class OrchestratorTurnPipeline:
                 case LLMFinal() as llm_final:
                     final = llm_final
         answer_text = final.text if final is not None else "".join(text_parts)
-        tts_command = TTSCommand(
-            turn_id=turn_id,
-            segment_id=segment_id,
-            request_id=f"tts-{segment_id}",
-            text=answer_text,
-            voice="raspberry-default",
-        )
         self._active = _ActiveTurn(
             turn_id=turn_id,
             segment_id=segment_id,
@@ -153,42 +145,66 @@ class OrchestratorTurnPipeline:
         return TurnResult(
             turn_id=turn_id,
             segment_id=segment_id,
-            tts_command=tts_command,
+            answer_text=answer_text,
             used_fallback=final.used_fallback if final is not None else False,
         )
 
-    def accept_tts_event(
+    def complete_synthesis(
         self,
-        event: TTSObservation,
-    ) -> SoundPlayCommand | VtuberSegmentCommands | None:
-        """Route fresh TTS observations and reject cancelled stale segments."""
+        synthesis: MockSynthesisResult,
+        *,
+        rtp_stream_start_ms: int,
+        stream_id: str = "rtp-local",
+    ) -> SynthesisCueResult | None:
+        """Emit media and frontend controls relative to a supplied RTP start."""
         active = self._active
-        if active is None or event.segment_id in self._stale_segments:
+        if active is None or synthesis.segment_id in self._stale_segments:
             return None
-        if event.turn_id != active.turn_id or event.segment_id != active.segment_id:
+        if (
+            synthesis.turn_id != active.turn_id
+            or synthesis.segment_id != active.segment_id
+        ):
             return None
-        match event:
-            case TTSChunkEvent() as chunk:
-                return SoundPlayCommand(
-                    turn_id=chunk.turn_id,
-                    segment_id=chunk.segment_id,
-                    command_id=f"sound-{chunk.segment_id}-{chunk.chunk_id}",
-                    uri=chunk.uri,
-                    audio=chunk.audio,
-                )
-            case TTSDoneEvent():
-                return VtuberSegmentCommands(
-                    caption=VtuberCaptionCommand(
-                        turn_id=active.turn_id,
-                        segment_id=active.segment_id,
-                        text=active.text,
-                    ),
-                    action=VtuberActionCommand(
-                        turn_id=active.turn_id,
-                        segment_id=active.segment_id,
-                        action="speak",
-                    ),
-                )
+        if synthesis.audio is None:
+            return None
+        offset_ms = synthesis.offset_samples * 1_000 // synthesis.audio.sample_rate
+        start_at_ms = rtp_stream_start_ms + offset_ms
+        return SynthesisCueResult(
+            media=MediaStreamCommand(
+                turn_id=synthesis.turn_id,
+                segment_id=synthesis.segment_id,
+                stream_id=stream_id,
+                audio=synthesis.audio,
+                start_at_ms=start_at_ms,
+            ),
+            caption=VtuberCaptionCommand(
+                turn_id=synthesis.turn_id,
+                segment_id=synthesis.segment_id,
+                text=active.text,
+                start_at_ms=start_at_ms,
+            ),
+            expression=VtuberExpressionCommand(
+                turn_id=synthesis.turn_id,
+                segment_id=synthesis.segment_id,
+                expression=synthesis.expression,
+                start_at_ms=start_at_ms,
+            ),
+            action=VtuberActionCommand(
+                turn_id=synthesis.turn_id,
+                segment_id=synthesis.segment_id,
+                action=synthesis.action,
+                start_at_ms=start_at_ms,
+            ),
+            scene=VtuberSceneCommand(
+                turn_id=synthesis.turn_id,
+                segment_id=synthesis.segment_id,
+                scene=synthesis.scene,
+                slide_id="",
+                slide_title="",
+                slide_page=synthesis.slide_page,
+                start_at_ms=start_at_ms,
+            ),
+        )
 
     def _cancel_active(self, *, reason: str) -> None:
         active = self._active
@@ -201,7 +217,7 @@ class OrchestratorTurnPipeline:
                 _cancel(
                     _CancelIntent(active.turn_id, active.segment_id, target, reason),
                 )
-                for target in ("tts", "sound", "vtuber")
+                for target in ("media_stream", "frontend")
             ),
         )
         self._active = None
@@ -219,7 +235,7 @@ class _ActiveTurn:
 class _CancelIntent:
     turn_id: TurnId
     segment_id: SegmentId
-    target: Literal["tts", "sound", "vtuber"]
+    target: Literal["media_stream", "frontend"]
     reason: str
 
 
@@ -246,7 +262,7 @@ def _timestamp_ms(raw_timestamp: str) -> int:
 
 def _cancel(intent: _CancelIntent) -> CancelCommand:
     match intent.target:
-        case "tts" | "sound" | "vtuber":
+        case "media_stream" | "frontend":
             return CancelCommand(
                 turn_id=intent.turn_id,
                 segment_id=intent.segment_id,

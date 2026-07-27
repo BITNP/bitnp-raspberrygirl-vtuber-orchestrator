@@ -6,8 +6,9 @@ from typing import Final
 
 from orchestrator.modes import AudienceInput, AudienceSource, ModePolicy
 
-ROOT = Path(__file__).resolve().parents[2]
-COMMENT_FIXTURE = ROOT / "comments" / "tests" / "fixtures" / "bilibili_comments.jsonl"
+COMMENT_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "bilibili_comments.jsonl"
+)
 COMMENT_FIELD_PATTERN: Final = re.compile(
     r'"(?P<key>platform|source|user|text|timestamp)"\s*:\s*"(?P<value>[^"]*)"',
 )

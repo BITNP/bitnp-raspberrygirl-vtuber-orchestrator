@@ -38,7 +38,7 @@ class PipelineConfig:
 
 @dataclass(frozen=True, slots=True)
 class AudioMetadata:
-    """Audio metadata mirrored from TTS and routed to sound."""
+    """Audio metadata from Orchestrator-owned provider synthesis."""
 
     sample_rate: int
     channels: int
@@ -48,48 +48,27 @@ class AudioMetadata:
 
 
 @dataclass(frozen=True, slots=True)
-class TTSCommand:
-    """Orchestrator command requesting speech synthesis for one segment."""
+class MediaStreamCommand:
+    """Orchestrator-local audio command aligned to a target RTP stream."""
 
     turn_id: TurnId
     segment_id: SegmentId
-    request_id: str
-    text: str
-    voice: str
-    event_type: Literal["tts.request"] = "tts.request"
-
-
-@dataclass(frozen=True, slots=True)
-class TTSChunkEvent:
-    """TTS chunk observation accepted by Orchestrator."""
-
-    turn_id: TurnId
-    segment_id: SegmentId
-    chunk_id: str
+    stream_id: str
     audio: AudioMetadata
-    uri: str
-    event_type: Literal["tts.chunk"] = "tts.chunk"
+    start_at_ms: int
+    event_type: Literal["media.stream.command"] = "media.stream.command"
 
 
 @dataclass(frozen=True, slots=True)
-class TTSDoneEvent:
-    """TTS completion observation accepted by Orchestrator."""
+class MediaStreamState:
+    """Sound-service RTP playback state for an Orchestrator stream."""
 
     turn_id: TurnId
     segment_id: SegmentId
-    event_type: Literal["tts.done"] = "tts.done"
-
-
-@dataclass(frozen=True, slots=True)
-class SoundPlayCommand:
-    """Orchestrator command requesting playback for one audio chunk."""
-
-    turn_id: TurnId
-    segment_id: SegmentId
-    command_id: str
-    uri: str
-    audio: AudioMetadata
-    event_type: Literal["sound.play.command"] = "sound.play.command"
+    stream_id: str
+    state: Literal["queued", "playing", "finished", "cancelled"]
+    playback_position_ms: int
+    event_type: Literal["media.stream.state"] = "media.stream.state"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +78,7 @@ class VtuberCaptionCommand:
     turn_id: TurnId
     segment_id: SegmentId
     text: str
+    start_at_ms: int = 0
     event_type: Literal["vtuber.caption.command"] = "vtuber.caption.command"
 
 
@@ -108,16 +88,59 @@ class VtuberActionCommand:
 
     turn_id: TurnId
     segment_id: SegmentId
-    action: Literal["speak"]
+    action: str
+    start_at_ms: int = 0
     event_type: Literal["vtuber.action.command"] = "vtuber.action.command"
 
 
 @dataclass(frozen=True, slots=True)
-class VtuberSegmentCommands:
-    """Commands emitted after TTS completion makes a segment presentable."""
+class VtuberExpressionCommand:
+    """Orchestrator command requesting a timed avatar expression."""
 
+    turn_id: TurnId
+    segment_id: SegmentId
+    expression: str
+    start_at_ms: int = 0
+    event_type: Literal["vtuber.expression.command"] = "vtuber.expression.command"
+
+
+@dataclass(frozen=True, slots=True)
+class VtuberSceneCommand:
+    """Orchestrator command requesting a lecture scene or slide state."""
+
+    turn_id: TurnId
+    segment_id: SegmentId
+    scene: str
+    slide_id: str
+    slide_title: str
+    slide_page: int = 1
+    start_at_ms: int = 0
+    event_type: Literal["vtuber.scene.command"] = "vtuber.scene.command"
+
+
+@dataclass(frozen=True, slots=True)
+class MockSynthesisResult:
+    """Completed local synthesis with deterministic frontend controls."""
+
+    turn_id: TurnId
+    segment_id: SegmentId
+    audio: AudioMetadata | None
+    expression: str
+    action: str
+    scene: str
+    slide_page: int
+    offset_samples: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SynthesisCueResult:
+    """RTP-relative media and frontend cues for one completed synthesis."""
+
+    media: MediaStreamCommand | None
     caption: VtuberCaptionCommand
+    expression: VtuberExpressionCommand
     action: VtuberActionCommand
+    scene: VtuberSceneCommand
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +149,7 @@ class CancelCommand:
 
     turn_id: TurnId
     segment_id: SegmentId
-    target: Literal["llm", "tts", "sound", "vtuber"]
+    target: Literal["llm", "media_stream", "frontend"]
     reason: str
     event_type: Literal["cancel"] = "cancel"
 
@@ -137,9 +160,8 @@ class TurnResult:
 
     turn_id: TurnId
     segment_id: SegmentId
-    tts_command: TTSCommand
+    answer_text: str
     used_fallback: bool
 
 
 type AudienceEvent = CommentAudienceEvent | ASRAudienceEvent
-type TTSObservation = TTSChunkEvent | TTSDoneEvent
