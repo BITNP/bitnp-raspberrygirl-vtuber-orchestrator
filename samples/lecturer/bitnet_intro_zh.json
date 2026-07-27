@@ -1,0 +1,30 @@
+{
+  "title": "BitNet 讲解模式演示",
+  "voice": "raspberry-default",
+  "steps": [
+    {
+      "id": "intro",
+      "narration": "大家好，欢迎来到 BitNet 讲解模式演示。第一张幻灯片说明它为什么适合低功耗设备。",
+      "slide": {
+        "id": "slide-01",
+        "title": "为什么需要 BitNet",
+        "page": 1
+      },
+      "expression": "smile",
+      "action": "explain_point",
+      "scene": "lecture_slide_focus"
+    },
+    {
+      "id": "quantization",
+      "narration": "第二张幻灯片展示核心思想：用更少的比特表示权重，同时保留推理流程的可解释结构。",
+      "slide": {
+        "id": "slide-02",
+        "title": "低比特权重与推理",
+        "page": 2
+      },
+      "expression": "focus",
+      "action": "point_slide",
+      "scene": "lecture_slide_focus"
+    }
+  ]
+}
