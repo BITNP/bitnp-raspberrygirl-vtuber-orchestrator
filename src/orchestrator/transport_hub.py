@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, final, override
 
@@ -32,6 +33,13 @@ class DatagramSender(Protocol):
 
     def close(self) -> None:
         """Release the underlying UDP transport."""
+
+
+class OnsiteBridge(Protocol):
+    """Produces replacement Sound RTP from authenticated Mic RTP."""
+
+    async def ingest_mic_rtp(self, packet: bytes) -> bytes | tuple[bytes, ...] | None:
+        """Return generated canonical RTP, or no output for an incomplete turn."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,14 +85,22 @@ class DuplicateRouteError(Exception):
 class RtpHub:
     """Routes exact V2/PT96/L16 RTP bytes between authenticated control peers."""
 
-    def __init__(self, transport: DatagramSender | None = None) -> None:
+    def __init__(
+        self,
+        transport: DatagramSender | None = None,
+        *,
+        onsite_bridge: OnsiteBridge | None = None,
+    ) -> None:
         """Create an empty hub, optionally with an injected UDP sender."""
         self._transport: DatagramSender | None = transport
+        self._onsite_bridge: OnsiteBridge | None = onsite_bridge
         self._pending_sources: dict[StreamKey, PendingSource] = {}
         self._pinned_sources: dict[RouteKey, StreamKey] = {}
         self._sinks: dict[StreamKey, PeerAddress] = {}
         self._source_owners: dict[StreamKey, ConnectionId] = {}
         self._sink_owners: dict[StreamKey, ConnectionId] = {}
+        self._onsite_jobs: dict[StreamKey, set[asyncio.Task[None]]] = {}
+        self._route_generations: dict[StreamKey, int] = {}
 
     def attach_transport(self, transport: DatagramSender) -> None:
         """Attach the UDP sender created by the runtime listener."""
@@ -130,8 +146,55 @@ class RtpHub:
         sink = self._sinks.get(stream)
         if sink is None or self._transport is None:
             return False
+        if self._onsite_bridge is not None:
+            return self._route_onsite(data, stream)
         self._transport.sendto(data, sink)
         return True
+
+    def _route_onsite(self, data: bytes, stream: StreamKey) -> bool:
+        generation = self._route_generations.get(stream, 0)
+        task = asyncio.create_task(self._process_onsite(stream, data, generation))
+        jobs = self._onsite_jobs.setdefault(stream, set())
+        jobs.add(task)
+        task.add_done_callback(
+            lambda completed: self._discard_onsite_job(stream, completed)
+        )
+        return False
+
+    async def _process_onsite(
+        self, stream: StreamKey, data: bytes, generation: int
+    ) -> None:
+        bridge = self._onsite_bridge
+        if bridge is None:
+            return
+        generated = await bridge.ingest_mic_rtp(data)
+        if generation != self._route_generations.get(stream, 0) or generated is None:
+            return
+        packets = (generated,) if isinstance(generated, bytes) else generated
+        if any(not _is_canonical_rtp(packet) for packet in packets):
+            return
+        sink = self._sinks.get(stream)
+        transport = self._transport
+        if sink is None or transport is None:
+            return
+        for packet in packets:
+            transport.sendto(packet, sink)
+
+    def _discard_onsite_job(self, stream: StreamKey, task: asyncio.Task[None]) -> None:
+        jobs = self._onsite_jobs.get(stream)
+        if jobs is None:
+            return
+        jobs.discard(task)
+        if len(jobs) == 0:
+            del self._onsite_jobs[stream]
+
+    async def wait_for_onsite_jobs(self) -> None:
+        """Wait for all accepted onsite provider jobs to settle."""
+        while self._onsite_jobs:
+            jobs = tuple(
+                job for stream_jobs in self._onsite_jobs.values() for job in stream_jobs
+            )
+            _ = await asyncio.gather(*jobs, return_exceptions=True)
 
     def remove_connection(self, owner: ConnectionId) -> None:
         """Remove exactly the source and sink components owned by one WSS session."""
@@ -144,6 +207,8 @@ class RtpHub:
 
     def clear(self) -> None:
         """Remove all routes when the runtime relinquishes its listeners."""
+        for stream in tuple(self._onsite_jobs):
+            self._invalidate_stream(stream)
         self._pending_sources.clear()
         self._pinned_sources.clear()
         self._sinks.clear()
@@ -153,6 +218,13 @@ class RtpHub:
     def remove_stream(self, session_id: str, stream_id: str) -> None:
         """Remove one stream route before its cancellation reaches the sink."""
         self._remove_stream(StreamKey(session_id, stream_id))
+
+    def output_ssrc(self, mic_ssrc: int) -> int:
+        """Return the SSRC Sound must accept for this transport mode."""
+        if self._onsite_bridge is None:
+            return mic_ssrc
+        generated = mic_ssrc ^ 0xA5A5_A5A5
+        return 1 if generated == 0 else generated
 
     def _register_source(
         self,
@@ -189,6 +261,7 @@ class RtpHub:
         self._remove_sink(stream)
 
     def _remove_source(self, stream: StreamKey) -> None:
+        self._invalidate_stream(stream)
         _ = self._pending_sources.pop(stream, None)
         _ = self._source_owners.pop(stream, None)
         for route, route_stream in tuple(self._pinned_sources.items()):
@@ -196,8 +269,14 @@ class RtpHub:
                 del self._pinned_sources[route]
 
     def _remove_sink(self, stream: StreamKey) -> None:
+        self._invalidate_stream(stream)
         _ = self._sinks.pop(stream, None)
         _ = self._sink_owners.pop(stream, None)
+
+    def _invalidate_stream(self, stream: StreamKey) -> None:
+        self._route_generations[stream] = self._route_generations.get(stream, 0) + 1
+        for job in self._onsite_jobs.get(stream, ()):
+            _ = job.cancel()
 
     def _find_route(self, ssrc: int, peer: PeerAddress) -> StreamKey | None:
         for route, stream in self._pinned_sources.items():

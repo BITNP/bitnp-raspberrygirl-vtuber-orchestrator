@@ -16,6 +16,7 @@ from orchestrator.transport_control import ControlEnvelopeError, bearer_token_ma
 from orchestrator.transport_dispatch import TransportControlDispatch
 from orchestrator.transport_hub import (
     DatagramSender,
+    OnsiteBridge,
     RtpHub,
 )
 
@@ -76,6 +77,7 @@ class TransportRuntime:
         config: TransportConfig,
         datagram_listener: DatagramListener | None = None,
         control_listener: ControlListener | None = None,
+        onsite_bridge: OnsiteBridge | None = None,
     ) -> None:
         """Create one transport runtime with optional fake listener factories."""
         self._config: TransportConfig = config
@@ -85,7 +87,7 @@ class TransportRuntime:
         self._control_listener: ControlListener = (
             _listen_control if control_listener is None else control_listener
         )
-        self._hub: RtpHub = RtpHub()
+        self._hub: RtpHub = RtpHub(onsite_bridge=onsite_bridge)
         self._control_dispatch: TransportControlDispatch = TransportControlDispatch(
             self._hub
         )
@@ -126,6 +128,7 @@ class TransportRuntime:
             self._datagram_transport.close()
             self._datagram_transport = None
         self._hub.clear()
+        await self._hub.wait_for_onsite_jobs()
         self._control_dispatch.clear()
 
     async def handle_control(self, connection: ControlConnection) -> None:
@@ -141,6 +144,10 @@ class TransportRuntime:
     def route_datagram(self, data: bytes, peer: tuple[str, int]) -> bool:
         """Route one UDP datagram through the authoritative connection-owned hub."""
         return self._hub.route_datagram(data, peer)
+
+    async def wait_for_onsite_jobs(self) -> None:
+        """Wait for accepted onsite provider work to finish or be cancelled."""
+        await self._hub.wait_for_onsite_jobs()
 
 
 @final
