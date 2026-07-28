@@ -44,6 +44,10 @@ class RouteRegistry(Protocol):
     def remove_stream(self, session_id: str, stream_id: str) -> None:
         """Remove one stream route before cancellation reaches Sound."""
 
+    def output_ssrc(self, mic_ssrc: int) -> int:
+        """Return the SSRC announced to Sound for the active media mode."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class StreamKey:
@@ -141,7 +145,9 @@ class TransportControlDispatch:
             return
         self._dispatched.add(stream)
         await source.connection.send(_source_ready_envelope(stream, source.ssrc))
-        await sink.connection.send(_stream_command_envelope(stream, source.ssrc, sink))
+        await sink.connection.send(
+            _stream_command_envelope(stream, self._hub.output_ssrc(source.ssrc), sink)
+        )
 
     def _discard(self, stream: StreamKey) -> None:
         _ = self._sources.pop(stream, None)
