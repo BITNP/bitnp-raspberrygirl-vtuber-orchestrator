@@ -39,8 +39,7 @@ markers = [
     "real_adapter: opt-in smoke tests for live or fake-local real adapter boundaries",
 ]
 
-[tool.basedpyright]
-typeCheckingMode = "all"
+[tool.pyright]
 pythonVersion = "3.12"
 pythonPlatform = "All"
 include = ["src", "tests"]
@@ -51,6 +50,8 @@ reportUnnecessaryTypeIgnoreComment = "error"
 reportUnusedVariable = "error"
 reportMissingParameterType = "error"
 reportPrivateUsage = "error"
+venvPath = "."
+venv = ".venv"
 
 [tool.ruff]
 target-version = "py312"

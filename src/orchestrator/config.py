@@ -13,6 +13,8 @@ DEFAULT_ASR_PROVIDER: Final = "mock"
 DEFAULT_TTS_PROVIDER: Final = "mock"
 DEFAULT_TRUSTED_LAN_TOKEN_MIN_LENGTH: Final = 12
 LLM_PROVIDER_KEY: Final = "ORCHESTRATOR_LLM_PROVIDER"
+LLM_ENDPOINT_KEY: Final = "ORCHESTRATOR_LLM_ENDPOINT"
+LLM_MODEL_KEY: Final = "ORCHESTRATOR_LLM_MODEL"
 LLM_API_KEY_KEY: Final = "ORCHESTRATOR_LLM_API_KEY"
 ASR_PROVIDER_KEY: Final = "ORCHESTRATOR_ASR_PROVIDER"
 ASR_ENDPOINT_KEY: Final = "ORCHESTRATOR_ASR_ENDPOINT"
@@ -53,6 +55,8 @@ class OrchestratorConfigInput:
     session_id_prefix: str
     fake: bool
     llm_provider: LlmProvider = DEFAULT_LLM_PROVIDER
+    llm_endpoint: str | None = None
+    llm_model: str | None = None
     llm_api_key: LlmApiKey | None = None
     asr_provider: AsrProvider = DEFAULT_ASR_PROVIDER
     asr_endpoint: str | None = None
@@ -74,6 +78,8 @@ class OrchestratorConfig:
     session_id_prefix: str
     fake: bool
     llm_provider: LlmProvider = DEFAULT_LLM_PROVIDER
+    llm_endpoint: str | None = None
+    llm_model: str | None = None
     llm_api_key: LlmApiKey | None = None
     asr_provider: AsrProvider = DEFAULT_ASR_PROVIDER
     asr_endpoint: str | None = None
@@ -115,6 +121,8 @@ class OrchestratorConfig:
             session_id_prefix=config.session_id_prefix.strip(),
             fake=config.fake,
             llm_provider=config.llm_provider,
+            llm_endpoint=_normalize_optional(config.llm_endpoint),
+            llm_model=_normalize_optional(config.llm_model),
             llm_api_key=config.llm_api_key,
             asr_provider=config.asr_provider,
             asr_endpoint=_normalize_optional(config.asr_endpoint),
@@ -150,6 +158,8 @@ def load_config_from_env(env: Mapping[str, str] | None = None) -> OrchestratorCo
         ),
         fake=_parse_fake(source.get(LLM_PROVIDER_KEY)),
         llm_provider=_parse_llm_provider(source.get(LLM_PROVIDER_KEY)),
+        llm_endpoint=source.get(LLM_ENDPOINT_KEY),
+        llm_model=source.get(LLM_MODEL_KEY),
         llm_api_key=_parse_optional_secret(source.get(LLM_API_KEY_KEY)),
         asr_provider=_parse_asr_provider(source.get(ASR_PROVIDER_KEY)),
         asr_endpoint=source.get(ASR_ENDPOINT_KEY),
@@ -197,7 +207,7 @@ def _parse_tts_provider(raw_provider: str | None) -> TtsProvider:
 
 
 def _require_provider_fields(
-    provider: AsrProvider | TtsProvider,
+    provider: LlmProvider | AsrProvider | TtsProvider,
     endpoint: str | None,
     model: str | None,
     endpoint_field: str,
