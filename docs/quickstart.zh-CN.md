@@ -10,3 +10,5 @@ uv run ruff check src tests
 ```
 
 本地契约检查可运行 `python scripts/verify_protocol_schema.py` 和 `python scripts/verify_topology.py --sibling-root ..`。
+
+真实现场讲解部署应使用 `ORCHESTRATOR_MODE=onsite_explainer`，并在 `.env.example` 中配置 OpenAI 兼容 ASR、LLM 和 `vllm_omni` TTS 设置。运行命令是 `uv run orchestrator-transport`。必须先启动它，再启动 Sound 和 Mic。请参阅[部署指南](deployment.zh-CN.md)和 [systemd 部署包](../deploy/README.md)，frontend 不属于此链路。
