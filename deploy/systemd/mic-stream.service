@@ -1,0 +1,18 @@
+[Unit]
+Description=BitNP RaspberryGirl microphone stream
+Wants=network-online.target
+After=network-online.target sound-receive.service
+
+[Service]
+Type=simple
+User=bitnp
+Group=bitnp
+WorkingDirectory=/opt/bitnp/bitnp-raspberrygirl-vtuber-mic
+EnvironmentFile=/etc/bitnp/mic-stream.env
+ExecStart=/opt/bitnp/bitnp-raspberrygirl-vtuber-mic/.venv/bin/mic-stream
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

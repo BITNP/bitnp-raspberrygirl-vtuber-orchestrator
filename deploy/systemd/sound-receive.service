@@ -1,0 +1,18 @@
+[Unit]
+Description=BitNP RaspberryGirl Sound receiver
+Wants=network-online.target
+After=network-online.target orchestrator-transport.service
+
+[Service]
+Type=simple
+User=bitnp
+Group=bitnp
+WorkingDirectory=/opt/bitnp/bitnp-raspberrygirl-vtuber-sound
+EnvironmentFile=/etc/bitnp/sound-receive.env
+ExecStart=/opt/bitnp/bitnp-raspberrygirl-vtuber-sound/.venv/bin/sound-receive
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

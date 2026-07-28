@@ -1,0 +1,18 @@
+[Unit]
+Description=BitNP RaspberryGirl Orchestrator transport
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=bitnp
+Group=bitnp
+WorkingDirectory=/opt/bitnp/bitnp-raspberrygirl-vtuber-orchestrator
+EnvironmentFile=/etc/bitnp/orchestrator-transport.env
+ExecStart=/opt/bitnp/bitnp-raspberrygirl-vtuber-orchestrator/.venv/bin/orchestrator-transport
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
