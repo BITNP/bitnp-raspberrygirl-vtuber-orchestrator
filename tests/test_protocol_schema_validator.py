@@ -9,6 +9,9 @@ ROOT: Final = Path(__file__).resolve().parents[1]
 SCRIPT: Final = ROOT / "scripts" / "verify_protocol_schema.py"
 INVALID_CUE: Final = ROOT / "schemas/fixtures/invalid/cue_end_before_start.json"
 INVALID_LEGACY: Final = ROOT / "schemas/fixtures/invalid/legacy_asr_event.json"
+INVALID_RTP_CODEC: Final = (
+    ROOT / "schemas/fixtures/invalid/rtp_codec_wrong_payload_type.json"
+)
 
 
 def test_protocol_validator_uses_orchestrator_owned_schema_paths(
@@ -50,3 +53,17 @@ def test_protocol_validator_rejects_invalid_local_cue_and_legacy_event(
     # Then: both malformed artifacts are rejected.
     assert cue_result.returncode == 0, cue_result.stdout + cue_result.stderr
     assert legacy_result.returncode == 0, legacy_result.stdout + legacy_result.stderr
+
+
+def test_protocol_validator_rejects_noncanonical_rtp_codec() -> None:
+    # Given: a canonical source registration with a non-PT96 payload type.
+    # When: the independent schema validator checks its fixture.
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--expect-invalid", str(INVALID_RTP_CODEC)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    # Then: rejection identifies the fixed RTP codec invariant.
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "$.data.codec.payload_type: expected 96" in result.stdout

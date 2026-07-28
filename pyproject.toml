@@ -3,7 +3,12 @@ name = "bitnp-raspberrygirl-vtuber-orchestrator"
 version = "0.1.0"
 description = "Central Orchestrator shell for the distributed AI VTuber system."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "websockets==16.1.1",
+]
+
+[project.scripts]
+orchestrator-transport = "orchestrator.transport_app:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -17,11 +22,13 @@ dev = [
     "basedpyright>=1.31",
     "pytest>=8",
     "ruff>=0.12",
+    "sounddevice==0.5.5",
 ]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+pythonpath = ["src", "../bitnp-raspberrygirl-vtuber-mic/src", "../bitnp-raspberrygirl-vtuber-sound/src"]
 addopts = [
     "-ra",
     "--strict-config",
@@ -37,6 +44,7 @@ typeCheckingMode = "all"
 pythonVersion = "3.12"
 pythonPlatform = "All"
 include = ["src", "tests"]
+extraPaths = ["src", "../bitnp-raspberrygirl-vtuber-mic/src", "../bitnp-raspberrygirl-vtuber-sound/src"]
 exclude = ["**/__pycache__", "**/.venv", "**/build", "**/dist"]
 reportUnusedCallResult = "warning"
 reportUnnecessaryTypeIgnoreComment = "error"
