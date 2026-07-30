@@ -11,7 +11,7 @@ python scripts/verify_topology.py --sibling-root ..
 python scripts/verify_vtuber_contract.py --frontend-path ../bitnp-raspberrygirl-vtuber-frontend
 ```
 
-Use `bash scripts/verify_workspace.sh` only when every sibling path is present. Real adapter smoke tests are explicit opt in with `BITNP_REAL_ADAPTER_FAKE_LOCAL=1`.
+Use `bash scripts/verify_workspace.sh --sibling-root ..` only when every sibling path is present. This Contract gate runs the schema, topology, and Frontend contract verifiers; it does not run Local tests or optional release gates. Real adapter smoke tests are explicit opt in with `BITNP_REAL_ADAPTER_FAKE_LOCAL=1`.
 
 ## Onsite Acceptance Matrix
 

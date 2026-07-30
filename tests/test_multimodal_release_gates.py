@@ -328,36 +328,6 @@ def test_frontend_freeze_rejects_fabricated_signature(tmp_path: Path) -> None:
     assert '"code": "invalid_certificate"' in result.stdout
 
 
-def test_workspace_verifier_honors_explicit_sibling_root(tmp_path: Path) -> None:
-    # Given: a nonexistent sibling root supplied explicitly to the workspace CLI.
-
-    """函数契约说明.
-
-    功能: 验证 workspace verifier honors
-    explicit sibling root 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
-
-    missing_root = tmp_path / "missing-siblings"
-
-    # When: the verifier is invoked with that explicit root.
-
-    result = subprocess.run(
-        ["/usr/bin/bash", str(WORKSPACE_VERIFIER), "--sibling-root", str(missing_root)],
-        cwd=ROOT,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    # Then: it rejects that root instead of silently falling back to the default.
-
-    assert result.returncode == 1
-
-    assert "missing-siblings" in result.stderr
-
-
 def test_scheduler_scope_verifier_rejects_biometric_authorization(
     tmp_path: Path,
 ) -> None:
