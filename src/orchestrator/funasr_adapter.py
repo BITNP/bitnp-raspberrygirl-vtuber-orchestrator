@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.funasr_adapter
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -34,53 +28,19 @@ if TYPE_CHECKING:
 
 
 class _FunASRConnection(Protocol):
-    """类契约说明.
-
-    职责: 声明 _FunASRConnection
-    协议接口,约束实现方必须提供的行为。
-    契约: 方法: send、recv、close。
-    """
 
     def send(self, message: str | bytes) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 message: str |
-        bytes。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         ...
 
     def recv(self, timeout: float | None = None) -> str | bytes:
-        """函数契约说明.
-
-        功能: 执行 recv 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 timeout: float
-        | None。 可省略。
-        契约: 同步调用。 返回 `str | bytes`。
-        """
         ...
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
         ...
 
 
 @dataclass(frozen=True, slots=True)
 class FunASRWebSocketAdapter:
-    """类契约说明.
-
-    职责: 保存 FunASRWebSocketAdapter
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: endpoint、model、deadlines。
-    方法: __post_init__、capability、transcr
-    ibe、stream。
-    """
 
     endpoint: str
 
@@ -89,14 +49,6 @@ class FunASRWebSocketAdapter:
     deadlines: ProviderDeadlines = field(default_factory=ProviderDeadlines)
 
     def __post_init__(self) -> None:
-        """函数契约说明.
-
-        功能: 初始化 FunASRWebSocketAdapter
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。 可能抛出
-        MediaAdapterConfigError。
-        """
         if self.endpoint.strip() == "":
             raise MediaAdapterConfigError(field_name="endpoint")
 
@@ -105,12 +57,6 @@ class FunASRWebSocketAdapter:
 
     @property
     def capability(self) -> str:
-        """函数契约说明.
-
-        功能: 执行 capability 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `str`。
-        """
         return "streaming"
 
     def transcribe(  # noqa: PLR0913
@@ -123,20 +69,6 @@ class FunASRWebSocketAdapter:
         seq: int,
         cancellation: ProviderCancellationHandle | None = None,
     ) -> ASRAudienceEvent | None:
-        """函数契约说明.
-
-        功能: 执行 transcribe 的同步逻辑,并协调
-        stream, ASRStreamRequest。
-        参数: self 表示当前实例。 audio: bytes。
-        必填。 filename: str。 必填。
-        received_at_ms: int。 必填。
-        segment_id: str。 必填。 seq: int。
-        必填。 cancellation:
-        ProviderCancellationHandle |
-        None。 可省略。
-        契约: 同步调用。 返回 `ASRAudienceEvent |
-        None`。
-        """
         final: ASRAudienceEvent | None = None
 
         for event in self.stream(
@@ -158,18 +90,6 @@ class FunASRWebSocketAdapter:
         *,
         cancellation: ProviderCancellationHandle | None = None,
     ) -> Iterator[ASRStreamEvent]:
-        """函数契约说明.
-
-        功能: 执行 stream 的同步逻辑,并协调 connect,
-        bind, send, release。
-        参数: self 表示当前实例。 request:
-        ASRStreamRequest。 必填。
-        cancellation:
-        ProviderCancellationHandle |
-        None。 可省略。
-        契约: 同步调用。 返回迭代或生成器协议。 返回
-        `Iterator[ASRStreamEvent]`。
-        """
         if cancellation is not None and cancellation.cancelled:
             return
 
@@ -198,13 +118,6 @@ class FunASRWebSocketAdapter:
 
 
 def _start_message(filename: str) -> str:
-    """函数契约说明.
-
-    功能: 执行 _start_message 的同步逻辑,并协调
-    dumps。
-    参数: filename: str。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     return json.dumps(
         {
             "mode": "2pass",
@@ -219,12 +132,6 @@ def _start_message(filename: str) -> str:
 
 
 def _end_message() -> str:
-    """函数契约说明.
-
-    功能: 执行 _end_message 的同步逻辑,并协调 dumps。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `str`。
-    """
     return json.dumps({"is_speaking": False}, separators=(",", ":"))
 
 
@@ -234,22 +141,6 @@ def _receive_events(
     deadlines: ProviderDeadlines,
     cancellation: ProviderCancellationHandle | None,
 ) -> Iterator[ASRStreamEvent]:
-    """函数契约说明.
-
-    功能: 执行 _receive_events 的同步逻辑,并协调
-    monotonic,
-    _normalize_funasr_message,
-    isinstance, recv。
-    参数: connection: _FunASRConnection。
-    必填。 request: ASRStreamRequest。 必填。
-    deadlines: ProviderDeadlines。 必填。
-    cancellation:
-    ProviderCancellationHandle | None。
-    必填。
-    契约: 同步调用。 返回迭代或生成器协议。 返回
-    `Iterator[ASRStreamEvent]`。 可能抛出
-    ProviderResponseError。
-    """
     final_emitted = False
 
     started = time.monotonic()
@@ -291,16 +182,6 @@ def _receive_events(
 def _normalize_funasr_message(
     message: str | bytes, request: ASRStreamRequest
 ) -> ASRStreamEvent | None:
-    """函数契约说明.
-
-    功能: 执行 _normalize_funasr_message
-    的同步逻辑,并协调 get, strip,
-    ASRPartialEvent, isinstance。
-    参数: message: str | bytes。 必填。
-    request: ASRStreamRequest。 必填。
-    契约: 同步调用。 返回 `ASRStreamEvent |
-    None`。 可能抛出 ProviderResponseError。
-    """
     if not isinstance(message, str):
         raise ProviderResponseError(stage="asr", reason="event")
 
@@ -347,10 +228,4 @@ def _normalize_funasr_message(
 
 
 def _noop() -> None:
-    """函数契约说明.
-
-    功能: 执行 _noop 的同步逻辑,并维持签名契约。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
     return

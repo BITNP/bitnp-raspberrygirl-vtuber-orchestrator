@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.release_certificate
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -69,14 +63,6 @@ EXPECTED_COMMANDS: Final = (
 
 @dataclass(frozen=True, slots=True)
 class CertificateRequest:
-    """类契约说明.
-
-    职责: 保存 CertificateRequest
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: certificate、first_manifest、s
-    econd_manifest、frontend_baseline、pla
-    n_digest、source_digest。
-    """
 
     certificate: Path
 
@@ -93,12 +79,6 @@ class CertificateRequest:
 
 @dataclass(frozen=True, slots=True)
 class CertificateVerification:
-    """类契约说明.
-
-    职责: 保存 CertificateVerification
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: accepted、code。
-    """
 
     accepted: bool
 
@@ -106,15 +86,6 @@ class CertificateVerification:
 
 
 def write_certificate(request: CertificateRequest) -> None:
-    """函数契约说明.
-
-    功能: 执行 write_certificate 的同步逻辑,并协调
-    _sha256, _unsigned_payload,
-    _authority_key, write_text。
-    参数: request: CertificateRequest。 必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    RuntimeError。
-    """
     first_digest = _sha256(request.first_manifest)
 
     second_digest = _sha256(request.second_manifest)
@@ -148,13 +119,6 @@ def write_certificate(request: CertificateRequest) -> None:
 def verify_certificate(
     request: CertificateRequest,
 ) -> CertificateVerification:
-    """函数契约说明.
-
-    功能: 校验相关输入、协议或运行时约束。
-    参数: request: CertificateRequest。 必填。
-    契约: 同步调用。 返回
-    `CertificateVerification`。
-    """
     try:
         raw = parse_json_value(request.certificate.read_text(encoding="utf-8"))
 
@@ -207,15 +171,6 @@ def verify_certificate(
 def _unsigned_payload(
     request: CertificateRequest, first_digest: str, second_digest: str
 ) -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _unsigned_payload 的同步逻辑,并协调
-    str, resolve。
-    参数: request: CertificateRequest。 必填。
-    first_digest: str。 必填。
-    second_digest: str。 必填。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
     return {
         "format_version": FORMAT_VERSION,
         "plan": PLAN,
@@ -233,14 +188,6 @@ def _unsigned_payload(
 
 
 def _sign_payload(payload: dict[str, JsonValue], key: bytes) -> str:
-    """函数契约说明.
-
-    功能: 执行 _sign_payload 的同步逻辑,并协调
-    encode, hexdigest, dumps, new。
-    参数: payload: dict[str, JsonValue]。
-    必填。 key: bytes。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     encoded = json.dumps(
         payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
     ).encode()
@@ -251,14 +198,6 @@ def _sign_payload(payload: dict[str, JsonValue], key: bytes) -> str:
 def _identity_matches(
     payload: dict[str, JsonValue], request: CertificateRequest
 ) -> bool:
-    """函数契约说明.
-
-    功能: 执行 _identity_matches 的同步逻辑,并协调
-    get。
-    参数: payload: dict[str, JsonValue]。
-    必填。 request: CertificateRequest。 必填。
-    契约: 同步调用。 返回 `bool`。
-    """
     return (
         payload.get("format_version") == FORMAT_VERSION
         and payload.get("plan") == PLAN
@@ -273,15 +212,6 @@ def _identity_matches(
 def _manifest_hashes_match(
     value: JsonValue | None, request: CertificateRequest
 ) -> bool:
-    """函数契约说明.
-
-    功能: 执行 _manifest_hashes_match
-    的同步逻辑,并协调 all, isinstance, len,
-    _sha256。
-    参数: value: JsonValue | None。 必填。
-    request: CertificateRequest。 必填。
-    契约: 同步调用。 返回 `bool`。
-    """
     if not isinstance(value, list) or len(value) != MANIFEST_COUNT:
         return False
 
@@ -294,24 +224,10 @@ def _manifest_hashes_match(
 
 
 def _sha256(path: Path) -> str:
-    """函数契约说明.
-
-    功能: 执行 _sha256 的同步逻辑,并协调 hexdigest,
-    sha256, read_bytes。
-    参数: path: Path。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _authority_key() -> bytes | None:
-    """函数契约说明.
-
-    功能: 执行 _authority_key 的同步逻辑,并协调 get,
-    encode。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `bytes | None`。
-    """
     key = os.environ.get(CERTIFICATE_KEY_ENV)
 
     if key is None or key == "":
@@ -321,14 +237,6 @@ def _authority_key() -> bytes | None:
 
 
 def _manifest_valid(path: Path) -> bool:
-    """函数契约说明.
-
-    功能: 执行 _manifest_valid 的同步逻辑,并协调
-    get, enumerate, parse_json_value,
-    read_text。
-    参数: path: Path。 必填。
-    契约: 同步调用。 返回 `bool`。
-    """
     try:
         raw = parse_json_value(path.read_text(encoding="utf-8"))
 

@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 import pytest
 
@@ -29,14 +24,6 @@ from orchestrator.transient_context import (
 def test_llm_final_is_the_complete_output_context_characterization() -> None:
     # Given: the existing adapter's stream lifecycle.
 
-    """函数契约说明.
-
-    功能: 验证 llm final is the complete
-    output context characterization
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     request = LLMRequest(prompt=LLMPrompt(system="system", user="user"))
 
@@ -54,14 +41,6 @@ def test_llm_final_is_the_complete_output_context_characterization() -> None:
 def test_context_admits_only_finalized_inputs_and_accepted_outputs() -> None:
     # Given: final, partial, cancelled, stale, and accepted turn material.
 
-    """函数契约说明.
-
-    功能: 验证 context admits only finalized
-    inputs and accepted outputs
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     context = TransientContext(session_id=SessionId("session-1"))
 
@@ -103,14 +82,6 @@ def test_context_admits_only_finalized_inputs_and_accepted_outputs() -> None:
 def test_compaction_is_deterministic_and_preserves_all_source_identities() -> None:
     # Given: one reproducible event sequence whose text exceeds the model budget.
 
-    """函数契约说明.
-
-    功能: 验证 compaction is deterministic
-    and preserves all source identities
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     policy = StaticContextBudgetPolicy(
         model_id=ModelId("local-model"),
@@ -159,14 +130,6 @@ def test_compaction_is_deterministic_and_preserves_all_source_identities() -> No
 def test_compaction_digests_only_the_oversized_entry_between_retained_entries() -> None:
     # Given: a budget-three sequence with a middle entry too large to retain.
 
-    """函数契约说明.
-
-    功能: 验证 compaction digests only the
-    oversized entry between retained
-    entries 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     policy = StaticContextBudgetPolicy(
         model_id=ModelId("local-model"),
@@ -211,14 +174,6 @@ def test_compaction_digests_only_the_oversized_entry_between_retained_entries() 
 def test_reset_clears_one_session_without_reusing_another_sessions_context() -> None:
     # Given: one populated session and a contribution from another session.
 
-    """函数契约说明.
-
-    功能: 验证 reset clears one session
-    without reusing another sessions
-    context 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     context = TransientContext(session_id=SessionId("session-1"))
 
@@ -247,14 +202,6 @@ def test_reset_clears_one_session_without_reusing_another_sessions_context() -> 
 
 
 def _provenance(source_id: str, sequence: int) -> ContextProvenance:
-    """函数契约说明.
-
-    功能: 执行 _provenance 的同步逻辑,并协调
-    _provenance_for。
-    参数: source_id: str。 必填。 sequence:
-    int。 必填。
-    契约: 同步调用。 返回 `ContextProvenance`。
-    """
 
     return _provenance_for("session-1", source_id, sequence)
 
@@ -264,15 +211,6 @@ def _provenance_for(
     source_id: str,
     sequence: int,
 ) -> ContextProvenance:
-    """函数契约说明.
-
-    功能: 执行 _provenance_for 的同步逻辑,并协调
-    ContextProvenance, SessionId,
-    TurnId, SegmentId。
-    参数: session_id: str。 必填。 source_id:
-    str。 必填。 sequence: int。 必填。
-    契约: 同步调用。 返回 `ContextProvenance`。
-    """
 
     return ContextProvenance(
         session_id=SessionId(session_id),

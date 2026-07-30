@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.config
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 import os
 from collections.abc import Mapping
@@ -69,36 +63,16 @@ LlmApiKey = NewType("LlmApiKey", str)
 
 @dataclass(frozen=True, slots=True)
 class ConfigParseError(Exception):
-    """类契约说明.
-
-    职责: 保存 ConfigParseError
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: field_name。 方法: __str__。
-    """
 
     field_name: str
 
     @override
     def __str__(self) -> str:
-        """函数契约说明.
-
-        功能: 生成面向日志、错误或调试输出的稳定文本表示。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `str`。
-        """
         return f"config field is blank: {self.field_name}"
 
 
 @dataclass(frozen=True, slots=True)
 class OrchestratorConfigInput:
-    """类契约说明.
-
-    职责: 保存 OrchestratorConfigInput
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: service_name、service_version
-    、session_id_prefix、fake、llm_provider
-    、llm_endpoint。
-    """
 
     service_name: str
 
@@ -137,14 +111,6 @@ class OrchestratorConfigInput:
 
 @dataclass(frozen=True, slots=True)
 class OrchestratorConfig:
-    """类契约说明.
-
-    职责: 保存 OrchestratorConfig
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: service_name、service_version
-    、session_id_prefix、fake、llm_provider
-    、llm_endpoint。 方法: parse。
-    """
 
     service_name: str
 
@@ -182,15 +148,6 @@ class OrchestratorConfig:
 
     @classmethod
     def parse(cls, config: OrchestratorConfigInput) -> "OrchestratorConfig":
-        """函数契约说明.
-
-        功能: 从边界输入解析类型化值。
-        参数: cls 表示当前类。 config:
-        OrchestratorConfigInput。 必填。
-        契约: 同步调用。 返回
-        `'OrchestratorConfig'`。 可能抛出
-        ConfigParseError。
-        """
         for field_name, raw_value in (
             ("service_name", config.service_name),
             ("service_version", config.service_version),
@@ -237,13 +194,6 @@ class OrchestratorConfig:
 
 
 def load_fake_config() -> OrchestratorConfig:
-    """函数契约说明.
-
-    功能: 执行 load_fake_config 的同步逻辑,并协调
-    parse, OrchestratorConfigInput。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `OrchestratorConfig`。
-    """
     return OrchestratorConfig.parse(
         OrchestratorConfigInput(
             service_name=DEFAULT_SERVICE_NAME,
@@ -255,16 +205,6 @@ def load_fake_config() -> OrchestratorConfig:
 
 
 def load_config_from_env(env: Mapping[str, str] | None = None) -> OrchestratorConfig:
-    """函数契约说明.
-
-    功能: 执行 load_config_from_env
-    的同步逻辑,并协调 parse,
-    OrchestratorConfigInput, get,
-    _parse_fake。
-    参数: env: Mapping[str, str] | None。
-    可省略。
-    契约: 同步调用。 返回 `OrchestratorConfig`。
-    """
     source = os.environ if env is None else env
 
     return OrchestratorConfig.parse(
@@ -294,23 +234,10 @@ def load_config_from_env(env: Mapping[str, str] | None = None) -> OrchestratorCo
 
 
 def _parse_fake(raw_provider: str | None) -> bool:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: raw_provider: str | None。 必填。
-    契约: 同步调用。 返回 `bool`。
-    """
     return _parse_llm_provider(raw_provider) == "mock"
 
 
 def _parse_llm_provider(raw_provider: str | None) -> LlmProvider:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: raw_provider: str | None。 必填。
-    契约: 同步调用。 返回 `LlmProvider`。 可能抛出
-    ConfigParseError。
-    """
     provider = DEFAULT_LLM_PROVIDER if raw_provider is None else raw_provider.strip()
 
     match provider:
@@ -325,13 +252,6 @@ def _parse_llm_provider(raw_provider: str | None) -> LlmProvider:
 
 
 def _parse_asr_provider(raw_provider: str | None) -> AsrProvider:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: raw_provider: str | None。 必填。
-    契约: 同步调用。 返回 `AsrProvider`。 可能抛出
-    ConfigParseError。
-    """
     provider = DEFAULT_ASR_PROVIDER if raw_provider is None else raw_provider.strip()
 
     match provider:
@@ -343,13 +263,6 @@ def _parse_asr_provider(raw_provider: str | None) -> AsrProvider:
 
 
 def _parse_tts_provider(raw_provider: str | None) -> TtsProvider:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: raw_provider: str | None。 必填。
-    契约: 同步调用。 返回 `TtsProvider`。 可能抛出
-    ConfigParseError。
-    """
     provider = DEFAULT_TTS_PROVIDER if raw_provider is None else raw_provider.strip()
 
     match provider:
@@ -367,18 +280,6 @@ def _require_provider_fields(
     endpoint_field: str,
     model_field: str,
 ) -> None:
-    """函数契约说明.
-
-    功能: 执行 _require_provider_fields
-    的同步逻辑,并协调 ConfigParseError, strip。
-    参数: provider: LlmProvider |
-    AsrProvider | TtsProvider。 必填。
-    endpoint: str | None。 必填。 model: str
-    | None。 必填。 endpoint_field: str。 必填。
-    model_field: str。 必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    ConfigParseError。
-    """
     if provider == "mock":
         return
 
@@ -390,13 +291,6 @@ def _require_provider_fields(
 
 
 def _normalize_optional(value: str | None) -> str | None:
-    """函数契约说明.
-
-    功能: 执行 _normalize_optional 的同步逻辑,并协调
-    strip。
-    参数: value: str | None。 必填。
-    契约: 同步调用。 返回 `str | None`。
-    """
     if value is None or value.strip() == "":
         return None
 
@@ -404,12 +298,6 @@ def _normalize_optional(value: str | None) -> str | None:
 
 
 def _parse_optional_secret(raw_secret: str | None) -> LlmApiKey | None:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: raw_secret: str | None。 必填。
-    契约: 同步调用。 返回 `LlmApiKey | None`。
-    """
     if raw_secret is None or raw_secret.strip() == "":
         return None
 
@@ -417,13 +305,6 @@ def _parse_optional_secret(raw_secret: str | None) -> LlmApiKey | None:
 
 
 def _parse_optional_token(raw_token: str | None) -> TrustedLanToken | None:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: raw_token: str | None。 必填。
-    契约: 同步调用。 返回 `TrustedLanToken |
-    None`。
-    """
     if raw_token is None or raw_token.strip() == "":
         return None
 

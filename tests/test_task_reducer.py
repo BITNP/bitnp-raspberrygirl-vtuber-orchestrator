@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from dataclasses import replace
 from typing import Literal
@@ -40,14 +35,6 @@ from orchestrator.task_registry import (
 def test_registry_returns_existing_task_for_duplicate_idempotency_key() -> None:
     # Given: a scheduler-owned registry with one allowed interactive task kind.
 
-    """函数契约说明.
-
-    功能: 验证 registry returns existing
-    task for duplicate idempotency key
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     registry = _registry()
 
@@ -92,17 +79,6 @@ def test_reducer_rejects_result_when_task_is_no_longer_current(
 ) -> None:
     # Given: accepted scheduler work whose state becomes stale or terminal.
 
-    """函数契约说明.
-
-    功能: 验证 reducer rejects result when
-    task is no longer current
-    的回归场景和可观察结果。
-    参数: prepare: Literal['stale',
-    'cancelled', 'superseded']。 必填。
-    expected_reason:
-    TaskResultRejection。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     registry = _registry()
 
@@ -152,14 +128,6 @@ def test_reducer_rejects_result_when_task_is_no_longer_current(
 def test_reducer_commits_current_result_once_and_rejects_duplicate_delivery() -> None:
     # Given: one active task and a matching worker result.
 
-    """函数契约说明.
-
-    功能: 验证 reducer commits current
-    result once and rejects duplicate
-    delivery 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     registry = _registry()
 
@@ -198,14 +166,6 @@ def test_reducer_commits_current_result_once_and_rejects_duplicate_delivery() ->
 def test_reducer_marks_hung_task_timed_out_before_late_result_can_commit() -> None:
     # Given: a task whose deadline has already passed while its worker is hung.
 
-    """函数契约说明.
-
-    功能: 验证 reducer marks hung task timed
-    out before late result can commit
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     registry = _registry()
 
@@ -288,14 +248,6 @@ def test_reducer_rejects_unknown_or_mismatched_result_identity(
 def test_registry_enforces_scheduler_configured_task_kind_and_child_fanout() -> None:
     # Given: a registry that permits one interactive child per parent task.
 
-    """函数契约说明.
-
-    功能: 验证 registry enforces scheduler
-    configured task kind and child
-    fanout 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     registry = _registry()
 
@@ -348,14 +300,6 @@ def test_registry_enforces_scheduler_configured_task_kind_and_child_fanout() -> 
 
 
 def _registry() -> TaskRegistry:
-    """函数契约说明.
-
-    功能: 执行 _registry 的同步逻辑,并协调
-    TaskRegistry, SessionId,
-    SchedulerTaskConfig, frozenset。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `TaskRegistry`。
-    """
 
     return TaskRegistry(
         session_id=SessionId("session-1"),
@@ -371,14 +315,6 @@ def _request(
     task_id: str,
     key: str,
 ) -> TaskRequest:
-    """函数契约说明.
-
-    功能: 执行 _request 的同步逻辑,并协调
-    TaskRequest, TaskId, SessionId,
-    TurnId。
-    参数: task_id: str。 必填。 key: str。 必填。
-    契约: 同步调用。 返回 `TaskRequest`。
-    """
 
     return TaskRequest(
         task_id=TaskId(task_id),
@@ -393,14 +329,6 @@ def _request(
 
 
 def _result(*, snapshot_revision: StateRevision) -> TaskResult:
-    """函数契约说明.
-
-    功能: 执行 _result 的同步逻辑,并协调 TaskResult,
-    TaskId, SessionId, TurnId。
-    参数: snapshot_revision:
-    StateRevision。 必填。
-    契约: 同步调用。 返回 `TaskResult`。
-    """
 
     return TaskResult(
         task_id=TaskId("task-1"),
@@ -412,14 +340,6 @@ def _result(*, snapshot_revision: StateRevision) -> TaskResult:
 
 
 def _snapshot() -> SessionSnapshot:
-    """函数契约说明.
-
-    功能: 执行 _snapshot 的同步逻辑,并协调
-    SessionSnapshot, SessionId,
-    StateRevision, TurnId。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `SessionSnapshot`。
-    """
 
     return SessionSnapshot(
         session_id=SessionId("session-1"),
@@ -429,14 +349,6 @@ def _snapshot() -> SessionSnapshot:
 
 
 def _register(registry: TaskRegistry, request: TaskRequest) -> None:
-    """函数契约说明.
-
-    功能: 执行 _register 的同步逻辑,并协调 register,
-    fail。
-    参数: registry: TaskRegistry。 必填。
-    request: TaskRequest。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     match registry.register(request):
         case TaskRegistrationAccepted():
@@ -450,14 +362,6 @@ def _register(registry: TaskRegistry, request: TaskRequest) -> None:
 
 
 def _accepted_record(result: TaskRegistrationResult) -> TaskRecord:
-    """函数契约说明.
-
-    功能: 执行 _accepted_record 的同步逻辑,并协调
-    fail。
-    参数: result: TaskRegistrationResult。
-    必填。
-    契约: 同步调用。 返回 `TaskRecord`。
-    """
 
     match result:
         case TaskRegistrationAccepted(record=record):

@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.scheduler_runtime
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -82,13 +76,6 @@ from orchestrator.task_registry import (
 
 
 def _monotonic_ms() -> int:
-    """函数契约说明.
-
-    功能: 执行 _monotonic_ms 的同步逻辑,并协调
-    monotonic_ns。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `int`。
-    """
     return monotonic_ns() // 1_000_000
 
 
@@ -101,17 +88,6 @@ class _RuntimeJournal:
 
 @dataclass(slots=True)
 class SessionRuntime:
-    """类契约说明.
-
-    职责: 保存 SessionRuntime
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: scheduler、tasks、executor、out
-    put_fence、interaction_ingress、mcp_di
-    spatcher。 方法: create、observables、rec
-    eive_comment、receive_control、receive
-    _session_control、receive_session_con
-    trol_async。
-    """
 
     scheduler: SessionScheduler
 
@@ -158,18 +134,6 @@ class SessionRuntime:
         task_config: SchedulerTaskConfig,
         clock: Callable[[], int] = _monotonic_ms,
     ) -> "SessionRuntime":
-        """函数契约说明.
-
-        功能: 执行 create 的同步逻辑,并协调
-        SessionScheduler, create, cls,
-        cancel_pending。
-        参数: cls 表示当前类。 session_id:
-        SessionId。 必填。 turn_id_prefix:
-        str。 必填。 task_config:
-        SchedulerTaskConfig。 必填。 clock:
-        Callable[[], int]。 可省略。
-        契约: 同步调用。 返回 `'SessionRuntime'`。
-        """
         scheduler = SessionScheduler(
             session_id=session_id,
             turn_id_prefix=turn_id_prefix,
@@ -185,13 +149,6 @@ class SessionRuntime:
         task_reducer = TaskResultReducer(task_registry)
 
         def invalidate_pending(reason: str) -> None:
-            """函数契约说明.
-
-            功能: 执行 invalidate_pending
-            的同步逻辑,并协调 cancel_pending。
-            参数: reason: str。 必填。
-            契约: 同步调用。 返回 `None`。
-            """
             _ = task_registry.cancel_pending(reason=reason)
 
         interaction_ingress.data.invalidate_pending = invalidate_pending
@@ -212,14 +169,6 @@ class SessionRuntime:
 
     @property
     def observables(self) -> RuntimeObservables:
-        """函数契约说明.
-
-        功能: 执行 observables 的同步逻辑,并协调
-        RuntimeObservables, tuple。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回
-        `RuntimeObservables`。
-        """
         return RuntimeObservables(
             snapshot=self.scheduler.snapshot,
             dispatches=tuple(self._journal.dispatches),
@@ -230,15 +179,6 @@ class SessionRuntime:
         )
 
     def receive_comment(self, proposal: CommentProposal) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 receive_comment 的同步逻辑,并协调
-        receive_comment, _reject, add,
-        TurnId。
-        参数: self 表示当前实例。 proposal:
-        CommentProposal。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         correlation = proposal.correlation
 
         if correlation in self._correlations:
@@ -272,16 +212,6 @@ class SessionRuntime:
                 return self._reject(correlation, "scheduler_rejected")
 
     def receive_control(self, raw_message: str) -> bool:
-        """函数契约说明.
-
-        功能: 执行 receive_control 的同步逻辑,并协调
-        get,
-        receive_presentation_result,
-        parse_json_value, isinstance。
-        参数: self 表示当前实例。 raw_message:
-        str。 必填。
-        契约: 同步调用。 返回 `bool`。
-        """
         parsed = parse_presentation_result_control(
             raw_message, self.scheduler.snapshot.session_id
         )
@@ -296,17 +226,6 @@ class SessionRuntime:
         return True
 
     def receive_session_control(self, control: SessionControl) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 receive_session_control
-        的同步逻辑,并协调 enroll_profile,
-        revoke_profile_consent,
-        receive_action,
-        receive_presentation。
-        参数: self 表示当前实例。 control:
-        SessionControl。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         match control:
             case ProfileEnrollmentControl(
                 enrollment=enrollment, correlation=correlation
@@ -330,18 +249,6 @@ class SessionRuntime:
     async def receive_session_control_async(
         self, control: SessionControl
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行
-        receive_session_control_async
-        的异步逻辑,并协调
-        receive_session_control,
-        _schedule_presentation_mcp。
-        参数: self 表示当前实例。 control:
-        SessionControl。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `RuntimeOutcome`。
-        """
         match control:
             case PresentationControl(proposal=proposal, correlation=correlation):
                 return await self._schedule_presentation_mcp(proposal, correlation)
@@ -352,20 +259,6 @@ class SessionRuntime:
     async def _schedule_presentation_mcp(
         self, proposal: PresentationCommand, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行
-        _schedule_presentation_mcp
-        的异步逻辑,并协调 receive_presentation,
-        TaskRequest, DeckDispatchIntent,
-        schedule_deck_task。
-        参数: self 表示当前实例。 proposal:
-        PresentationCommand。 必填。
-        correlation: EventCorrelation。
-        必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `RuntimeOutcome`。
-        """
         outcome = self.receive_presentation(proposal, correlation)
 
         turn_id = self.scheduler.snapshot.active_turn_id
@@ -402,17 +295,6 @@ class SessionRuntime:
         correlation: EventCorrelation,
         gate: AsrSemanticGate,
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 receive_asr_final
-        的同步逻辑,并协调 apply, _reject,
-        evaluate, StartTurn。
-        参数: self 表示当前实例。 event:
-        ASRAudienceEvent。 必填。
-        correlation: EventCorrelation。
-        必填。 gate: AsrSemanticGate。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
 
@@ -446,17 +328,6 @@ class SessionRuntime:
     def enroll_profile(
         self, enrollment: ProfileEnrollment, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 enroll_profile 的同步逻辑,并协调
-        enroll_profile,
-        _interaction_outcome。
-        参数: self 表示当前实例。 enrollment:
-        ProfileEnrollment。 必填。
-        correlation: EventCorrelation。
-        必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         _ = self.interaction_ingress.data.enroll_profile(enrollment)
 
         return self._interaction_outcome(
@@ -466,17 +337,6 @@ class SessionRuntime:
     def revoke_profile_consent(
         self, profile_id: VoiceProfileId, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 revoke_profile_consent
-        的同步逻辑,并协调
-        revoke_profile_consent,
-        _interaction_outcome。
-        参数: self 表示当前实例。 profile_id:
-        VoiceProfileId。 必填。 correlation:
-        EventCorrelation。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         self.interaction_ingress.data.revoke_profile_consent(profile_id)
 
         return self._interaction_outcome(
@@ -486,16 +346,6 @@ class SessionRuntime:
     def receive_action(
         self, proposal: ActionProposal, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 receive_action 的同步逻辑,并协调
-        _interaction_outcome,
-        isinstance, receive_action。
-        参数: self 表示当前实例。 proposal:
-        ActionProposal。 必填。 correlation:
-        EventCorrelation。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         return self._interaction_outcome(
             correlation,
             "action",
@@ -508,18 +358,6 @@ class SessionRuntime:
     def receive_presentation(
         self, proposal: PresentationCommand, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 receive_presentation
-        的同步逻辑,并协调 _interaction_outcome,
-        isinstance,
-        receive_presentation。
-        参数: self 表示当前实例。 proposal:
-        PresentationCommand。 必填。
-        correlation: EventCorrelation。
-        必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         outcome = self._interaction_outcome(
             correlation,
             "presentation_command",
@@ -538,20 +376,6 @@ class SessionRuntime:
     def receive_presentation_result(
         self, result: PresentationResult, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行
-        receive_presentation_result
-        的同步逻辑,并协调 get,
-        _interaction_outcome,
-        isinstance,
-        receive_presentation_result。
-        参数: self 表示当前实例。 result:
-        PresentationResult。 必填。
-        correlation: EventCorrelation。
-        必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         expected = self._presentation_correlations.get(result.command_id)
 
         if (
@@ -580,17 +404,6 @@ class SessionRuntime:
         request: TaskRequest,
         correlation: EventCorrelation,
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 schedule_deck_task
-        的同步逻辑,并协调 schedule_task,
-        _record_interaction。
-        参数: self 表示当前实例。 intent:
-        DeckDispatchIntent。 必填。 request:
-        TaskRequest。 必填。 correlation:
-        EventCorrelation。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         outcome = self.schedule_task(request, correlation)
 
         if outcome.accepted:
@@ -611,15 +424,6 @@ class SessionRuntime:
     def run_deck_worker(
         self, *, now_ms: int, correlation: EventCorrelation
     ) -> DeckDispatchOutcome:
-        """函数契约说明.
-
-        功能: 运行流程并协调其依赖步骤。
-        参数: self 表示当前实例。 now_ms: int。
-        必填。 correlation:
-        EventCorrelation。 必填。
-        契约: 同步调用。 返回
-        `DeckDispatchOutcome`。
-        """
         request = self.next_task(now_ms=now_ms)
 
         if request is None:
@@ -655,15 +459,6 @@ class SessionRuntime:
     async def run_deck_worker_async(
         self, *, now_ms: int, correlation: EventCorrelation
     ) -> DeckDispatchOutcome:
-        """函数契约说明.
-
-        功能: 运行流程并协调其依赖步骤。
-        参数: self 表示当前实例。 now_ms: int。
-        必填。 correlation:
-        EventCorrelation。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `DeckDispatchOutcome`。
-        """
         request = self.next_task(now_ms=now_ms)
 
         if request is None:
@@ -719,18 +514,6 @@ class SessionRuntime:
         now_ms: int,
         correlation: EventCorrelation,
     ) -> DeckDispatchOutcome:
-        """函数契约说明.
-
-        功能: 执行 reconcile_deck_worker
-        的同步逻辑,并协调 get, reconcile, task,
-        pop。
-        参数: self 表示当前实例。 task_id:
-        TaskId。 必填。 now_ms: int。 必填。
-        correlation: EventCorrelation。
-        必填。
-        契约: 同步调用。 返回
-        `DeckDispatchOutcome`。
-        """
         intent = self._deck_intents.get(task_id)
 
         if intent is None:
@@ -777,16 +560,6 @@ class SessionRuntime:
     def cancel_task(
         self, task_id: TaskId, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 cancel_task 的同步逻辑,并协调
-        cancel, _interaction_outcome,
-        pop, get。
-        参数: self 表示当前实例。 task_id:
-        TaskId。 必填。 correlation:
-        EventCorrelation。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         cancelled = self.task_registry.cancel(task_id, reason="cancelled")
 
         if cancelled is not None:
@@ -812,14 +585,6 @@ class SessionRuntime:
         )
 
     def _discard_terminal_deck_intents(self) -> None:
-        """函数契约说明.
-
-        功能: 执行
-        _discard_terminal_deck_intents
-        的同步逻辑,并协调 tuple, task, pop。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
         for task_id in tuple(self._deck_intents):
             record = self.task_registry.task(task_id)
 
@@ -850,16 +615,6 @@ class SessionRuntime:
     def schedule_task(
         self, request: TaskRequest, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 schedule_task 的同步逻辑,并协调
-        _with_current_data_snapshot,
-        schedule, enqueue, append。
-        参数: self 表示当前实例。 request:
-        TaskRequest。 必填。 correlation:
-        EventCorrelation。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         task_request = with_current_data_snapshot(request, self._task_data_snapshot)
 
         admission = self._admit_task(task_request)
@@ -901,29 +656,11 @@ class SessionRuntime:
                 return self._reject(correlation, "task_rejected")
 
     def next_task(self, *, now_ms: int) -> TaskRequest | None:
-        """函数契约说明.
-
-        功能: 执行 next_task 的同步逻辑,并协调 next。
-        参数: self 表示当前实例。 now_ms: int。
-        必填。
-        契约: 同步调用。 返回 `TaskRequest |
-        None`。
-        """
         return self.executor.next(now_ms=now_ms)
 
     def reduce_task(
         self, result: TaskResult, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 reduce_task 的同步逻辑,并协调
-        reduce, clock, append,
-        RuntimeOutcome。
-        参数: self 表示当前实例。 result:
-        TaskResult。 必填。 correlation:
-        EventCorrelation。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         outcome = self.task_reducer.reduce(
             result,
             snapshot=self.scheduler.snapshot,
@@ -949,16 +686,6 @@ class SessionRuntime:
                 return self._reject(correlation, "task_result_rejected")
 
     def _reject(self, correlation: EventCorrelation, reason: str) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 _reject 的同步逻辑,并协调 append,
-        RuntimeOutcome,
-        RuntimeRejection。
-        参数: self 表示当前实例。 correlation:
-        EventCorrelation。 必填。 reason:
-        str。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         self._journal.rejections.append(RuntimeRejection(correlation, reason))
 
         return RuntimeOutcome(accepted=False, correlation=correlation)
@@ -970,17 +697,6 @@ class SessionRuntime:
         accepted: bool,
         task_id: TaskId | None,
     ) -> RuntimeOutcome:
-        """函数契约说明.
-
-        功能: 执行 _interaction_outcome
-        的同步逻辑,并协调 _record_interaction,
-        _reject, RuntimeOutcome。
-        参数: self 表示当前实例。 correlation:
-        EventCorrelation。 必填。 stage:
-        str。 必填。 accepted: bool。 必填。
-        task_id: TaskId | None。 必填。
-        契约: 同步调用。 返回 `RuntimeOutcome`。
-        """
         self.operational_journal.append(
             interaction_record(
                 correlation,

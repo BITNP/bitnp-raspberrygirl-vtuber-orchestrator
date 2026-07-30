@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.profile_store
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 import json
 import os
@@ -20,12 +14,6 @@ from orchestrator.state_snapshots import ConsentRevision, ProfileRevision
 
 @unique
 class ProfileLifecycle(StrEnum):
-    """类契约说明.
-
-    职责: 定义 ProfileLifecycle
-    的状态、行为和对外协作边界。
-    契约: 字段、不变式和资源归属由类体声明与类型标注共同约束。
-    """
 
     ACTIVE = "active"
 
@@ -38,12 +26,6 @@ class ProfileLifecycle(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ProfileAuditEntry:
-    """类契约说明.
-
-    职责: 保存 ProfileAuditEntry
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: action、revision。
-    """
 
     action: str
 
@@ -52,14 +34,6 @@ class ProfileAuditEntry:
 
 @dataclass(frozen=True, slots=True)
 class VoiceProfileRecord:
-    """类契约说明.
-
-    职责: 保存 VoiceProfileRecord
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: profile_id、preferred_name、pu
-    rpose、confirmed、expires_at_ms、lifecy
-    cle。
-    """
 
     profile_id: VoiceProfileId
 
@@ -80,13 +54,6 @@ class VoiceProfileRecord:
 
 @dataclass(frozen=True, slots=True)
 class VoiceProfileSnapshot:
-    """类契约说明.
-
-    职责: 保存 VoiceProfileSnapshot
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: session_id、profile_revision、
-    consent_revision、records。
-    """
 
     session_id: SessionId
 
@@ -98,96 +65,36 @@ class VoiceProfileSnapshot:
 
 
 class VoiceProfileStore(Protocol):
-    """类契约说明.
-
-    职责: 声明 VoiceProfileStore
-    协议接口,约束实现方必须提供的行为。
-    契约: 方法: save、load。
-    """
 
     def save(self, snapshot: VoiceProfileSnapshot) -> None:
-        """函数契约说明.
-
-        功能: 执行 save 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 snapshot:
-        VoiceProfileSnapshot。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         ...
 
     def load(self, session_id: SessionId) -> VoiceProfileSnapshot | None:
-        """函数契约说明.
-
-        功能: 执行 load 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 session_id:
-        SessionId。 必填。
-        契约: 同步调用。 返回
-        `VoiceProfileSnapshot | None`。
-        """
         ...
 
 
 @dataclass(frozen=True, slots=True)
 class ProfileStoreBoundaryError(ValueError):
-    """类契约说明.
-
-    职责: 保存 ProfileStoreBoundaryError
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: field_name。 方法: __str__。
-    """
 
     field_name: str
 
     @override
     def __str__(self) -> str:
-        """函数契约说明.
-
-        功能: 生成面向日志、错误或调试输出的稳定文本表示。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `str`。
-        """
         return f"invalid voice profile record: {self.field_name}"
 
 
 @dataclass(frozen=True, slots=True)
 class ProfileStoreAmbiguousCommitError(OSError):
-    """类契约说明.
-
-    职责: 保存
-    ProfileStoreAmbiguousCommitError
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段、不变式和资源归属由类体声明与类型标注共同约束。
-    """
+    ...
 
 
 @final
 class JsonVoiceProfileStore:
-    """类契约说明.
-
-    职责: 定义 JsonVoiceProfileStore
-    的状态、行为和对外协作边界。
-    契约: 方法: __init__、save、load。
-    """
 
     def __init__(self, path: Path) -> None:
-        """函数契约说明.
-
-        功能: 初始化 JsonVoiceProfileStore
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。 path: Path。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self._path = path
 
     def save(self, snapshot: VoiceProfileSnapshot) -> None:
-        """函数契约说明.
-
-        功能: 执行 save 的同步逻辑,并协调 mkdir,
-        with_suffix, replace, str。
-        参数: self 表示当前实例。 snapshot:
-        VoiceProfileSnapshot。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         document = {
             "session_id": str(snapshot.session_id),
             "profile_revision": int(snapshot.profile_revision),
@@ -238,17 +145,6 @@ class JsonVoiceProfileStore:
             raise ProfileStoreAmbiguousCommitError from error
 
     def load(self, session_id: SessionId) -> VoiceProfileSnapshot | None:
-        """函数契约说明.
-
-        功能: 执行 load 的同步逻辑,并协调 _object,
-        SessionId, tuple,
-        VoiceProfileSnapshot。
-        参数: self 表示当前实例。 session_id:
-        SessionId。 必填。
-        契约: 同步调用。 返回
-        `VoiceProfileSnapshot | None`。
-        可能抛出 ProfileStoreBoundaryError。
-        """
         if not self._path.exists():
             return None
 
@@ -279,15 +175,6 @@ class JsonVoiceProfileStore:
 
 
 def _record(value: JsonValue, index: int) -> VoiceProfileRecord:
-    """函数契约说明.
-
-    功能: 执行 _record 的同步逻辑,并协调 _object,
-    _text, tuple, VoiceProfileRecord。
-    参数: value: JsonValue。 必填。 index:
-    int。 必填。
-    契约: 同步调用。 返回 `VoiceProfileRecord`。
-    可能抛出 ProfileStoreBoundaryError。
-    """
     document = _object(value, f"profiles[{index}]")
 
     lifecycle_text = _text(document, "lifecycle")
@@ -323,15 +210,6 @@ def _record(value: JsonValue, index: int) -> VoiceProfileRecord:
 
 
 def _object(value: JsonValue, field_name: str) -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _object 的同步逻辑,并协调 isinstance,
-    ProfileStoreBoundaryError。
-    参数: value: JsonValue。 必填。
-    field_name: str。 必填。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    可能抛出 ProfileStoreBoundaryError。
-    """
     if not isinstance(value, dict):
         raise ProfileStoreBoundaryError(field_name)
 
@@ -339,16 +217,6 @@ def _object(value: JsonValue, field_name: str) -> dict[str, JsonValue]:
 
 
 def _array(document: dict[str, JsonValue], field_name: str) -> list[JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _array 的同步逻辑,并协调 get,
-    isinstance,
-    ProfileStoreBoundaryError。
-    参数: document: dict[str, JsonValue]。
-    必填。 field_name: str。 必填。
-    契约: 同步调用。 返回 `list[JsonValue]`。 可能抛出
-    ProfileStoreBoundaryError。
-    """
     value = document.get(field_name)
 
     if not isinstance(value, list):
@@ -358,16 +226,6 @@ def _array(document: dict[str, JsonValue], field_name: str) -> list[JsonValue]:
 
 
 def _text(document: dict[str, JsonValue], field_name: str) -> str:
-    """函数契约说明.
-
-    功能: 执行 _text 的同步逻辑,并协调 get,
-    ProfileStoreBoundaryError,
-    isinstance, strip。
-    参数: document: dict[str, JsonValue]。
-    必填。 field_name: str。 必填。
-    契约: 同步调用。 返回 `str`。 可能抛出
-    ProfileStoreBoundaryError。
-    """
     value = document.get(field_name)
 
     if not isinstance(value, str) or value.strip() == "":
@@ -377,15 +235,6 @@ def _text(document: dict[str, JsonValue], field_name: str) -> str:
 
 
 def _integer(document: dict[str, JsonValue], field_name: str) -> int:
-    """函数契约说明.
-
-    功能: 执行 _integer 的同步逻辑,并协调 get, type,
-    ProfileStoreBoundaryError。
-    参数: document: dict[str, JsonValue]。
-    必填。 field_name: str。 必填。
-    契约: 同步调用。 返回 `int`。 可能抛出
-    ProfileStoreBoundaryError。
-    """
     value = document.get(field_name)
 
     if type(value) is not int:
@@ -395,16 +244,6 @@ def _integer(document: dict[str, JsonValue], field_name: str) -> int:
 
 
 def _optional_integer(document: dict[str, JsonValue], field_name: str) -> int | None:
-    """函数契约说明.
-
-    功能: 执行 _optional_integer 的同步逻辑,并协调
-    get, type,
-    ProfileStoreBoundaryError。
-    参数: document: dict[str, JsonValue]。
-    必填。 field_name: str。 必填。
-    契约: 同步调用。 返回 `int | None`。 可能抛出
-    ProfileStoreBoundaryError。
-    """
     value = document.get(field_name)
 
     if value is None:
@@ -417,16 +256,6 @@ def _optional_integer(document: dict[str, JsonValue], field_name: str) -> int | 
 
 
 def _boolean(document: dict[str, JsonValue], field_name: str) -> bool:
-    """函数契约说明.
-
-    功能: 执行 _boolean 的同步逻辑,并协调 get,
-    isinstance,
-    ProfileStoreBoundaryError。
-    参数: document: dict[str, JsonValue]。
-    必填。 field_name: str。 必填。
-    契约: 同步调用。 返回 `bool`。 可能抛出
-    ProfileStoreBoundaryError。
-    """
     value = document.get(field_name)
 
     if not isinstance(value, bool):
@@ -436,13 +265,6 @@ def _boolean(document: dict[str, JsonValue], field_name: str) -> bool:
 
 
 def _fsync_directory(directory: Path) -> None:
-    """函数契约说明.
-
-    功能: 执行 _fsync_directory 的同步逻辑,并协调
-    open, fsync, close。
-    参数: directory: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
     descriptor = os.open(directory, os.O_RDONLY)
 
     try:

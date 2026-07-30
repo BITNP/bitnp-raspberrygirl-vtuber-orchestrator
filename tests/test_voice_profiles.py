@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 import pytest
 
@@ -26,14 +21,6 @@ from orchestrator.voice_profile_service import VoiceProfileService
 def test_unknown_or_low_confidence_voice_never_binds_profile_memory() -> None:
     # Given: a consented profile and a recognition threshold of 90.
 
-    """函数契约说明.
-
-    功能: 验证 unknown or low confidence
-    voice never binds profile memory
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     vault = InMemoryVoiceProfileVault()
 
@@ -61,14 +48,6 @@ def test_unknown_or_low_confidence_voice_never_binds_profile_memory() -> None:
 def test_revocation_deletion_and_correction_control_personalization() -> None:
     # Given: an enrolled profile whose preferred name can personalize a prompt.
 
-    """函数契约说明.
-
-    功能: 验证 revocation deletion and
-    correction control personalization
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     vault = InMemoryVoiceProfileVault()
 
@@ -108,14 +87,6 @@ def test_revocation_deletion_and_correction_control_personalization() -> None:
 def test_profile_lifecycle_binds_only_revisions_into_mutable_memory() -> None:
     # Given: consented profile metadata and separate ordinary prompt memory.
 
-    """函数契约说明.
-
-    功能: 验证 profile lifecycle binds only
-    revisions into mutable memory
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     service = _service()
 
@@ -143,14 +114,6 @@ def test_profile_lifecycle_binds_only_revisions_into_mutable_memory() -> None:
 def test_no_consent_or_expired_profile_cannot_personalize_and_erases_template() -> None:
     # Given: explicit consent is required and a consented profile has a retention limit.
 
-    """函数契约说明.
-
-    功能: 验证 no consent or expired profile
-    cannot personalize and erases
-    template 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     vault = InMemoryVoiceProfileVault()
 
@@ -197,14 +160,6 @@ def test_no_consent_or_expired_profile_cannot_personalize_and_erases_template() 
 
 
 def _service() -> VoiceProfileService:
-    """函数契约说明.
-
-    功能: 执行 _service 的同步逻辑,并协调
-    VoiceProfileService, SessionId,
-    InMemoryVoiceProfileVault。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `VoiceProfileService`。
-    """
 
     return VoiceProfileService(
         session_id=SessionId("session-1"),
@@ -214,15 +169,6 @@ def _service() -> VoiceProfileService:
 
 
 def _enroll(service: VoiceProfileService) -> VoiceProfileId:
-    """函数契约说明.
-
-    功能: 执行 _enroll 的同步逻辑,并协调 enroll,
-    ProfileEnrollment, VoiceProfileId,
-    EncryptedVoiceTemplate。
-    参数: service: VoiceProfileService。
-    必填。
-    契约: 同步调用。 返回 `VoiceProfileId`。
-    """
 
     result = service.enroll(
         ProfileEnrollment(

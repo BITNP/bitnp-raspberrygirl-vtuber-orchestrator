@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -37,15 +32,6 @@ def test_deployment_validator_accepts_repository_artifacts(
 
     # When: the deployment acceptance validator scans the workspace.
 
-    """函数契约说明.
-
-    功能: 验证 deployment validator accepts
-    repository artifacts 的回归场景和可观察结果。
-    参数: monkeypatch: pytest.MonkeyPatch。
-    必填。 capsys:
-    pytest.CaptureFixture[str]。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     exit_code, output = _run(monkeypatch, capsys, "--deployment-root", str(WORKSPACE))
 
@@ -63,15 +49,6 @@ def test_deployment_validator_rejects_direct_peer_endpoint(
 
     # When: the deployment acceptance validator scans the fixture.
 
-    """函数契约说明.
-
-    功能: 验证 deployment validator rejects
-    direct peer endpoint 的回归场景和可观察结果。
-    参数: monkeypatch: pytest.MonkeyPatch。
-    必填。 capsys:
-    pytest.CaptureFixture[str]。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     exit_code, output = _run(
         monkeypatch, capsys, "--deployment-root", str(DIRECT_PEER_DEPLOYMENT)
@@ -91,16 +68,6 @@ def test_deployment_validator_rejects_mismatched_stream_identity(
 
     # When: the deployment acceptance validator scans the fixture.
 
-    """函数契约说明.
-
-    功能: 验证 deployment validator rejects
-    mismatched stream identity
-    的回归场景和可观察结果。
-    参数: monkeypatch: pytest.MonkeyPatch。
-    必填。 capsys:
-    pytest.CaptureFixture[str]。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     exit_code, output = _run(
         monkeypatch, capsys, "--deployment-root", str(MISMATCHED_IDENTITIES_DEPLOYMENT)
@@ -120,15 +87,6 @@ def test_deployment_validator_accepts_sanitized_fixture(
 
     # When: the deployment acceptance validator scans it.
 
-    """函数契约说明.
-
-    功能: 验证 deployment validator accepts
-    sanitized fixture 的回归场景和可观察结果。
-    参数: monkeypatch: pytest.MonkeyPatch。
-    必填。 capsys:
-    pytest.CaptureFixture[str]。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     exit_code, output = _run(
         monkeypatch, capsys, "--deployment-root", str(GOOD_DEPLOYMENT)
@@ -146,17 +104,6 @@ def _run(
     capsys: pytest.CaptureFixture[str],
     *arguments: str,
 ) -> tuple[int, str]:
-    """函数契约说明.
-
-    功能: 执行 _run 的同步逻辑,并协调 setattr,
-    raises, run_path, str。
-    参数: monkeypatch: pytest.MonkeyPatch。
-    必填。 capsys:
-    pytest.CaptureFixture[str]。 必填。
-    *arguments: str。 必填。
-    契约: 同步调用。 返回 `tuple[int, str]`。 可能抛出
-    AssertionError。
-    """
 
     monkeypatch.setattr(sys, "argv", [str(SCRIPT), *arguments])
 

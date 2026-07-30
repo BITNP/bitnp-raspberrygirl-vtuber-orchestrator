@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -16,14 +11,6 @@ from orchestrator.pipeline_contracts import ASRAudienceEvent
 def test_default_mock_media_providers_need_no_credentials_or_network() -> None:
     # Given: the normal replay environment has no provider configuration.
 
-    """函数契约说明.
-
-    功能: 验证 default mock media providers
-    need no credentials or network
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     config = load_config_from_env({})
 
@@ -47,14 +34,6 @@ def test_default_mock_media_providers_need_no_credentials_or_network() -> None:
 def test_openai_compatible_asr_normalizes_final_at_orchestrator_boundary() -> None:
     # Given: a provider-shaped final transcription from a configured local endpoint.
 
-    """函数契约说明.
-
-    功能: 验证 openai compatible asr
-    normalizes final at orchestrator
-    boundary 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     adapter = OpenAICompatibleASRAdapter(
         endpoint="http://127.0.0.1:8000/v1",
@@ -83,13 +62,6 @@ def test_openai_compatible_asr_normalizes_final_at_orchestrator_boundary() -> No
 def test_vllm_omni_builds_opt_in_fake_local_speech_request() -> None:
     # Given: an explicitly configured fake-local vLLM-Omni surface and clone reference.
 
-    """函数契约说明.
-
-    功能: 验证 vllm omni builds opt in fake
-    local speech request 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     adapter = VllmOmniTTSAdapter(
         endpoint="http://127.0.0.1:8001/v1",
@@ -143,17 +115,6 @@ def test_media_provider_rejects_blank_endpoint_or_model_before_network(
 
     # When / Then: construction fails before any request method can be reached.
 
-    """函数契约说明.
-
-    功能: 验证 media provider rejects blank
-    endpoint or model before network
-    的回归场景和可观察结果。
-    参数: adapter_factory:
-    type[OpenAICompatibleASRAdapter |
-    VllmOmniTTSAdapter]。 必填。 endpoint:
-    str。 必填。 model: str。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     with pytest.raises(ValueError, match=r"endpoint|model"):
         _ = adapter_factory(endpoint=endpoint, model=model)

@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -37,13 +32,6 @@ GIT: Final = shutil.which("git")
 def test_benchmark_emits_deterministic_release_report(tmp_path: Path) -> None:
     # Given: sanitized Chinese benchmark cases and a checked-in final-only baseline.
 
-    """函数契约说明.
-
-    功能: 验证 benchmark emits deterministic
-    release report 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     report = tmp_path / "report.json"
 
@@ -95,14 +83,6 @@ def test_benchmark_rejects_quality_latency_and_duplicate_threshold_breaches(
 ) -> None:
     # Given: three independent release-threshold breaches in a parseable corpus.
 
-    """函数契约说明.
-
-    功能: 验证 benchmark rejects quality
-    latency and duplicate threshold
-    breaches 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     fixtures = tmp_path / "fixtures"
 
@@ -144,13 +124,6 @@ def test_benchmark_rejects_quality_latency_and_duplicate_threshold_breaches(
 def test_benchmark_rejects_sensitive_fixture_keys(tmp_path: Path) -> None:
     # Given: a fixture that would accidentally carry a prohibited biometric artifact.
 
-    """函数契约说明.
-
-    功能: 验证 benchmark rejects sensitive
-    fixture keys 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     fixtures = tmp_path / "fixtures"
 
@@ -182,14 +155,6 @@ def test_benchmark_rejects_sensitive_fixture_keys(tmp_path: Path) -> None:
 def test_plan_verifier_rejects_non_chinese_prompt_requirement(tmp_path: Path) -> None:
     # Given: a plan whose source has a non-Chinese LLM system prompt.
 
-    """函数契约说明.
-
-    功能: 验证 plan verifier rejects non
-    chinese prompt requirement
-    的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     root = tmp_path / "root"
 
@@ -226,13 +191,6 @@ def test_plan_verifier_rejects_non_chinese_prompt_requirement(tmp_path: Path) ->
 def test_frontend_freeze_rejects_any_dirty_frontend_path(tmp_path: Path) -> None:
     # Given: an approved frontend baseline with a later source-path modification.
 
-    """函数契约说明.
-
-    功能: 验证 frontend freeze rejects any
-    dirty frontend path 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     frontend = tmp_path / "frontend"
 
@@ -285,13 +243,6 @@ def test_frontend_freeze_rejects_any_dirty_frontend_path(tmp_path: Path) -> None
 def test_frontend_freeze_rejects_fabricated_signature(tmp_path: Path) -> None:
     # Given: a dirty checkout and a structurally convincing but unverified certificate.
 
-    """函数契约说明.
-
-    功能: 验证 frontend freeze rejects
-    fabricated signature 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     frontend, baseline = _dirty_frontend_checkout(tmp_path)
 
@@ -333,14 +284,6 @@ def test_scheduler_scope_verifier_rejects_biometric_authorization(
 ) -> None:
     # Given: a scheduler source that attempts consequential authorization by voice.
 
-    """函数契约说明.
-
-    功能: 验证 scheduler scope verifier
-    rejects biometric authorization
-    的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     root = tmp_path / "root"
 
@@ -376,14 +319,6 @@ def test_scheduler_scope_verifier_rejects_peer_link_and_missing_controls(
 ) -> None:
     # Given: a scope fixture that bypasses the Orchestrator and lacks reducer controls.
 
-    """函数契约说明.
-
-    功能: 验证 scheduler scope verifier
-    rejects peer link and missing
-    controls 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     root = tmp_path / "root"
 
@@ -418,14 +353,6 @@ def test_scheduler_scope_verifier_rejects_peer_link_and_missing_controls(
 
 
 def _run(script: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
-    """函数契约说明.
-
-    功能: 执行 _run 的同步逻辑,并协调 run, str。
-    参数: script: Path。 必填。 *arguments:
-    str。 必填。
-    契约: 同步调用。 返回
-    `subprocess.CompletedProcess[str]`。
-    """
 
     return subprocess.run(
         [sys.executable, str(script), *arguments],
@@ -436,14 +363,6 @@ def _run(script: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 def _run_git(path: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
-    """函数契约说明.
-
-    功能: 执行 _run_git 的同步逻辑,并协调 run。
-    参数: path: Path。 必填。 *arguments: str。
-    必填。
-    契约: 同步调用。 返回
-    `subprocess.CompletedProcess[str]`。
-    """
 
     assert GIT is not None
 
@@ -457,14 +376,6 @@ def _run_git(path: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 def _dirty_frontend_checkout(tmp_path: Path) -> tuple[Path, str]:
-    """函数契约说明.
-
-    功能: 执行 _dirty_frontend_checkout
-    的同步逻辑,并协调 mkdir, _run_git,
-    write_text, strip。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `tuple[Path, str]`。
-    """
 
     frontend = tmp_path / "frontend"
 
@@ -497,39 +408,16 @@ def _dirty_frontend_checkout(tmp_path: Path) -> tuple[Path, str]:
 
 
 def _write_json(path: Path, payload: dict[str, JsonValue]) -> None:
-    """函数契约说明.
-
-    功能: 执行 _write_json 的同步逻辑,并协调
-    write_text, dumps。
-    参数: path: Path。 必填。 payload:
-    dict[str, JsonValue]。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     _ = path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def _fixture_payload(filename: str) -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _fixture_payload 的同步逻辑,并协调
-    _read_json_object。
-    参数: filename: str。 必填。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     return _read_json_object(FIXTURES / filename)
 
 
 def _read_json_object(path: Path) -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _read_json_object 的同步逻辑,并协调
-    parse_json_value, isinstance,
-    read_text。
-    参数: path: Path。 必填。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     raw = parse_json_value(path.read_text(encoding="utf-8"))
 
@@ -539,13 +427,6 @@ def _read_json_object(path: Path) -> dict[str, JsonValue]:
 
 
 def _failing_cases() -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _failing_cases 的同步逻辑,并协调
-    _fixture_payload, isinstance。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     payload = _fixture_payload("cases.json")
 

@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from orchestrator.llm import FallbackLLMAdapter, MockLLMAdapter, TimeoutLLMAdapter
 from orchestrator.modes import AdaptiveAgentPolicy
@@ -14,14 +9,6 @@ from orchestrator.retrieval import RetrievalFixtureProvider
 def test_bounded_queue_rejects_overflow_without_sleeping() -> None:
     # Given: a pipeline with capacity for one pending audience input.
 
-    """函数契约说明.
-
-    功能: 验证 bounded queue rejects
-    overflow without sleeping
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
@@ -58,14 +45,6 @@ def test_bounded_queue_rejects_overflow_without_sleeping() -> None:
 def test_llm_timeout_emits_fallback_answer_without_wall_clock() -> None:
     # Given: the provider times out and the adapter has deterministic fallback text.
 
-    """函数契约说明.
-
-    功能: 验证 llm timeout emits fallback
-    answer without wall clock
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(

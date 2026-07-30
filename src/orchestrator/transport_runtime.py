@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.transport_runtime
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -50,79 +44,28 @@ type DatagramListener = Callable[[str, int, RtpHub], Awaitable[DatagramSender]]
 
 
 class ControlServer(Protocol):
-    """类契约说明.
-
-    职责: 声明 ControlServer
-    协议接口,约束实现方必须提供的行为。
-    契约: 方法: close、wait_closed。
-    """
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
+        ...
 
     async def wait_closed(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 wait_closed
-        的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 异步调用。 返回 `None`。
-        """
+        ...
 
 
 class ControlConnection(Protocol):
-    """类契约说明.
-
-    职责: 声明 ControlConnection
-    协议接口,约束实现方必须提供的行为。
-    契约: 方法: remote_address、__aiter__、res
-    pond、send。
-    """
 
     @property
     def remote_address(self) -> tuple[str, int] | None:
-        """函数契约说明.
-
-        功能: 执行 remote_address
-        的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `tuple[str, int] |
-        None`。
-        """
+        ...
 
     def __aiter__(self) -> AsyncIterator[str | bytes]:
-        """函数契约说明.
-
-        功能: 执行 __aiter__ 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `AsyncIterator[str
-        | bytes]`。
-        """
         ...
 
     def respond(self, status: HTTPStatus, text: str) -> Response:
-        """函数契约说明.
-
-        功能: 执行 respond 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 status:
-        HTTPStatus。 必填。 text: str。 必填。
-        契约: 同步调用。 返回 `Response`。
-        """
         ...
 
     async def send(self, message: str) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 message: str。
-        必填。
-        契约: 异步调用。 返回 `None`。
-        """
+        ...
 
 
 type ControlHandler = Callable[[ControlConnection], Awaitable[None]]
@@ -134,13 +77,6 @@ type ControlListener = Callable[
 
 @dataclass(frozen=True, slots=True)
 class TransportReadiness:
-    """类契约说明.
-
-    职责: 保存 TransportReadiness
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: listener_ready、route_ready。
-    方法: ready。
-    """
 
     listener_ready: bool
 
@@ -148,25 +84,11 @@ class TransportReadiness:
 
     @property
     def ready(self) -> bool:
-        """函数契约说明.
-
-        功能: 执行 ready 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `bool`。
-        """
         return self.listener_ready
 
 
 @final
 class TransportRuntime:
-    """类契约说明.
-
-    职责: 定义 TransportRuntime
-    的状态、行为和对外协作边界。
-    契约: 方法: __init__、set_session_runtime
-    、set_observability、set_output_fence、
-    start、cancel_stream。
-    """
 
     def __init__(
         self,
@@ -176,21 +98,6 @@ class TransportRuntime:
         onsite_bridge: OnsiteBridge | None = None,
         clock: FlushClock | None = None,
     ) -> None:
-        """函数契约说明.
-
-        功能: 初始化 TransportRuntime
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。 config:
-        TransportConfig。 必填。
-        datagram_listener:
-        DatagramListener | None。 可省略。
-        control_listener:
-        ControlListener | None。 可省略。
-        onsite_bridge: OnsiteBridge |
-        None。 可省略。 clock: FlushClock |
-        None。 可省略。
-        契约: 同步调用。 返回 `None`。
-        """
         self._config: TransportConfig = config
 
         self._datagram_listener: DatagramListener = (
@@ -220,29 +127,11 @@ class TransportRuntime:
         self._comment_ingresses: dict[int, AuthenticatedCommentIngress] = {}
 
     def set_session_runtime(self, session_runtime: SessionRuntime) -> None:
-        """函数契约说明.
-
-        功能: 执行 set_session_runtime
-        的同步逻辑,并协调 set_output_fence。
-        参数: self 表示当前实例。
-        session_runtime: SessionRuntime。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self._session_runtime = session_runtime
 
         self.set_output_fence(session_runtime.output_fence)
 
     def set_observability(self, observability: OnsiteObservability) -> None:
-        """函数契约说明.
-
-        功能: 执行 set_observability
-        的同步逻辑,并协调 set_observability,
-        isinstance。
-        参数: self 表示当前实例。 observability:
-        OnsiteObservability。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self._hub.set_observability(observability)
 
         self._control_dispatch.set_observability(observability)
@@ -253,29 +142,11 @@ class TransportRuntime:
             bridge.set_observability(observability)
 
     def set_output_fence(self, output_fence: SchedulerOutputFence) -> None:
-        """函数契约说明.
-
-        功能: 执行 set_output_fence
-        的同步逻辑,并协调 set_output_fence。
-        参数: self 表示当前实例。 output_fence:
-        SchedulerOutputFence。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self._hub.set_output_fence(output_fence)
 
         self._control_dispatch.set_output_fence(output_fence)
 
     async def start(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 start 的异步逻辑,并协调
-        attach_transport, create_task,
-        _datagram_listener,
-        _control_listener。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         self._datagram_transport = await self._datagram_listener(
             self._config.udp_bind_host,
             self._config.udp_bind_port,
@@ -291,74 +162,22 @@ class TransportRuntime:
         self._flush_driver = asyncio.create_task(self._drive_flush_admission())
 
     async def cancel_stream(self, session_id: str, stream_id: str) -> None:
-        """函数契约说明.
-
-        功能: 执行 cancel_stream 的异步逻辑,并协调
-        cancel_stream。
-        参数: self 表示当前实例。 session_id:
-        str。 必填。 stream_id: str。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         await self._control_dispatch.cancel_stream(session_id, stream_id)
 
     async def request_stream_flush(self, flush: StreamFlush) -> None:
-        """函数契约说明.
-
-        功能: 执行 request_stream_flush
-        的异步逻辑,并协调 request_stream_flush。
-        参数: self 表示当前实例。 flush:
-        StreamFlush。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         await self._control_dispatch.request_stream_flush(flush)
 
     async def advance_flush_admission(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 advance_flush_admission
-        的异步逻辑,并协调
-        advance_flush_admission。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         await self._control_dispatch.advance_flush_admission()
 
     async def admit_replacement(self, flush: StreamFlush) -> bool:
-        """函数契约说明.
-
-        功能: 执行 admit_replacement
-        的异步逻辑,并协调 admit_replacement。
-        参数: self 表示当前实例。 flush:
-        StreamFlush。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `bool`。
-        """
         return await self._control_dispatch.admit_replacement(flush)
 
     @property
     def flush_failures(self) -> tuple[FlushFailure, ...]:
-        """函数契约说明.
-
-        功能: 执行 flush_failures
-        的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回
-        `tuple[FlushFailure, ...]`。
-        """
         return self._control_dispatch.flush_failures
 
     def readiness(self) -> TransportReadiness:
-        """函数契约说明.
-
-        功能: 执行 readiness 的同步逻辑,并协调
-        TransportReadiness。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回
-        `TransportReadiness`。
-        """
         listener_ready = (
             self._datagram_transport is not None and self._control_server is not None
         )
@@ -366,15 +185,6 @@ class TransportRuntime:
         return TransportReadiness(listener_ready, self._hub.route_ready)
 
     async def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的异步逻辑,并协调 clear,
-        cancel, close,
-        wait_for_onsite_jobs。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         flush_driver = self._flush_driver
 
         if flush_driver is not None:
@@ -404,14 +214,6 @@ class TransportRuntime:
         self._control_dispatch.clear()
 
     async def handle_control(self, connection: ControlConnection) -> None:
-        """函数契约说明.
-
-        功能: 处理输入事件、请求或状态转换。
-        参数: self 表示当前实例。 connection:
-        ControlConnection。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         peer_ip = _peer_ip(connection)
 
         try:
@@ -469,17 +271,6 @@ class TransportRuntime:
         session_runtime: SessionRuntime,
         message: str,
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 _receive_comment
-        的同步逻辑,并协调 setdefault, receive,
-        id, AuthenticatedCommentIngress。
-        参数: self 表示当前实例。 connection:
-        ControlConnection。 必填。
-        session_runtime: SessionRuntime。
-        必填。 message: str。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         ingress = self._comment_ingresses.setdefault(
             id(connection),
             AuthenticatedCommentIngress(
@@ -501,37 +292,12 @@ class TransportRuntime:
             _ = session_runtime.receive_comment(proposal)
 
     def route_datagram(self, data: bytes, peer: tuple[str, int]) -> bool:
-        """函数契约说明.
-
-        功能: 执行 route_datagram 的同步逻辑,并协调
-        route_datagram。
-        参数: self 表示当前实例。 data: bytes。
-        必填。 peer: tuple[str, int]。 必填。
-        契约: 同步调用。 返回 `bool`。
-        """
         return self._hub.route_datagram(data, peer)
 
     async def wait_for_onsite_jobs(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 wait_for_onsite_jobs
-        的异步逻辑,并协调 wait_for_onsite_jobs。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         await self._hub.wait_for_onsite_jobs()
 
     async def _drive_flush_admission(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 _drive_flush_admission
-        的异步逻辑,并协调 sleep,
-        advance_flush_admission。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         while True:
             await asyncio.sleep(0.25)
 
@@ -540,49 +306,16 @@ class TransportRuntime:
 
 @final
 class _RtpDatagramProtocol(asyncio.DatagramProtocol):
-    """类契约说明.
-
-    职责: 声明 _RtpDatagramProtocol
-    协议接口,约束实现方必须提供的行为。
-    契约: 方法: __init__、datagram_received。
-    """
 
     def __init__(self, hub: RtpHub) -> None:
-        """函数契约说明.
-
-        功能: 初始化 _RtpDatagramProtocol
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。 hub: RtpHub。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self._hub: RtpHub = hub
 
     @override
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        """函数契约说明.
-
-        功能: 执行 datagram_received
-        的同步逻辑,并协调 route_datagram。
-        参数: self 表示当前实例。 data: bytes。
-        必填。 addr: tuple[str, int]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         _ = self._hub.route_datagram(data, addr)
 
 
 async def _listen_udp(host: str, port: int, hub: RtpHub) -> DatagramSender:
-    """函数契约说明.
-
-    功能: 执行 _listen_udp 的异步逻辑,并协调
-    get_running_loop,
-    create_datagram_endpoint,
-    _RtpDatagramProtocol。
-    参数: host: str。 必填。 port: int。 必填。
-    hub: RtpHub。 必填。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-    `DatagramSender`。
-    """
     loop = asyncio.get_running_loop()
 
     transport, _ = await loop.create_datagram_endpoint(
@@ -596,28 +329,9 @@ async def _listen_udp(host: str, port: int, hub: RtpHub) -> DatagramSender:
 async def _listen_control(
     config: TransportConfig, handler: ControlHandler
 ) -> ControlServer:
-    """函数契约说明.
-
-    功能: 执行 _listen_control 的异步逻辑,并协调
-    _ssl_context, get,
-    bearer_token_matches, respond。
-    参数: config: TransportConfig。 必填。
-    handler: ControlHandler。 必填。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-    `ControlServer`。
-    """
     ssl_context = _ssl_context(config)
 
     def authorize(connection: ControlConnection, request: Request) -> Response | None:
-        """函数契约说明.
-
-        功能: 执行 authorize 的同步逻辑,并协调 get,
-        bearer_token_matches, respond。
-        参数: connection:
-        ControlConnection。 必填。 request:
-        Request。 必填。
-        契约: 同步调用。 返回 `Response | None`。
-        """
         authorization = request.headers.get("Authorization")
 
         if bearer_token_matches(config.control_token, authorization):
@@ -635,15 +349,6 @@ async def _listen_control(
 
 
 def _comment_ingress_config(config: TransportConfig) -> CommentIngressConfig:
-    """函数契约说明.
-
-    功能: 执行 _comment_ingress_config
-    的同步逻辑,并协调 CommentIngressConfig,
-    CommentAccessToken,
-    CommentTokenValue。
-    参数: config: TransportConfig。 必填。
-    契约: 同步调用。 返回 `CommentIngressConfig`。
-    """
     token = config.control_token
 
     credential = (
@@ -661,15 +366,6 @@ def _comment_ingress_config(config: TransportConfig) -> CommentIngressConfig:
 
 
 def _connection_authorization(connection: ControlConnection) -> str | None:
-    """函数契约说明.
-
-    功能: 执行 _connection_authorization
-    的同步逻辑,并协调 getattr, isinstance,
-    callable, candidate。
-    参数: connection: ControlConnection。
-    必填。
-    契约: 同步调用。 返回 `str | None`。
-    """
     authorization = getattr(connection, "authorization", None)
 
     if isinstance(authorization, str):
@@ -687,15 +383,6 @@ def _connection_authorization(connection: ControlConnection) -> str | None:
 
 
 def _ssl_context(config: TransportConfig) -> ssl.SSLContext | None:
-    """函数契约说明.
-
-    功能: 执行 _ssl_context 的同步逻辑,并协调
-    SSLContext, load_cert_chain,
-    ControlEnvelopeError。
-    参数: config: TransportConfig。 必填。
-    契约: 同步调用。 返回 `ssl.SSLContext |
-    None`。 可能抛出 ControlEnvelopeError。
-    """
     if config.control_scheme == "ws":
         return None
 
@@ -710,15 +397,6 @@ def _ssl_context(config: TransportConfig) -> ssl.SSLContext | None:
 
 
 def _peer_ip(connection: ControlConnection) -> str:
-    """函数契约说明.
-
-    功能: 执行 _peer_ip 的同步逻辑,并协调
-    ControlEnvelopeError。
-    参数: connection: ControlConnection。
-    必填。
-    契约: 同步调用。 返回 `str`。 可能抛出
-    ControlEnvelopeError。
-    """
     remote_address = connection.remote_address
 
     if remote_address is None:

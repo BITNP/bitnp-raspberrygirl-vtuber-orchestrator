@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.prompt_composition
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -29,13 +23,6 @@ UNTRUSTED_PAYLOAD_CLOSE = "</untrusted-payload>"
 
 @dataclass(frozen=True, slots=True)
 class PromptSnapshot:
-    """类契约说明.
-
-    职责: 保存 PromptSnapshot
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: task_state、context_entries、m
-    ax_context_chars、memory_entries。
-    """
 
     task_state: TaskStateSnapshot
 
@@ -48,12 +35,6 @@ class PromptSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class PromptFields:
-    """类契约说明.
-
-    职责: 保存 PromptFields
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: system、user。
-    """
 
     system: str
 
@@ -65,17 +46,6 @@ def compose_prompt(
     retrieval: RetrievalResult,
     prompt_snapshot: PromptSnapshot,
 ) -> PromptFields:
-    """函数契约说明.
-
-    功能: 执行 compose_prompt 的同步逻辑,并协调
-    _bounded_context, PromptFields,
-    _untrusted_payload,
-    _format_task_state。
-    参数: candidate: AnswerCandidate。 必填。
-    retrieval: RetrievalResult。 必填。
-    prompt_snapshot: PromptSnapshot。 必填。
-    契约: 同步调用。 返回 `PromptFields`。
-    """
     system = f"{BASE_SYSTEM_INSTRUCTION}{UNTRUSTED_PAYLOAD_INSTRUCTION}"
 
     user_parts = [
@@ -93,14 +63,6 @@ def compose_prompt(
 
 
 def owned_instruction_template_inventory() -> Mapping[str, str]:
-    """函数契约说明.
-
-    功能: 执行
-    owned_instruction_template_inventory
-    的同步逻辑,并协调 MappingProxyType。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `Mapping[str, str]`。
-    """
     return MappingProxyType(
         {
             "system.base": BASE_SYSTEM_INSTRUCTION,
@@ -110,13 +72,6 @@ def owned_instruction_template_inventory() -> Mapping[str, str]:
 
 
 def _format_task_state(snapshot: TaskStateSnapshot) -> str:
-    """函数契约说明.
-
-    功能: 执行 _format_task_state
-    的同步逻辑,并维持签名契约。
-    参数: snapshot: TaskStateSnapshot。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     return (
         "数据快照:"
         f"memory={snapshot.memory_revision},context={snapshot.context_generation},"
@@ -126,15 +81,6 @@ def _format_task_state(snapshot: TaskStateSnapshot) -> str:
 
 
 def _bounded_context(refs: tuple[KnowledgeRef, ...], snapshot: PromptSnapshot) -> str:
-    """函数契约说明.
-
-    功能: 执行 _bounded_context 的同步逻辑,并协调
-    join, _untrusted_payload, append,
-    len。
-    参数: refs: tuple[KnowledgeRef, ...]。
-    必填。 snapshot: PromptSnapshot。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     remaining = snapshot.max_context_chars
 
     parts: list[str] = []
@@ -170,11 +116,4 @@ def _bounded_context(refs: tuple[KnowledgeRef, ...], snapshot: PromptSnapshot) -
 
 
 def _untrusted_payload(payload: str) -> str:
-    """函数契约说明.
-
-    功能: 执行 _untrusted_payload
-    的同步逻辑,并维持签名契约。
-    参数: payload: str。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     return f"{UNTRUSTED_PAYLOAD_OPEN}{payload}{UNTRUSTED_PAYLOAD_CLOSE}"

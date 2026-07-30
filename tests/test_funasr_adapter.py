@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -25,14 +20,6 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class _FakeFunASRConnection:
-    """类契约说明.
-
-    职责: 保存 _FakeFunASRConnection
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: responses、sent、closed、entere
-    d_receive、release_receive。 方法:
-    send、recv、close。
-    """
 
     responses: list[str]
 
@@ -45,26 +32,10 @@ class _FakeFunASRConnection:
     release_receive: threading.Event = field(default_factory=threading.Event)
 
     def send(self, message: str | bytes) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 message: str |
-        bytes。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.sent.append(message)
 
     def recv(self, timeout: float | None = None) -> str:
-        """函数契约说明.
-
-        功能: 执行 recv 的同步逻辑,并协调 set, pop,
-        wait, OSError。
-        参数: self 表示当前实例。 timeout: float
-        | None。 可省略。
-        契约: 同步调用。 返回 `str`。 可能抛出
-        OSError。
-        """
 
         _ = timeout
 
@@ -80,12 +51,6 @@ class _FakeFunASRConnection:
         return self.responses.pop(0)
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并协调 set。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.closed = True
 
@@ -93,13 +58,6 @@ class _FakeFunASRConnection:
 
 
 def _request() -> ASRStreamRequest:
-    """函数契约说明.
-
-    功能: 执行 _request 的同步逻辑,并协调
-    ASRStreamRequest。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `ASRStreamRequest`。
-    """
 
     return ASRStreamRequest(
         audio=b"canonical-l16-audio",
@@ -113,23 +71,8 @@ def _request() -> ASRStreamRequest:
 def _connect(
     connection: _FakeFunASRConnection,
 ) -> object:
-    """函数契约说明.
-
-    功能: 执行 _connect 的同步逻辑,并产出 _。
-    参数: connection:
-    _FakeFunASRConnection。 必填。
-    契约: 同步调用。 返回 `object`。
-    """
 
     def factory(*args: object, **kwargs: object) -> _FakeFunASRConnection:
-        """函数契约说明.
-
-        功能: 执行 factory 的同步逻辑,并产出 _。
-        参数: *args: object。 必填。 **kwargs:
-        object。 必填。
-        契约: 同步调用。 返回
-        `_FakeFunASRConnection`。
-        """
 
         _ = (args, kwargs)
 
@@ -143,14 +86,6 @@ def test_funasr_normalizes_vad_partial_then_one_final(
 ) -> None:
     # Given: a local FunASR FSMN/Paraformer session with VAD and two-pass results.
 
-    """函数契约说明.
-
-    功能: 验证 funasr normalizes vad partial
-    then one final 的回归场景和可观察结果。
-    参数: monkeypatch: pytest.MonkeyPatch。
-    必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     connection = _FakeFunASRConnection(
         [
@@ -198,15 +133,6 @@ def test_funasr_rejects_duplicate_final_before_another_turn_can_be_admitted(
 ) -> None:
     # Given: a broken native stream that emits two completed results.
 
-    """函数契约说明.
-
-    功能: 验证 funasr rejects duplicate
-    final before another turn can be
-    admitted 的回归场景和可观察结果。
-    参数: monkeypatch: pytest.MonkeyPatch。
-    必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     connection = _FakeFunASRConnection(
         [
@@ -230,15 +156,6 @@ def test_funasr_cancellation_closes_native_session_without_stale_final(
 ) -> None:
     # Given: a native FunASR read blocked before a provider result arrives.
 
-    """函数契约说明.
-
-    功能: 验证 funasr cancellation closes
-    native session without stale final
-    的回归场景和可观察结果。
-    参数: monkeypatch: pytest.MonkeyPatch。
-    必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     connection = _FakeFunASRConnection([])
 
@@ -287,17 +204,6 @@ def _consume(
     result: list[ASRPartialEvent | ASRAudienceEvent],
     failure: list[BaseException],
 ) -> None:
-    """函数契约说明.
-
-    功能: 执行 _consume 的同步逻辑,并协调 extend,
-    append。
-    参数: stream: Iterator[ASRPartialEvent
-    | ASRAudienceEvent]。 必填。 result:
-    list[ASRPartialEvent |
-    ASRAudienceEvent]。 必填。 failure:
-    list[BaseException]。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     try:
         result.extend(stream)

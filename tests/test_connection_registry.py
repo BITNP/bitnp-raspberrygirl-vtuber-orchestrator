@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 import pytest
 
@@ -18,13 +13,6 @@ from orchestrator.registry import (
 def test_register_rejects_duplicate_active_module_identity() -> None:
     # Given: one active ASR module identity is already registered.
 
-    """函数契约说明.
-
-    功能: 验证 register rejects duplicate
-    active module identity 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     registry = ConnectionRegistry()
 
@@ -51,14 +39,6 @@ def test_register_rejects_duplicate_active_module_identity() -> None:
 def test_register_allows_same_module_name_with_distinct_instance() -> None:
     # Given: two instances of the same module type have distinct identities.
 
-    """函数契约说明.
-
-    功能: 验证 register allows same module
-    name with distinct instance
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     registry = ConnectionRegistry()
 
@@ -86,13 +66,6 @@ def test_module_identity_rejects_blank_fields() -> None:
 
     # When: parsing attempts to create a typed identity.
 
-    """函数契约说明.
-
-    功能: 验证 module identity rejects blank
-    fields 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     with pytest.raises(ModuleIdentityParseError) as error:
         _ = ModuleIdentity.parse(module_name="tts", instance_id=" ")

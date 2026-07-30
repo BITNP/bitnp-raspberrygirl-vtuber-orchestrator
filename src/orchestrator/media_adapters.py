@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.media_adapters
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -32,35 +26,16 @@ from orchestrator.provider_streaming import (
 
 @dataclass(frozen=True, slots=True)
 class MediaAdapterConfigError(ValueError):
-    """类契约说明.
-
-    职责: 保存 MediaAdapterConfigError
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: field_name。 方法: __str__。
-    """
 
     field_name: str
 
     @override
     def __str__(self) -> str:
-        """函数契约说明.
-
-        功能: 生成面向日志、错误或调试输出的稳定文本表示。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `str`。
-        """
         return f"media adapter config field is blank: {self.field_name}"
 
 
 @dataclass(frozen=True, slots=True)
 class ASRPartialEvent:
-    """类契约说明.
-
-    职责: 保存 ASRPartialEvent
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段:
-    text、received_at_ms、segment_id、seq。
-    """
 
     text: str
 
@@ -76,13 +51,6 @@ type ASRStreamEvent = ASRPartialEvent | ASRAudienceEvent
 
 @dataclass(frozen=True, slots=True)
 class ASRStreamRequest:
-    """类契约说明.
-
-    职责: 保存 ASRStreamRequest
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: audio、filename、received_at_m
-    s、segment_id、seq。
-    """
 
     audio: bytes
 
@@ -96,13 +64,6 @@ class ASRStreamRequest:
 
 
 class VllmOmniSpeechPayload(TypedDict):
-    """类契约说明.
-
-    职责: 定义 VllmOmniSpeechPayload
-    的状态、行为和对外协作边界。
-    契约: 字段: model、input、voice、task_type、
-    ref_audio、ref_text。
-    """
 
     model: str
 
@@ -119,12 +80,6 @@ class VllmOmniSpeechPayload(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class HttpSpeechRequest:
-    """类契约说明.
-
-    职责: 保存 HttpSpeechRequest
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: method、url、json。
-    """
 
     method: Literal["POST"]
 
@@ -135,12 +90,6 @@ class HttpSpeechRequest:
 
 @dataclass(frozen=True, slots=True)
 class SynthesizedAudio:
-    """类契约说明.
-
-    职责: 保存 SynthesizedAudio
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: data、media_type。
-    """
 
     data: bytes
 
@@ -149,15 +98,6 @@ class SynthesizedAudio:
 
 @dataclass(frozen=True, slots=True)
 class OpenAICompatibleASRAdapter:
-    """类契约说明.
-
-    职责: 保存 OpenAICompatibleASRAdapter
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: endpoint、model、api_key、capab
-    ility、deadlines。 方法: __post_init__、n
-    ormalize_final、transcribe、_transcrib
-    e_request、stream、_stream_openai。
-    """
 
     endpoint: str
 
@@ -170,14 +110,6 @@ class OpenAICompatibleASRAdapter:
     deadlines: ProviderDeadlines = field(default_factory=ProviderDeadlines)
 
     def __post_init__(self) -> None:
-        """函数契约说明.
-
-        功能: 初始化
-        OpenAICompatibleASRAdapter
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
         _require_endpoint_and_model(self.endpoint, self.model)
 
     def normalize_final(
@@ -188,19 +120,6 @@ class OpenAICompatibleASRAdapter:
         segment_id: str,
         seq: int,
     ) -> ASRAudienceEvent:
-        """函数契约说明.
-
-        功能: 执行 normalize_final 的同步逻辑,并协调
-        strip, ASRAudienceEvent,
-        MediaAdapterConfigError, get。
-        参数: self 表示当前实例。 response:
-        dict[str, str]。 必填。
-        received_at_ms: int。 必填。
-        segment_id: str。 必填。 seq: int。
-        必填。
-        契约: 同步调用。 返回 `ASRAudienceEvent`。
-        可能抛出 MediaAdapterConfigError。
-        """
         text = response.get("text", "").strip()
 
         if text == "":
@@ -218,22 +137,6 @@ class OpenAICompatibleASRAdapter:
         seq: int,
         cancellation: ProviderCancellationHandle | None = None,
     ) -> ASRAudienceEvent:
-        """函数契约说明.
-
-        功能: 执行 transcribe 的同步逻辑,并协调
-        _transcribe_request,
-        ASRStreamRequest,
-        MediaAdapterConfigError。
-        参数: self 表示当前实例。 audio: bytes。
-        必填。 filename: str。 必填。
-        received_at_ms: int。 必填。
-        segment_id: str。 必填。 seq: int。
-        必填。 cancellation:
-        ProviderCancellationHandle |
-        None。 可省略。
-        契约: 同步调用。 返回 `ASRAudienceEvent`。
-        可能抛出 MediaAdapterConfigError。
-        """
         event = self._transcribe_request(
             ASRStreamRequest(audio, filename, received_at_ms, segment_id, seq),
             cancellation=cancellation,
@@ -250,22 +153,6 @@ class OpenAICompatibleASRAdapter:
         *,
         cancellation: ProviderCancellationHandle | None,
     ) -> ASRAudienceEvent | None:
-        """函数契约说明.
-
-        功能: 执行 _transcribe_request
-        的同步逻辑,并协调
-        _multipart_transcription_body,
-        post_bytes, get,
-        normalize_final。
-        参数: self 表示当前实例。 request:
-        ASRStreamRequest。 必填。
-        cancellation:
-        ProviderCancellationHandle |
-        None。 必填。
-        契约: 同步调用。 返回 `ASRAudienceEvent |
-        None`。 可能抛出
-        MediaAdapterConfigError。
-        """
         boundary = "orchestrator-asr-boundary"
 
         body = _multipart_transcription_body(
@@ -313,19 +200,6 @@ class OpenAICompatibleASRAdapter:
         *,
         cancellation: ProviderCancellationHandle | None = None,
     ) -> Iterator[ASRStreamEvent]:
-        """函数契约说明.
-
-        功能: 执行 stream 的同步逻辑,并协调
-        _transcribe_request,
-        _stream_openai。
-        参数: self 表示当前实例。 request:
-        ASRStreamRequest。 必填。
-        cancellation:
-        ProviderCancellationHandle |
-        None。 可省略。
-        契约: 同步调用。 返回迭代或生成器协议。 返回
-        `Iterator[ASRStreamEvent]`。
-        """
         match self.capability:
             case "final_only":
                 if cancellation is None or not cancellation.cancelled:
@@ -349,21 +223,6 @@ class OpenAICompatibleASRAdapter:
         request: ASRStreamRequest,
         cancellation: ProviderCancellationHandle | None,
     ) -> Iterator[ASRStreamEvent]:
-        """函数契约说明.
-
-        功能: 执行 _stream_openai 的同步逻辑,并协调
-        _multipart_transcription_body,
-        post_sse, ProviderRequest,
-        _normalize_asr_sse。
-        参数: self 表示当前实例。 request:
-        ASRStreamRequest。 必填。
-        cancellation:
-        ProviderCancellationHandle |
-        None。 必填。
-        契约: 同步调用。 返回迭代或生成器协议。 返回
-        `Iterator[ASRStreamEvent]`。 可能抛出
-        ProviderResponseError。
-        """
         boundary = "orchestrator-asr-boundary"
 
         body = _multipart_transcription_body(
@@ -412,14 +271,6 @@ class OpenAICompatibleASRAdapter:
 
 @dataclass(frozen=True, slots=True)
 class VllmOmniTTSAdapter:
-    """类契约说明.
-
-    职责: 保存 VllmOmniTTSAdapter
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: endpoint、model、api_key。 方法:
-    __post_init__、build_speech_request、s
-    ynthesize。
-    """
 
     endpoint: str
 
@@ -428,13 +279,6 @@ class VllmOmniTTSAdapter:
     api_key: str | None = None
 
     def __post_init__(self) -> None:
-        """函数契约说明.
-
-        功能: 初始化 VllmOmniTTSAdapter
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
         _require_endpoint_and_model(self.endpoint, self.model)
 
     def build_speech_request(
@@ -445,15 +289,6 @@ class VllmOmniTTSAdapter:
         ref_audio: str,
         ref_text: str,
     ) -> HttpSpeechRequest:
-        """函数契约说明.
-
-        功能: 构造协议对象、配置或测试夹具。
-        参数: self 表示当前实例。 text: str。 必填。
-        voice: str。 必填。 ref_audio: str。
-        必填。 ref_text: str。 必填。
-        契约: 同步调用。 返回
-        `HttpSpeechRequest`。
-        """
         return HttpSpeechRequest(
             method="POST",
             url=f"{self.endpoint.rstrip('/')}/audio/speech",
@@ -476,19 +311,6 @@ class VllmOmniTTSAdapter:
         ref_text: str,
         cancellation: ProviderCancellationHandle | None = None,
     ) -> SynthesizedAudio:
-        """函数契约说明.
-
-        功能: 执行 synthesize 的同步逻辑,并协调
-        build_speech_request, _post,
-        SynthesizedAudio, encode。
-        参数: self 表示当前实例。 text: str。 必填。
-        voice: str。 必填。 ref_audio: str。
-        必填。 ref_text: str。 必填。
-        cancellation:
-        ProviderCancellationHandle |
-        None。 可省略。
-        契约: 同步调用。 返回 `SynthesizedAudio`。
-        """
         speech = self.build_speech_request(
             text=text,
             voice=voice,
@@ -507,16 +329,6 @@ class VllmOmniTTSAdapter:
 
 
 def _require_endpoint_and_model(endpoint: str, model: str) -> None:
-    """函数契约说明.
-
-    功能: 执行 _require_endpoint_and_model
-    的同步逻辑,并协调 strip,
-    MediaAdapterConfigError。
-    参数: endpoint: str。 必填。 model: str。
-    必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    MediaAdapterConfigError。
-    """
     if endpoint.strip() == "":
         raise MediaAdapterConfigError(field_name="endpoint")
 
@@ -525,13 +337,6 @@ def _require_endpoint_and_model(endpoint: str, model: str) -> None:
 
 
 def _headers(api_key: str | None, content_type: str) -> dict[str, str]:
-    """函数契约说明.
-
-    功能: 执行 _headers 的同步逻辑,并协调 strip。
-    参数: api_key: str | None。 必填。
-    content_type: str。 必填。
-    契约: 同步调用。 返回 `dict[str, str]`。
-    """
     headers = {"Content-Type": content_type}
 
     if api_key is not None and api_key.strip() != "":
@@ -543,17 +348,6 @@ def _headers(api_key: str | None, content_type: str) -> dict[str, str]:
 def _normalize_asr_sse(
     *, data: str, received_at_ms: int, segment_id: str, seq: int
 ) -> ASRStreamEvent:
-    """函数契约说明.
-
-    功能: 执行 _normalize_asr_sse 的同步逻辑,并协调
-    get, ASRPartialEvent,
-    parse_json_value, isinstance。
-    参数: data: str。 必填。 received_at_ms:
-    int。 必填。 segment_id: str。 必填。 seq:
-    int。 必填。
-    契约: 同步调用。 返回 `ASRStreamEvent`。 可能抛出
-    ProviderResponseError。
-    """
     try:
         payload = parse_json_value(data)
 
@@ -582,12 +376,6 @@ def _normalize_asr_sse(
 
 @dataclass(frozen=True, slots=True)
 class _HttpResponse:
-    """类契约说明.
-
-    职责: 保存 _HttpResponse
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: data、media_type。
-    """
 
     data: bytes
 
@@ -600,18 +388,6 @@ def _post(
     headers: dict[str, str],
     cancellation: ProviderCancellationHandle | None,
 ) -> _HttpResponse:
-    """函数契约说明.
-
-    功能: 执行 _post 的同步逻辑,并协调 urlsplit,
-    HTTPConnection, bind, request。
-    参数: url: str。 必填。 body: bytes。 必填。
-    headers: dict[str, str]。 必填。
-    cancellation:
-    ProviderCancellationHandle | None。
-    必填。
-    契约: 同步调用。 返回 `_HttpResponse`。 可能抛出
-    MediaAdapterConfigError。
-    """
     parsed = urlsplit(url)
 
     path = parsed.path if parsed.path != "" else "/"
@@ -660,15 +436,6 @@ def _multipart_transcription_body(
     filename: str,
     audio: bytes,
 ) -> bytes:
-    """函数契约说明.
-
-    功能: 执行 _multipart_transcription_body
-    的同步逻辑,并协调 encode。
-    参数: boundary: str。 必填。 model: str。
-    必填。 filename: str。 必填。 audio: bytes。
-    必填。
-    契约: 同步调用。 返回 `bytes`。
-    """
     prefix = (
         f"--{boundary}\r\n"
         'Content-Disposition: form-data; name="model"\r\n\r\n'

@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from orchestrator.ids import SessionId, TraceId
 from orchestrator.interactions import (
@@ -29,13 +24,6 @@ from orchestrator.sessions import EventCorrelation, EventSequence, SessionSchedu
 def test_comment_ingress_and_action_rejection_enter_reducer() -> None:
     # Given: a session reducer with only its finite avatar action allowlist.
 
-    """函数契约说明.
-
-    功能: 验证 comment ingress and action
-    rejection enter reducer 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     reducer = _reducer()
 
@@ -67,14 +55,6 @@ def test_comment_ingress_and_action_rejection_enter_reducer() -> None:
 def test_failed_presentation_result_and_duplicate_command_are_rejected() -> None:
     # Given: a load command accepted by the presentation capability.
 
-    """函数契约说明.
-
-    功能: 验证 failed presentation result
-    and duplicate command are rejected
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     reducer = _reducer()
 
@@ -107,14 +87,6 @@ def test_failed_presentation_result_and_duplicate_command_are_rejected() -> None
 def test_presentation_commits_matching_deck_version_and_page_only_after_ack() -> None:
     # Given: a reducer with no committed deck state.
 
-    """函数契约说明.
-
-    功能: 验证 presentation commits matching
-    deck version and page only after ack
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     reducer = _reducer()
 
@@ -166,14 +138,6 @@ def test_presentation_commits_matching_deck_version_and_page_only_after_ack() ->
 def test_presentation_rejects_invalid_page_and_wrong_loaded_deck_version() -> None:
     # Given: an acknowledged version-one deck load.
 
-    """函数契约说明.
-
-    功能: 验证 presentation rejects invalid
-    page and wrong loaded deck version
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     reducer = _reducer()
 
@@ -227,14 +191,6 @@ def test_presentation_rejects_invalid_page_and_wrong_loaded_deck_version() -> No
 def test_mcp_requires_allowlist_and_cancellation_blocks_dispatch() -> None:
     # Given: a reducer with one bounded MCP capability.
 
-    """函数契约说明.
-
-    功能: 验证 mcp requires allowlist and
-    cancellation blocks dispatch
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     reducer = _reducer(mcp_capabilities=frozenset({McpCapability.PRESENTATION_DECK}))
 
@@ -285,16 +241,6 @@ def test_mcp_requires_allowlist_and_cancellation_blocks_dispatch() -> None:
 def _reducer(
     *, mcp_capabilities: frozenset[McpCapability] | None = None
 ) -> SessionInteractionReducer:
-    """函数契约说明.
-
-    功能: 执行 _reducer 的同步逻辑,并协调
-    SessionInteractionReducer,
-    SessionScheduler,
-    ActionCapabilityRegistry, frozenset。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回
-    `SessionInteractionReducer`。
-    """
 
     return SessionInteractionReducer(
         scheduler=SessionScheduler(
@@ -307,14 +253,6 @@ def _reducer(
 
 
 def _comment() -> CommentProposal:
-    """函数契约说明.
-
-    功能: 执行 _comment 的同步逻辑,并协调
-    CommentProposal, EventCorrelation,
-    TraceId, SessionId。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `CommentProposal`。
-    """
 
     return CommentProposal(
         text="请解释量化",

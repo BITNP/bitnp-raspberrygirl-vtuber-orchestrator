@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -17,14 +12,6 @@ from orchestrator.transport_config import load_transport_config_from_env
 def test_transport_config_requires_wss_tls_and_token_outside_loopback() -> None:
     # Given: production transport settings without TLS and bearer-token material.
 
-    """函数契约说明.
-
-    功能: 验证 transport config requires wss
-    tls and token outside loopback
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     environment = {
         "ORCHESTRATOR_CONTROL_BIND_HOST": "control-bind.example.test",
@@ -49,14 +36,6 @@ def test_transport_config_requires_wss_tls_and_token_outside_loopback() -> None:
 def test_transport_config_allows_explicit_loopback_ws_for_tests() -> None:
     # Given: an explicit local-loopback transport test mode.
 
-    """函数契约说明.
-
-    功能: 验证 transport config allows
-    explicit loopback ws for tests
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     environment = {
         "ORCHESTRATOR_CONTROL_BIND_HOST": "127.0.0.1",
@@ -89,13 +68,6 @@ def test_transport_config_allows_explicit_loopback_ws_for_tests() -> None:
 def test_transport_config_requires_tls_paths_outside_loopback() -> None:
     # Given: a production transport with bearer-token material but no TLS paths.
 
-    """函数契约说明.
-
-    功能: 验证 transport config requires tls
-    paths outside loopback 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     environment = {
         "ORCHESTRATOR_CONTROL_BIND_HOST": "control-bind.example.test",
@@ -121,13 +93,6 @@ def test_transport_config_requires_tls_paths_outside_loopback() -> None:
 def test_transport_config_rejects_ws_on_nonloopback_hosts() -> None:
     # Given: an explicit WS flag paired with a network-reachable advertised host.
 
-    """函数契约说明.
-
-    功能: 验证 transport config rejects ws
-    on nonloopback hosts 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     environment = {
         "ORCHESTRATOR_CONTROL_BIND_HOST": "127.0.0.1",
@@ -153,14 +118,6 @@ def test_transport_config_rejects_ws_on_nonloopback_hosts() -> None:
 def test_transport_config_exposes_deployable_wss_and_udp_endpoints() -> None:
     # Given: complete production transport environment values.
 
-    """函数契约说明.
-
-    功能: 验证 transport config exposes
-    deployable wss and udp endpoints
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     environment = {
         "ORCHESTRATOR_CONTROL_BIND_HOST": "control-bind.example.test",

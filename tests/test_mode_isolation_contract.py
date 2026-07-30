@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 import re
 from pathlib import Path
@@ -41,14 +36,6 @@ MODE_AGNOSTIC_EVENT_PREFIXES: Final = (
 
 
 def service_source_violations() -> tuple[str, ...]:
-    """函数契约说明.
-
-    功能: 执行 service_source_violations
-    的同步逻辑,并协调 tuple, sorted, rglob,
-    read_text。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `tuple[str, ...]`。
-    """
 
     violations: list[str] = []
 
@@ -63,14 +50,6 @@ def service_source_violations() -> tuple[str, ...]:
 
 
 def schema_mode_violations() -> tuple[str, ...]:
-    """函数契约说明.
-
-    功能: 执行 schema_mode_violations
-    的同步逻辑,并协调 sorted, tuple, rglob,
-    splitlines。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `tuple[str, ...]`。
-    """
 
     violations: list[str] = []
 
@@ -99,14 +78,6 @@ def test_mode_terms_stay_out_of_non_orchestrator_service_source() -> None:
 
     # When: their source trees are scanned for mode policy terms.
 
-    """函数契约说明.
-
-    功能: 验证 mode terms stay out of non
-    orchestrator service source
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     violations = service_source_violations()
 
@@ -120,14 +91,6 @@ def test_mode_specific_terms_stay_out_of_mode_agnostic_schemas() -> None:
 
     # When: schemas are scanned for concrete mode policy terms and mode on IO events.
 
-    """函数契约说明.
-
-    功能: 验证 mode specific terms stay out
-    of mode agnostic schemas
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     violations = schema_mode_violations()
 
@@ -139,13 +102,6 @@ def test_mode_specific_terms_stay_out_of_mode_agnostic_schemas() -> None:
 def test_isolation_scanner_flags_mode_specific_service_source() -> None:
     # Given: a synthetic mode-aware service source violation.
 
-    """函数契约说明.
-
-    功能: 验证 isolation scanner flags mode
-    specific service source 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     text = "LECTURER_MODE = 'lecturer'\n"
 
@@ -161,13 +117,6 @@ def test_isolation_scanner_flags_mode_specific_service_source() -> None:
 def test_isolation_scanner_flags_mode_specific_schema_term() -> None:
     # Given: a synthetic ASR schema line that leaks a concrete mode.
 
-    """函数契约说明.
-
-    功能: 验证 isolation scanner flags mode
-    specific schema term 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     text = '"asr.final": {"required": ["text", "lecturer"]}'
 

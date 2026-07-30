@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-"""模块契约说明.
-
-职责: 提供命令行脚本的参数处理、验证或运维流程。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -23,12 +18,6 @@ JsonObject: TypeAlias = dict[str, JsonValue]
 
 @dataclass(frozen=True, slots=True)
 class State:
-    """类契约说明.
-
-    职责: 保存 State 不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: caption、action、scene、se
-    gments、presentation_deck。
-    """
 
     caption: str = ""
 
@@ -46,12 +35,6 @@ class State:
 
 
 def parse_args() -> argparse.Namespace:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `argparse.Namespace`。
-    """
     parser = argparse.ArgumentParser(
         description="Verify the frontend contract without Godot."
     )
@@ -62,24 +45,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def as_object(value: JsonValue) -> JsonObject | None:
-    """函数契约说明.
-
-    功能: 执行 as_object 的同步逻辑,并协调
-    isinstance。
-    参数: value: JsonValue。 必填。
-    契约: 同步调用。 返回 `JsonObject | None`。
-    """
     return value if isinstance(value, dict) else None
 
 
 def events(path: Path) -> list[JsonObject]:
-    """函数契约说明.
-
-    功能: 执行 events 的同步逻辑,并协调 loads,
-    read_text, isinstance。
-    参数: path: Path。 必填。
-    契约: 同步调用。 返回 `list[JsonObject]`。
-    """
     value: JsonValue = json.loads(path.read_text(encoding="utf-8"))
 
     return (
@@ -90,14 +59,6 @@ def events(path: Path) -> list[JsonObject]:
 
 
 def apply(state: State, event: JsonObject) -> tuple[State, bool]:
-    """函数契约说明.
-
-    功能: 执行 apply 的同步逻辑,并协调 as_object,
-    get, isinstance, State。
-    参数: state: State。 必填。 event:
-    JsonObject。 必填。
-    契约: 同步调用。 返回 `tuple[State, bool]`。
-    """
     data = as_object(event.get("data"))
 
     event_type = event.get("event_type")
@@ -239,12 +200,6 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
 
 
 def main() -> int:
-    """函数契约说明.
-
-    功能: 执行命令行或服务入口流程并返回进程级结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `int`。
-    """
     frontend = parse_args().frontend_path.resolve()
 
     project = (frontend / "project.godot").read_text(encoding="utf-8")

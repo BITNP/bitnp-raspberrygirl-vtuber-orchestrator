@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.onsite_stream_actor
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -36,93 +30,33 @@ if TYPE_CHECKING:
 
 
 class OnsiteStages(Protocol):
-    """类契约说明.
-
-    职责: 声明 OnsiteStages
-    协议接口,约束实现方必须提供的行为。
-    契约: 方法: transcribe、answer、synthesize
-    、complete、output。
-    """
 
     def transcribe(
         self, endpoint: EndpointedUtterance, cancellation: CancellationToken
     ) -> ASRAudienceEvent | None:
-        """函数契约说明.
-
-        功能: 执行 transcribe 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 endpoint:
-        EndpointedUtterance。 必填。
-        cancellation: CancellationToken。
-        必填。
-        契约: 同步调用。 返回 `ASRAudienceEvent |
-        None`。
-        """
         ...
 
     def answer(
         self, event: ASRAudienceEvent, cancellation: CancellationToken
     ) -> TurnResult | None:
-        """函数契约说明.
-
-        功能: 执行 answer 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 event:
-        ASRAudienceEvent。 必填。
-        cancellation: CancellationToken。
-        必填。
-        契约: 同步调用。 返回 `TurnResult |
-        None`。
-        """
         ...
 
     def synthesize(
         self, turn: TurnResult, cancellation: CancellationToken
     ) -> tuple[Pcm16leChunk, ...] | None:
-        """函数契约说明.
-
-        功能: 执行 synthesize 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 turn:
-        TurnResult。 必填。 cancellation:
-        CancellationToken。 必填。
-        契约: 同步调用。 返回
-        `tuple[Pcm16leChunk, ...] |
-        None`。
-        """
         ...
 
     def complete(self, turn: TurnResult, chunks: tuple[Pcm16leChunk, ...]) -> None:
-        """函数契约说明.
-
-        功能: 执行 complete 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 turn:
-        TurnResult。 必填。 chunks:
-        tuple[Pcm16leChunk, ...]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         ...
 
     async def output(
         self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 output 的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 epoch:
-        CancellationEpoch。 必填。 packet:
-        bytes。 必填。
-        契约: 异步调用。 返回 `None`。
-        """
         ...
 
 
 @dataclass(frozen=True, slots=True)
 class _EndpointItem:
-    """类契约说明.
-
-    职责: 保存 _EndpointItem
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: epoch、endpoint。
-    """
 
     epoch: CancellationEpoch
 
@@ -131,12 +65,6 @@ class _EndpointItem:
 
 @dataclass(frozen=True, slots=True)
 class _AnswerItem:
-    """类契约说明.
-
-    职责: 保存 _AnswerItem
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: epoch、event、correlation。
-    """
 
     epoch: CancellationEpoch
 
@@ -147,12 +75,6 @@ class _AnswerItem:
 
 @dataclass(frozen=True, slots=True)
 class _ChunkItem:
-    """类契约说明.
-
-    职责: 保存 _ChunkItem
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: epoch、chunk、correlation。
-    """
 
     epoch: CancellationEpoch
 
@@ -163,15 +85,6 @@ class _ChunkItem:
 
 @dataclass(slots=True)
 class OnsiteStreamActor:
-    """类契约说明.
-
-    职责: 保存 OnsiteStreamActor
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: stream、epoch、stages、observab
-    ility、_endpoints、_answers。 方法: __pos
-    t_init__、drop_counts、submit、invalida
-    te、aclose、wait_quiescent。
-    """
 
     stream: StreamKey
 
@@ -210,38 +123,13 @@ class OnsiteStreamActor:
     _active_cancellations: set[CancellationToken] = field(default_factory=set)
 
     def __post_init__(self) -> None:
-        """函数契约说明.
-
-        功能: 初始化 OnsiteStreamActor
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
         self._packetizer = TtsPcmRtpPacketizer(self.stream, self.epoch)
 
     @property
     def drop_counts(self) -> PipelineDropCounts:
-        """函数契约说明.
-
-        功能: 执行 drop_counts
-        的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回
-        `PipelineDropCounts`。
-        """
         return self._drops
 
     def submit(self, endpoint: EndpointedUtterance, epoch: CancellationEpoch) -> None:
-        """函数契约说明.
-
-        功能: 执行 submit 的同步逻辑,并协调 _record,
-        _correlation, _append_endpoint,
-        _EndpointItem。
-        参数: self 表示当前实例。 endpoint:
-        EndpointedUtterance。 必填。 epoch:
-        CancellationEpoch。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         if self._closed or epoch != self.epoch:
             return
 
@@ -252,15 +140,6 @@ class OnsiteStreamActor:
         self._append_endpoint(_EndpointItem(epoch, endpoint))
 
     def invalidate(self, next_epoch: CancellationEpoch) -> None:
-        """函数契约说明.
-
-        功能: 执行 invalidate 的同步逻辑,并协调
-        cancel, clear, tuple,
-        _record_correlation。
-        参数: self 表示当前实例。 next_epoch:
-        CancellationEpoch。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self.epoch = next_epoch
 
         self._closed = True
@@ -285,28 +164,11 @@ class OnsiteStreamActor:
             _ = self._chunk_task.cancel()
 
     async def aclose(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 aclose 的异步逻辑,并协调
-        invalidate, CancellationEpoch,
-        wait_quiescent, int。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         self.invalidate(CancellationEpoch(int(self.epoch) + 1))
 
         await self.wait_quiescent()
 
     async def wait_quiescent(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 wait_quiescent 的异步逻辑,并协调
-        tuple, suppress, done。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         while True:
             tasks = tuple(
                 task
@@ -322,15 +184,6 @@ class OnsiteStreamActor:
                     await task
 
     def _append_endpoint(self, item: _EndpointItem) -> None:
-        """函数契约说明.
-
-        功能: 执行 _append_endpoint
-        的同步逻辑,并协调 _correlation, append,
-        _record_details, set。
-        参数: self 表示当前实例。 item:
-        _EndpointItem。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         correlation = self._correlation(item.endpoint, item.epoch)
 
         if len(self._endpoints) == ENDPOINTED_UTTERANCE_CAPACITY:
@@ -366,15 +219,6 @@ class OnsiteStreamActor:
             self._endpoint_task = asyncio.create_task(self._run_endpoints())
 
     def _append_answer(self, item: _AnswerItem) -> None:
-        """函数契约说明.
-
-        功能: 执行 _append_answer 的同步逻辑,并协调
-        append, _record_details, set,
-        len。
-        参数: self 表示当前实例。 item:
-        _AnswerItem。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         if len(self._answers) == ANSWER_TURN_CAPACITY:
             _ = self._answers.popleft()
 
@@ -406,15 +250,6 @@ class OnsiteStreamActor:
             self._answer_task = asyncio.create_task(self._run_answers())
 
     def _append_chunk(self, item: _ChunkItem) -> None:
-        """函数契约说明.
-
-        功能: 执行 _append_chunk 的同步逻辑,并协调
-        append, _record_details, set,
-        len。
-        参数: self 表示当前实例。 item:
-        _ChunkItem。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         if len(self._chunks) == TTS_CHUNK_CAPACITY:
             _ = self._chunks.popleft()
 
@@ -446,15 +281,6 @@ class OnsiteStreamActor:
             self._chunk_task = asyncio.create_task(self._run_chunks())
 
     async def _run_endpoints(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 _run_endpoints 的异步逻辑,并协调
-        popleft, perf_counter,
-        _new_cancellation, discard。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         while self._endpoints:
             item = self._endpoints.popleft()
 
@@ -480,15 +306,6 @@ class OnsiteStreamActor:
                 self._append_answer(_AnswerItem(item.epoch, event, correlation))
 
     async def _run_answers(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 _run_answers 的异步逻辑,并协调
-        popleft, _new_cancellation,
-        _append_chunk, discard。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         while self._answers:
             item = self._answers.popleft()
 
@@ -519,20 +336,6 @@ class OnsiteStreamActor:
         correlation: StageCorrelation,
         cancellation: CancellationToken,
     ) -> tuple[Pcm16leChunk, ...] | None:
-        """函数契约说明.
-
-        功能: 执行 _answer_and_synthesize
-        的同步逻辑,并协调 perf_counter, answer,
-        _record_correlation, synthesize。
-        参数: self 表示当前实例。 event:
-        ASRAudienceEvent。 必填。
-        correlation: StageCorrelation。
-        必填。 cancellation:
-        CancellationToken。 必填。
-        契约: 同步调用。 返回
-        `tuple[Pcm16leChunk, ...] |
-        None`。
-        """
         answer_started_at = time.perf_counter()
 
         turn = self.stages.answer(event, cancellation)
@@ -560,15 +363,6 @@ class OnsiteStreamActor:
         return chunks
 
     def _new_cancellation(self) -> CancellationToken:
-        """函数契约说明.
-
-        功能: 执行 _new_cancellation
-        的同步逻辑,并协调 CancellationToken,
-        add。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回
-        `CancellationToken`。
-        """
         cancellation = CancellationToken()
 
         self._active_cancellations.add(cancellation)
@@ -576,15 +370,6 @@ class OnsiteStreamActor:
         return cancellation
 
     async def _run_chunks(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 _run_chunks 的异步逻辑,并协调
-        popleft, finish, push,
-        _record_correlation。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         while self._chunks:
             item = self._chunks.popleft()
 
@@ -606,17 +391,6 @@ class OnsiteStreamActor:
     def _correlation(
         self, endpoint: EndpointedUtterance, epoch: CancellationEpoch
     ) -> StageCorrelation:
-        """函数契约说明.
-
-        功能: 执行 _correlation 的同步逻辑,并协调
-        correlation, StageCorrelation,
-        str, RuntimeError。
-        参数: self 表示当前实例。 endpoint:
-        EndpointedUtterance。 必填。 epoch:
-        CancellationEpoch。 必填。
-        契约: 同步调用。 返回 `StageCorrelation`。
-        可能抛出 RuntimeError。
-        """
         observability = self.observability
 
         if observability is None:
@@ -639,17 +413,6 @@ class OnsiteStreamActor:
         endpoint: EndpointedUtterance,
         epoch: CancellationEpoch,
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 _record 的同步逻辑,并协调
-        _record_correlation,
-        _correlation。
-        参数: self 表示当前实例。 stage:
-        OnsiteStage。 必填。 endpoint:
-        EndpointedUtterance。 必填。 epoch:
-        CancellationEpoch。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self._record_correlation(stage, self._correlation(endpoint, epoch), None)
 
     def _record_correlation(
@@ -658,16 +421,6 @@ class OnsiteStreamActor:
         correlation: StageCorrelation,
         latency_ms: float | None,
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 _record_correlation
-        的同步逻辑,并协调 record, StageDetails。
-        参数: self 表示当前实例。 stage:
-        OnsiteStage。 必填。 correlation:
-        StageCorrelation。 必填。
-        latency_ms: float | None。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         observability = self.observability
 
         if observability is not None:
@@ -678,16 +431,6 @@ class OnsiteStreamActor:
     def _record_details(
         self, stage: OnsiteStage, correlation: StageCorrelation, details: StageDetails
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 _record_details 的同步逻辑,并协调
-        record。
-        参数: self 表示当前实例。 stage:
-        OnsiteStage。 必填。 correlation:
-        StageCorrelation。 必填。 details:
-        StageDetails。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         observability = self.observability
 
         if observability is not None:

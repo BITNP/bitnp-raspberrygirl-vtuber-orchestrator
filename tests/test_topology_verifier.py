@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -35,13 +30,6 @@ def test_topology_verifier_accepts_explicit_sibling_paths(tmp_path: Path) -> Non
 
     # When: the verifier runs outside the parent repository.
 
-    """函数契约说明.
-
-    功能: 验证 topology verifier accepts
-    explicit sibling paths 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     result = subprocess.run(
         [
@@ -76,13 +64,6 @@ def test_topology_verifier_preserves_bad_peer_fixture_mode(tmp_path: Path) -> No
 
     # When: fixture mode scans it outside the parent repository.
 
-    """函数契约说明.
-
-    功能: 验证 topology verifier preserves
-    bad peer fixture mode 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--fixture", str(BAD_FIXTURE)],
@@ -104,14 +85,6 @@ def test_topology_verifier_preserves_bad_document_fixture_mode(tmp_path: Path) -
 
     # When: fixture mode scans the documentation path.
 
-    """函数契约说明.
-
-    功能: 验证 topology verifier preserves
-    bad document fixture mode
-    的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--fixture", str(BAD_DOC_FIXTURE)],

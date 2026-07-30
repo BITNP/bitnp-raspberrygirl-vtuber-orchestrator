@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -33,15 +28,6 @@ def test_certificate_verification_requires_matching_manifest_digests(
 ) -> None:
     # Given: two successful, deterministic run manifests and an approved frontend SHA.
 
-    """函数契约说明.
-
-    功能: 验证 certificate verification
-    requires matching manifest digests
-    的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。 monkeypatch:
-    pytest.MonkeyPatch。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     first = tmp_path / "run-1.json"
 
@@ -83,15 +69,6 @@ def test_freeze_guard_rejects_task9_diff_with_locally_verified_certificate(
 ) -> None:
     # Given: a frontend baseline, a subsequent Task 9 edit, and valid Task 8 evidence.
 
-    """函数契约说明.
-
-    功能: 验证 freeze guard rejects task9
-    diff with locally verified
-    certificate 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。 monkeypatch:
-    pytest.MonkeyPatch。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     frontend, baseline = _frontend_checkout(tmp_path)
 
@@ -137,14 +114,6 @@ def test_freeze_guard_rejects_fabricated_certificate_for_frontend_diff(
 ) -> None:
     # Given: a dirty frontend and an arbitrary JSON payload posing as a certificate.
 
-    """函数契约说明.
-
-    功能: 验证 freeze guard rejects
-    fabricated certificate for frontend
-    diff 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     frontend, baseline = _frontend_checkout(tmp_path)
 
@@ -186,15 +155,6 @@ def test_certificate_verification_fails_closed_without_authority_key(
 ) -> None:
     # Given: a locally issued certificate whose authority key is unavailable.
 
-    """函数契约说明.
-
-    功能: 验证 certificate verification
-    fails closed without authority key
-    的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。 monkeypatch:
-    pytest.MonkeyPatch。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     monkeypatch.setenv("TASK8_CERTIFICATE_KEY", "test-authority")
 
@@ -220,13 +180,6 @@ def test_certificate_verification_fails_closed_without_authority_key(
 
 
 def _write_manifests(tmp_path: Path) -> tuple[Path, Path]:
-    """函数契约说明.
-
-    功能: 执行 _write_manifests 的同步逻辑,并协调
-    mkdir, write_text。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `tuple[Path, Path]`。
-    """
 
     first = tmp_path / "core-stability-run-1" / "manifest.json"
 
@@ -246,13 +199,6 @@ def _write_manifests(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _frontend_checkout(tmp_path: Path) -> tuple[Path, str]:
-    """函数契约说明.
-
-    功能: 执行 _frontend_checkout 的同步逻辑,并协调
-    mkdir, _git, write_text, strip。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `tuple[Path, str]`。
-    """
 
     frontend = tmp_path / "frontend"
 
@@ -279,14 +225,6 @@ def _frontend_checkout(tmp_path: Path) -> tuple[Path, str]:
 
 
 def _git(path: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
-    """函数契约说明.
-
-    功能: 执行 _git 的同步逻辑,并协调 run。
-    参数: path: Path。 必填。 *arguments: str。
-    必填。
-    契约: 同步调用。 返回
-    `subprocess.CompletedProcess[str]`。
-    """
 
     return subprocess.run(
         ["git", *arguments], cwd=path, check=False, text=True, capture_output=True
@@ -294,13 +232,6 @@ def _git(path: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 def _plan_digest() -> str:
-    """函数契约说明.
-
-    功能: 执行 _plan_digest 的同步逻辑,并协调
-    hexdigest, sha256, read_bytes。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `str`。
-    """
 
     plan = ROOT.parent / ".omo" / "plans" / "core-loop-before-frontend.md"
 

@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -34,14 +29,6 @@ def test_protocol_validator_uses_orchestrator_owned_schema_paths(
 
     # When: the canonical protocol validator runs with its local defaults.
 
-    """函数契约说明.
-
-    功能: 验证 protocol validator uses
-    orchestrator owned schema paths
-    的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     result = subprocess.run(
         [sys.executable, str(SCRIPT)],
@@ -96,14 +83,6 @@ def test_protocol_validator_rejects_invalid_local_cue_and_legacy_event(
 
     # When: each is supplied through the independent validator CLI.
 
-    """函数契约说明.
-
-    功能: 验证 protocol validator rejects
-    invalid local cue and legacy event
-    的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     cue_result = subprocess.run(
         [sys.executable, str(SCRIPT), "--expect-invalid", str(INVALID_CUE)],
@@ -133,13 +112,6 @@ def test_protocol_validator_rejects_noncanonical_rtp_codec() -> None:
 
     # When: the independent schema validator checks its fixture.
 
-    """函数契约说明.
-
-    功能: 验证 protocol validator rejects
-    noncanonical rtp codec 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     result = subprocess.run(
         [sys.executable, str(SCRIPT), "--expect-invalid", str(INVALID_RTP_CODEC)],
@@ -160,14 +132,6 @@ def test_protocol_validator_rejects_closed_envelope_semantic_and_version_violati
 ) -> None:
     # Given: canonical events with one closed-envelope or stream semantic violation.
 
-    """函数契约说明.
-
-    功能: 验证 protocol validator rejects
-    closed envelope semantic and version
-    violations 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     valid_events = parse_json_value(
         (ROOT / "schemas/fixtures/valid/protocol-events.json").read_text(
@@ -223,14 +187,6 @@ def test_protocol_validator_reports_each_missing_segment_correlation_once(
 ) -> None:
     # Given: a segment-correlated flush event missing both required correlation IDs.
 
-    """函数契约说明.
-
-    功能: 验证 protocol validator reports
-    each missing segment correlation
-    once 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     events = _valid_events()
 
@@ -262,14 +218,6 @@ def test_protocol_validator_reports_each_missing_segment_correlation_once(
 
 
 def _valid_events() -> list[JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _valid_events 的同步逻辑,并协调
-    parse_json_value, isinstance,
-    read_text。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `list[JsonValue]`。
-    """
 
     events = parse_json_value(
         (ROOT / "schemas/fixtures/valid/protocol-events.json").read_text(
@@ -285,16 +233,6 @@ def _valid_events() -> list[JsonValue]:
 def _expect_invalid_fixture(
     tmp_path: Path, name: str, payload: list[JsonValue]
 ) -> subprocess.CompletedProcess[str]:
-    """函数契约说明.
-
-    功能: 执行 _expect_invalid_fixture
-    的同步逻辑,并协调 write_text, run, dumps,
-    str。
-    参数: tmp_path: Path。 必填。 name: str。
-    必填。 payload: list[JsonValue]。 必填。
-    契约: 同步调用。 返回
-    `subprocess.CompletedProcess[str]`。
-    """
 
     fixture = tmp_path / f"{name}.json"
 
@@ -309,13 +247,6 @@ def _expect_invalid_fixture(
 
 
 def _with_unknown_envelope_field(events: list[JsonValue]) -> list[JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _with_unknown_envelope_field
-    的同步逻辑,并协调 _event_copy。
-    参数: events: list[JsonValue]。 必填。
-    契约: 同步调用。 返回 `list[JsonValue]`。
-    """
 
     event = _event_copy(events, 0)
 
@@ -325,13 +256,6 @@ def _with_unknown_envelope_field(events: list[JsonValue]) -> list[JsonValue]:
 
 
 def _with_duplicate_event_id(events: list[JsonValue]) -> list[JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _with_duplicate_event_id
-    的同步逻辑,并协调 _event_copy。
-    参数: events: list[JsonValue]。 必填。
-    契约: 同步调用。 返回 `list[JsonValue]`。
-    """
 
     first = _event_copy(events, 0)
 
@@ -343,13 +267,6 @@ def _with_duplicate_event_id(events: list[JsonValue]) -> list[JsonValue]:
 
 
 def _with_sequence_regression(events: list[JsonValue]) -> list[JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _with_sequence_regression
-    的同步逻辑,并协调 _event_copy。
-    参数: events: list[JsonValue]。 必填。
-    契约: 同步调用。 返回 `list[JsonValue]`。
-    """
 
     first = _event_copy(events, 0)
 
@@ -361,14 +278,6 @@ def _with_sequence_regression(events: list[JsonValue]) -> list[JsonValue]:
 
 
 def _with_unsupported_minor_version(events: list[JsonValue]) -> list[JsonValue]:
-    """函数契约说明.
-
-    功能: 执行
-    _with_unsupported_minor_version
-    的同步逻辑,并协调 _event_copy。
-    参数: events: list[JsonValue]。 必填。
-    契约: 同步调用。 返回 `list[JsonValue]`。
-    """
 
     event = _event_copy(events, 0)
 
@@ -378,13 +287,6 @@ def _with_unsupported_minor_version(events: list[JsonValue]) -> list[JsonValue]:
 
 
 def _without_turn_correlation(events: list[JsonValue]) -> list[JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _without_turn_correlation
-    的同步逻辑,并协调 _event_copy, pop。
-    参数: events: list[JsonValue]。 必填。
-    契约: 同步调用。 返回 `list[JsonValue]`。
-    """
 
     event = _event_copy(events, 2)
 
@@ -394,14 +296,6 @@ def _without_turn_correlation(events: list[JsonValue]) -> list[JsonValue]:
 
 
 def _event_copy(events: list[JsonValue], index: int) -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _event_copy 的同步逻辑,并协调
-    isinstance, dict。
-    参数: events: list[JsonValue]。 必填。
-    index: int。 必填。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     value = events[index]
 

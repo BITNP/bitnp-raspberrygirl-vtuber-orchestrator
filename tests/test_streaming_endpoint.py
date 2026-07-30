@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -23,14 +18,6 @@ if TYPE_CHECKING:
 def test_endpointer_emits_preroll_partial_and_silence_final() -> None:
     # Given: ten quiet frames before one voiced frame on one canonical RTP stream.
 
-    """函数契约说明.
-
-    功能: 验证 endpointer emits preroll
-    partial and silence final
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     actor = StreamEndpointer(StreamKey("session-a", "stream-a"))
 
@@ -66,14 +53,6 @@ def test_endpointer_emits_preroll_partial_and_silence_final() -> None:
 def test_endpointer_forces_a_final_after_fifteen_seconds_of_speech() -> None:
     # Given: an active stream receiving continuous voiced canonical frames.
 
-    """函数契约说明.
-
-    功能: 验证 endpointer forces a final
-    after fifteen seconds of speech
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     actor = StreamEndpointer(StreamKey("session-a", "stream-a"))
 
@@ -97,14 +76,6 @@ def test_endpointer_forces_a_final_after_fifteen_seconds_of_speech() -> None:
 def test_endpointer_drops_duplicate_and_accepts_one_frame_reorder() -> None:
     # Given: a stream with a one-frame reordering window.
 
-    """函数契约说明.
-
-    功能: 验证 endpointer drops duplicate
-    and accepts one frame reorder
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     actor = StreamEndpointer(StreamKey("session-a", "stream-a"))
 
@@ -130,14 +101,6 @@ def test_endpointer_drops_duplicate_and_accepts_one_frame_reorder() -> None:
 def test_endpointer_finalizes_on_gap_and_accepts_timestamp_wrap() -> None:
     # Given: an active stream just before the unsigned RTP timestamp wraps.
 
-    """函数契约说明.
-
-    功能: 验证 endpointer finalizes on gap
-    and accepts timestamp wrap
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     actor = StreamEndpointer(StreamKey("session-a", "stream-a"))
 
@@ -165,14 +128,6 @@ def test_endpointer_finalizes_on_gap_and_accepts_timestamp_wrap() -> None:
 def test_endpointer_keeps_turn_segment_and_epoch_namespaces_per_stream() -> None:
     # Given: two concurrent route identities.
 
-    """函数契约说明.
-
-    功能: 验证 endpointer keeps turn segment
-    and epoch namespaces per stream
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     first = StreamEndpointer(StreamKey("session-a", "stream-a"))
 
@@ -200,14 +155,6 @@ def test_endpointer_keeps_turn_segment_and_epoch_namespaces_per_stream() -> None
 def test_endpointer_disconnect_finalizes_and_clears_state() -> None:
     # Given: an active stream whose route is about to disconnect.
 
-    """函数契约说明.
-
-    功能: 验证 endpointer disconnect
-    finalizes and clears state
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     actor = StreamEndpointer(StreamKey("session-a", "stream-a"))
 
@@ -227,13 +174,6 @@ def test_endpointer_disconnect_finalizes_and_clears_state() -> None:
 
 
 def _silence_final(actor: StreamEndpointer) -> EndpointedUtterance:
-    """函数契约说明.
-
-    功能: 执行 _silence_final 的同步逻辑,并协调
-    list, extend, _last_final, push。
-    参数: actor: StreamEndpointer。 必填。
-    契约: 同步调用。 返回 `EndpointedUtterance`。
-    """
 
     sample = 1_000 if actor.stream.stream_id == "stream-a" else 2_000
 
@@ -251,15 +191,6 @@ def _silence_final(actor: StreamEndpointer) -> EndpointedUtterance:
 def _last_partial(
     events: Sequence[PartialUtterance | EndpointedUtterance],
 ) -> PartialUtterance:
-    """函数契约说明.
-
-    功能: 执行 _last_partial 的同步逻辑,并协调 next,
-    reversed, isinstance。
-    参数: events:
-    Sequence[PartialUtterance |
-    EndpointedUtterance]。 必填。
-    契约: 同步调用。 返回 `PartialUtterance`。
-    """
 
     return next(
         event for event in reversed(events) if isinstance(event, PartialUtterance)
@@ -269,15 +200,6 @@ def _last_partial(
 def _last_final(
     events: Sequence[PartialUtterance | EndpointedUtterance],
 ) -> EndpointedUtterance:
-    """函数契约说明.
-
-    功能: 执行 _last_final 的同步逻辑,并协调 next,
-    reversed, isinstance。
-    参数: events:
-    Sequence[PartialUtterance |
-    EndpointedUtterance]。 必填。
-    契约: 同步调用。 返回 `EndpointedUtterance`。
-    """
 
     return next(
         event for event in reversed(events) if isinstance(event, EndpointedUtterance)
@@ -285,13 +207,6 @@ def _last_final(
 
 
 def _packet(sequence: int, timestamp: int, sample: int) -> bytes:
-    """函数契约说明.
-
-    功能: 执行 _packet 的同步逻辑,并协调 to_bytes。
-    参数: sequence: int。 必填。 timestamp:
-    int。 必填。 sample: int。 必填。
-    契约: 同步调用。 返回 `bytes`。
-    """
 
     payload = sample.to_bytes(2, "big", signed=True) * 320
 

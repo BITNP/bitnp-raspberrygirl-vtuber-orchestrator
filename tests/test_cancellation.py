@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from orchestrator.llm import MockLLMAdapter
 from orchestrator.modes import AdaptiveAgentPolicy
@@ -19,14 +14,6 @@ from orchestrator.retrieval import RetrievalFixtureProvider
 def test_interruption_cancels_previous_segment_and_rejects_stale_synthesis() -> None:
     # Given: an onsite explainer pipeline with one active turn.
 
-    """函数契约说明.
-
-    功能: 验证 interruption cancels previous
-    segment and rejects stale synthesis
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
@@ -93,14 +80,6 @@ def test_interruption_cancels_previous_segment_and_rejects_stale_synthesis() -> 
 def test_cancelled_segment_emits_no_stale_media_or_frontend_cues() -> None:
     # Given: a segment cancelled by a newer ASR request before synthesis completes.
 
-    """函数契约说明.
-
-    功能: 验证 cancelled segment emits no
-    stale media or frontend cues
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
@@ -146,14 +125,6 @@ def test_cancelled_segment_emits_no_stale_media_or_frontend_cues() -> None:
 def test_interruption_preserves_monotonic_turn_identifiers() -> None:
     # Given: an onsite pipeline with a completed first turn.
 
-    """函数契约说明.
-
-    功能: 验证 interruption preserves
-    monotonic turn identifiers
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(

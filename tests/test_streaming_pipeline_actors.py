@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -15,12 +10,6 @@ from orchestrator.streaming_pipeline_actors import StreamPipelineActors
 
 @dataclass(slots=True)
 class _Handler:
-    """类契约说明.
-
-    职责: 保存 _Handler 不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: started、release、first_starte
-    d、two_started。 方法: __call__。
-    """
 
     started: list[bytes] = field(default_factory=list)
 
@@ -31,15 +20,6 @@ class _Handler:
     two_started: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def __call__(self, stream: StreamKey, frame: bytes) -> None:
-        """函数契约说明.
-
-        功能: 执行 __call__ 的异步逻辑,并协调
-        append, set, len, wait。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 frame: bytes。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
 
         _ = stream
 
@@ -54,14 +34,6 @@ class _Handler:
 
 
 def test_actors_drop_oldest_unstarted_frame_and_preserve_active_work() -> None:
-    """函数契约说明.
-
-    功能: 验证 actors drop oldest unstarted
-    frame and preserve active work
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_drop_oldest_unstarted_frame_proof())
 
@@ -69,16 +41,6 @@ def test_actors_drop_oldest_unstarted_frame_and_preserve_active_work() -> None:
 async def _drop_oldest_unstarted_frame_proof() -> None:
     # Given: one stream whose active frame is deliberately held while its mailbox fills.
 
-    """函数契约说明.
-
-    功能: 执行
-    _drop_oldest_unstarted_frame_proof
-    的异步逻辑,并协调 _Handler,
-    StreamPipelineActors, StreamKey,
-    submit。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     handler = _Handler()
 
@@ -114,14 +76,6 @@ async def _drop_oldest_unstarted_frame_proof() -> None:
 
 
 def test_actors_start_different_streams_without_bridge_wide_serialization() -> None:
-    """函数契约说明.
-
-    功能: 验证 actors start different
-    streams without bridge wide
-    serialization 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_cross_stream_fairness_proof())
 
@@ -129,15 +83,6 @@ def test_actors_start_different_streams_without_bridge_wide_serialization() -> N
 async def _cross_stream_fairness_proof() -> None:
     # Given: two streams and a global capacity that admits one active item from each.
 
-    """函数契约说明.
-
-    功能: 执行 _cross_stream_fairness_proof
-    的异步逻辑,并协调 _Handler,
-    StreamPipelineActors, StreamKey,
-    submit。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     handler = _Handler()
 
@@ -167,14 +112,6 @@ async def _cross_stream_fairness_proof() -> None:
 
 
 def test_disconnect_cancels_active_work_discards_mailbox_and_leaves_no_actor() -> None:
-    """函数契约说明.
-
-    功能: 验证 disconnect cancels active
-    work discards mailbox and leaves no
-    actor 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_disconnect_proof())
 
@@ -182,14 +119,6 @@ def test_disconnect_cancels_active_work_discards_mailbox_and_leaves_no_actor() -
 async def _disconnect_proof() -> None:
     # Given: an actor whose provider call waits at its semantic cancellation boundary.
 
-    """函数契约说明.
-
-    功能: 执行 _disconnect_proof 的异步逻辑,并协调
-    _Handler, StreamPipelineActors,
-    StreamKey, submit。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     handler = _Handler()
 
@@ -217,14 +146,6 @@ async def _disconnect_proof() -> None:
 
 
 def test_shutdown_cancels_all_stream_actors_and_reaches_quiescence() -> None:
-    """函数契约说明.
-
-    功能: 验证 shutdown cancels all stream
-    actors and reaches quiescence
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_shutdown_proof())
 
@@ -232,14 +153,6 @@ def test_shutdown_cancels_all_stream_actors_and_reaches_quiescence() -> None:
 async def _shutdown_proof() -> None:
     # Given: active provider work for two independent streams.
 
-    """函数契约说明.
-
-    功能: 执行 _shutdown_proof 的异步逻辑,并协调
-    _Handler, StreamPipelineActors,
-    submit, StreamKey。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     handler = _Handler()
 

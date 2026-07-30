@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.transport_control
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -44,34 +38,16 @@ type ControlEvent = (
 
 @dataclass(frozen=True, slots=True)
 class ControlEnvelopeError(Exception):
-    """类契约说明.
-
-    职责: 保存 ControlEnvelopeError
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: field_name。 方法: __str__。
-    """
 
     field_name: str
 
     @override
     def __str__(self) -> str:
-        """函数契约说明.
-
-        功能: 生成面向日志、错误或调试输出的稳定文本表示。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `str`。
-        """
         return f"invalid control envelope: {self.field_name}"
 
 
 @dataclass(frozen=True, slots=True)
 class EnvelopeCorrelation:
-    """类契约说明.
-
-    职责: 保存 EnvelopeCorrelation
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: trace_id、session_id、seq。
-    """
 
     trace_id: str
 
@@ -82,13 +58,6 @@ class EnvelopeCorrelation:
 
 @dataclass(frozen=True, slots=True)
 class SourceRegistration:
-    """类契约说明.
-
-    职责: 保存 SourceRegistration
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: session_id、stream_id、ssrc、co
-    rrelation。
-    """
 
     session_id: str
 
@@ -101,13 +70,6 @@ class SourceRegistration:
 
 @dataclass(frozen=True, slots=True)
 class SinkRegistration:
-    """类契约说明.
-
-    职责: 保存 SinkRegistration
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: session_id、stream_id、udp_por
-    t、correlation。
-    """
 
     session_id: str
 
@@ -120,13 +82,6 @@ class SinkRegistration:
 
 @dataclass(frozen=True, slots=True)
 class StreamReady:
-    """类契约说明.
-
-    职责: 保存 StreamReady
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段:
-    session_id、stream_id、correlation。
-    """
 
     session_id: str
 
@@ -137,13 +92,6 @@ class StreamReady:
 
 @dataclass(frozen=True, slots=True)
 class StreamState:
-    """类契约说明.
-
-    职责: 保存 StreamState
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: session_id、stream_id、state、c
-    orrelation、turn_id、segment_id。
-    """
 
     session_id: str
 
@@ -161,33 +109,13 @@ class StreamState:
 
 
 class ControlReceiver(Protocol):
-    """类契约说明.
-
-    职责: 声明 ControlReceiver
-    协议接口,约束实现方必须提供的行为。
-    契约: 方法: register_control。
-    """
 
     def register_control(self, raw_message: str, peer_ip: str) -> None:
-        """函数契约说明.
-
-        功能: 执行 register_control
-        的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 raw_message:
-        str。 必填。 peer_ip: str。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
+        ...
 
 
 @dataclass(frozen=True, slots=True)
 class AuthenticatedControl:
-    """类契约说明.
-
-    职责: 保存 AuthenticatedControl
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: receiver、token。 方法:
-    register。
-    """
 
     receiver: ControlReceiver
 
@@ -196,16 +124,6 @@ class AuthenticatedControl:
     def register(
         self, raw_message: str, peer_ip: str, authorization: str | None
     ) -> bool:
-        """函数契约说明.
-
-        功能: 执行 register 的同步逻辑,并协调
-        register_control,
-        bearer_token_matches。
-        参数: self 表示当前实例。 raw_message:
-        str。 必填。 peer_ip: str。 必填。
-        authorization: str | None。 必填。
-        契约: 同步调用。 返回 `bool`。
-        """
         if not bearer_token_matches(self.token, authorization):
             return False
 
@@ -217,15 +135,6 @@ class AuthenticatedControl:
 def bearer_token_matches(
     token: TrustedLanToken | None, authorization: str | None
 ) -> bool:
-    """函数契约说明.
-
-    功能: 执行 bearer_token_matches
-    的同步逻辑,并协调 compare_digest,
-    removeprefix, startswith。
-    参数: token: TrustedLanToken | None。
-    必填。 authorization: str | None。 必填。
-    契约: 同步调用。 返回 `bool`。
-    """
     if token is None:
         return authorization is None
 
@@ -238,13 +147,6 @@ def bearer_token_matches(
 
 
 def parse_control_event(raw_message: str) -> ControlEvent:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: raw_message: str。 必填。
-    契约: 同步调用。 返回 `ControlEvent`。 可能抛出
-    ControlEnvelopeError。
-    """
     value = parse_json_value(raw_message)
 
     if not isinstance(value, dict):
@@ -351,13 +253,6 @@ def parse_control_event(raw_message: str) -> ControlEvent:
 
 
 def _validate_envelope(value: dict[str, JsonValue]) -> None:
-    """函数契约说明.
-
-    功能: 校验相关输入、协议或运行时约束。
-    参数: value: dict[str, JsonValue]。 必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    ControlEnvelopeError。
-    """
     required = (
         "schema_version",
         "event_type",
@@ -401,14 +296,6 @@ def _validate_envelope(value: dict[str, JsonValue]) -> None:
 
 
 def _validate_source_registration(data: dict[str, JsonValue], source: str) -> None:
-    """函数契约说明.
-
-    功能: 校验相关输入、协议或运行时约束。
-    参数: data: dict[str, JsonValue]。 必填。
-    source: str。 必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    ControlEnvelopeError。
-    """
     if source != "mic" or set(data) != {"stream_id", "ssrc", "codec", "rtp_endpoint"}:
         raise ControlEnvelopeError(field_name="source")
 
@@ -420,14 +307,6 @@ def _validate_source_registration(data: dict[str, JsonValue], source: str) -> No
 
 
 def _validate_sink_registration(data: dict[str, JsonValue], source: str) -> None:
-    """函数契约说明.
-
-    功能: 校验相关输入、协议或运行时约束。
-    参数: data: dict[str, JsonValue]。 必填。
-    source: str。 必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    ControlEnvelopeError。
-    """
     if source != "sound" or set(data) != {"stream_id", "codec", "rtp_endpoint"}:
         raise ControlEnvelopeError(field_name="source")
 
@@ -437,14 +316,6 @@ def _validate_sink_registration(data: dict[str, JsonValue], source: str) -> None
 
 
 def _validate_source_ready(data: dict[str, JsonValue], source: str) -> None:
-    """函数契约说明.
-
-    功能: 校验相关输入、协议或运行时约束。
-    参数: data: dict[str, JsonValue]。 必填。
-    source: str。 必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    ControlEnvelopeError。
-    """
     if source != "mic" or set(data) != {"stream_id", "ssrc"}:
         raise ControlEnvelopeError(field_name="source")
 
@@ -454,14 +325,6 @@ def _validate_source_ready(data: dict[str, JsonValue], source: str) -> None:
 
 
 def _validate_sink_ready(data: dict[str, JsonValue], source: str) -> None:
-    """函数契约说明.
-
-    功能: 校验相关输入、协议或运行时约束。
-    参数: data: dict[str, JsonValue]。 必填。
-    source: str。 必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    ControlEnvelopeError。
-    """
     if source != "sound" or set(data) != {"stream_id"}:
         raise ControlEnvelopeError(field_name="source")
 
@@ -469,14 +332,6 @@ def _validate_sink_ready(data: dict[str, JsonValue], source: str) -> None:
 
 
 def _validate_stream_state(data: dict[str, JsonValue], source: str) -> None:
-    """函数契约说明.
-
-    功能: 校验相关输入、协议或运行时约束。
-    参数: data: dict[str, JsonValue]。 必填。
-    source: str。 必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    ControlEnvelopeError。
-    """
     if source != "sound":
         raise ControlEnvelopeError(field_name="source")
 
@@ -491,15 +346,6 @@ def _validate_stream_state(data: dict[str, JsonValue], source: str) -> None:
 
 
 def _optional_turn_id(value: dict[str, JsonValue]) -> TurnId | None:
-    """函数契约说明.
-
-    功能: 执行 _optional_turn_id 的同步逻辑,并协调
-    get, TurnId, ControlEnvelopeError,
-    isinstance。
-    参数: value: dict[str, JsonValue]。 必填。
-    契约: 同步调用。 返回 `TurnId | None`。 可能抛出
-    ControlEnvelopeError。
-    """
     turn_id = value.get("turn_id")
 
     if turn_id is None:
@@ -512,15 +358,6 @@ def _optional_turn_id(value: dict[str, JsonValue]) -> TurnId | None:
 
 
 def _optional_segment_id(value: dict[str, JsonValue]) -> SegmentId | None:
-    """函数契约说明.
-
-    功能: 执行 _optional_segment_id
-    的同步逻辑,并协调 get, SegmentId,
-    ControlEnvelopeError, isinstance。
-    参数: value: dict[str, JsonValue]。 必填。
-    契约: 同步调用。 返回 `SegmentId | None`。
-    可能抛出 ControlEnvelopeError。
-    """
     segment_id = value.get("segment_id")
 
     if segment_id is None:
@@ -535,15 +372,6 @@ def _optional_segment_id(value: dict[str, JsonValue]) -> SegmentId | None:
 def _optional_cancellation_epoch(
     data: dict[str, JsonValue],
 ) -> CancellationEpoch | None:
-    """函数契约说明.
-
-    功能: 执行 _optional_cancellation_epoch
-    的同步逻辑,并协调 CancellationEpoch,
-    _nonnegative_int。
-    参数: data: dict[str, JsonValue]。 必填。
-    契约: 同步调用。 返回 `CancellationEpoch |
-    None`。
-    """
     if "cancellation_epoch" not in data:
         return None
 
@@ -553,15 +381,6 @@ def _optional_cancellation_epoch(
 def _validate_flush(
     data: dict[str, JsonValue], source: str, expected_source: str
 ) -> None:
-    """函数契约说明.
-
-    功能: 校验相关输入、协议或运行时约束。
-    参数: data: dict[str, JsonValue]。 必填。
-    source: str。 必填。 expected_source:
-    str。 必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    ControlEnvelopeError。
-    """
     if source != expected_source:
         raise ControlEnvelopeError(field_name="source")
 
@@ -589,25 +408,10 @@ def _validate_flush(
 
 
 def _ssrc(data: dict[str, JsonValue]) -> int:
-    """函数契约说明.
-
-    功能: 执行 _ssrc 的同步逻辑,并协调 _ssrc_field。
-    参数: data: dict[str, JsonValue]。 必填。
-    契约: 同步调用。 返回 `int`。
-    """
     return _ssrc_field(data, "ssrc")
 
 
 def _ssrc_field(data: dict[str, JsonValue], field_name: str) -> int:
-    """函数契约说明.
-
-    功能: 执行 _ssrc_field 的同步逻辑,并协调 get,
-    ControlEnvelopeError, type。
-    参数: data: dict[str, JsonValue]。 必填。
-    field_name: str。 必填。
-    契约: 同步调用。 返回 `int`。 可能抛出
-    ControlEnvelopeError。
-    """
     value = data.get(field_name)
 
     if type(value) is not int or not 0 <= value <= MAX_SSRC:
@@ -617,15 +421,6 @@ def _ssrc_field(data: dict[str, JsonValue], field_name: str) -> int:
 
 
 def _nonnegative_int(data: dict[str, JsonValue], field_name: str) -> int:
-    """函数契约说明.
-
-    功能: 执行 _nonnegative_int 的同步逻辑,并协调
-    get, ControlEnvelopeError, type。
-    参数: data: dict[str, JsonValue]。 必填。
-    field_name: str。 必填。
-    契约: 同步调用。 返回 `int`。 可能抛出
-    ControlEnvelopeError。
-    """
     value = data.get(field_name)
 
     if type(value) is not int or value < 0:
@@ -635,15 +430,6 @@ def _nonnegative_int(data: dict[str, JsonValue], field_name: str) -> int:
 
 
 def _endpoint_port(data: dict[str, JsonValue]) -> int:
-    """函数契约说明.
-
-    功能: 执行 _endpoint_port 的同步逻辑,并协调
-    _validate_codec, get, _text,
-    ControlEnvelopeError。
-    参数: data: dict[str, JsonValue]。 必填。
-    契约: 同步调用。 返回 `int`。 可能抛出
-    ControlEnvelopeError。
-    """
     _validate_codec(data.get("codec"))
 
     endpoint = data.get("rtp_endpoint")
@@ -662,13 +448,6 @@ def _endpoint_port(data: dict[str, JsonValue]) -> int:
 
 
 def _validate_codec(value: JsonValue | None) -> None:
-    """函数契约说明.
-
-    功能: 校验相关输入、协议或运行时约束。
-    参数: value: JsonValue | None。 必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    ControlEnvelopeError。
-    """
     expected: dict[str, JsonValue] = {
         "format": "L16",
         "clock_rate_hz": 16_000,
@@ -682,14 +461,6 @@ def _validate_codec(value: JsonValue | None) -> None:
 
 
 def _stream_state(data: dict[str, JsonValue]) -> str:
-    """函数契约说明.
-
-    功能: 执行 _stream_state 的同步逻辑,并协调
-    _text, ControlEnvelopeError。
-    参数: data: dict[str, JsonValue]。 必填。
-    契约: 同步调用。 返回 `str`。 可能抛出
-    ControlEnvelopeError。
-    """
     value = _text(data, "state")
 
     if value not in {"queued", "playing", "paused", "finished", "cancelled", "error"}:
@@ -699,15 +470,6 @@ def _stream_state(data: dict[str, JsonValue]) -> str:
 
 
 def _mapping(value: dict[str, JsonValue], field_name: str) -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _mapping 的同步逻辑,并协调 get,
-    isinstance, ControlEnvelopeError。
-    参数: value: dict[str, JsonValue]。 必填。
-    field_name: str。 必填。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    可能抛出 ControlEnvelopeError。
-    """
     nested = value.get(field_name)
 
     if not isinstance(nested, dict):
@@ -717,16 +479,6 @@ def _mapping(value: dict[str, JsonValue], field_name: str) -> dict[str, JsonValu
 
 
 def _text(value: dict[str, JsonValue], field_name: str) -> str:
-    """函数契约说明.
-
-    功能: 执行 _text 的同步逻辑,并协调 get,
-    ControlEnvelopeError, isinstance,
-    strip。
-    参数: value: dict[str, JsonValue]。 必填。
-    field_name: str。 必填。
-    契约: 同步调用。 返回 `str`。 可能抛出
-    ControlEnvelopeError。
-    """
     text = value.get(field_name)
 
     if not isinstance(text, str) or text.strip() == "":

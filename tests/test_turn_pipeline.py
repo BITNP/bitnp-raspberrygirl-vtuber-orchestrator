@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from orchestrator.llm import MockLLMAdapter
 from orchestrator.modes import AdaptiveAgentPolicy
@@ -20,14 +15,6 @@ from orchestrator.retrieval import RetrievalFixtureProvider
 def test_comment_turn_emits_media_stream_and_frontend_cues_after_synthesis() -> None:
     # Given: a virtual-streamer policy and normalized comment input.
 
-    """函数契约说明.
-
-    功能: 验证 comment turn emits media
-    stream and frontend cues after
-    synthesis 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
@@ -108,13 +95,6 @@ def test_comment_turn_emits_media_stream_and_frontend_cues_after_synthesis() -> 
 def test_mock_synthesis_emits_rtp_relative_frontend_cues() -> None:
     # Given: one mock synthesis result and a known RTP stream start.
 
-    """函数契约说明.
-
-    功能: 验证 mock synthesis emits rtp
-    relative frontend cues 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(

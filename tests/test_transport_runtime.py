@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -51,109 +46,48 @@ SINK_PEER: Final = ("192.0.2.11", 41_001)
 
 @dataclass
 class FakeDatagramTransport:
-    """类契约说明.
-
-    职责: 保存 FakeDatagramTransport
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: sent、closed。 方法:
-    sendto、close。
-    """
 
     sent: list[tuple[bytes, tuple[str, int]]] = field(default_factory=list)
 
     closed: bool = False
 
     def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 data: bytes。
-        必填。 addr: tuple[str, int]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.sent.append((data, addr))
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并产出 closed。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.closed = True
 
 
 @dataclass
 class FakeControlServer:
-    """类契约说明.
-
-    职责: 保存 FakeControlServer
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: closed、waited。 方法:
-    close、wait_closed。
-    """
 
     closed: bool = False
 
     waited: bool = False
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并产出 closed。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.closed = True
 
     async def wait_closed(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 wait_closed 的异步逻辑,并产出
-        waited。
-        参数: self 表示当前实例。
-        契约: 异步调用。 返回 `None`。
-        """
 
         self.waited = True
 
 
 @dataclass
 class RecordingControlPeer:
-    """类契约说明.
-
-    职责: 保存 RecordingControlPeer
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: messages。 方法: send。
-    """
 
     messages: list[str] = field(default_factory=list)
 
     async def send(self, message: str) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 message: str。
-        必填。
-        契约: 异步调用。 返回 `None`。
-        """
 
         self.messages.append(message)
 
 
 @dataclass
 class _ControlConnection:
-    """类契约说明.
-
-    职责: 保存 _ControlConnection
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: messages、sent、authorization。
-    方法: remote_address、__aiter__、send、re
-    spond。
-    """
 
     messages: tuple[str, ...]
 
@@ -163,47 +97,19 @@ class _ControlConnection:
 
     @property
     def remote_address(self) -> tuple[str, int]:
-        """函数契约说明.
-
-        功能: 执行 remote_address
-        的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `tuple[str, int]`。
-        """
 
         return ("127.0.0.1", 443)
 
     async def __aiter__(self) -> AsyncIterator[str]:
-        """函数契约说明.
-
-        功能: 执行 __aiter__ 的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 异步调用。 返回迭代或生成器协议。 返回
-        `AsyncIterator[str]`。
-        """
 
         for message in self.messages:
             yield message
 
     async def send(self, message: str) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 message: str。
-        必填。
-        契约: 异步调用。 返回 `None`。
-        """
 
         self.sent.append(message)
 
     def respond(self, status: HTTPStatus, text: str) -> Response:
-        """函数契约说明.
-
-        功能: 执行 respond 的同步逻辑,并产出 _。
-        参数: self 表示当前实例。 status:
-        HTTPStatus。 必填。 text: str。 必填。
-        契约: 同步调用。 返回 `Response`。
-        """
 
         _ = status
 
@@ -214,22 +120,10 @@ class _ControlConnection:
 
 @dataclass
 class _IncrementingClock:
-    """类契约说明.
-
-    职责: 保存 _IncrementingClock
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: current。 方法: now。
-    """
 
     current: int = 0
 
     def now(self) -> int:
-        """函数契约说明.
-
-        功能: 执行 now 的同步逻辑,并产出 value。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `int`。
-        """
 
         value = self.current
 
@@ -241,14 +135,6 @@ class _IncrementingClock:
 def test_hub_forwards_only_valid_pinned_v2_pt96_l16_packets() -> None:
     # Given: authenticated Mic and Sound registrations for one canonical stream.
 
-    """函数契约说明.
-
-    功能: 验证 hub forwards only valid
-    pinned v2 pt96 l16 packets
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     transport = FakeDatagramTransport()
 
@@ -274,13 +160,6 @@ def test_hub_forwards_only_valid_pinned_v2_pt96_l16_packets() -> None:
 def test_hub_accepts_canonical_source_and_sink_ready_events() -> None:
     # Given: registered Mic and Sound routes for a canonical media stream.
 
-    """函数契约说明.
-
-    功能: 验证 hub accepts canonical source
-    and sink ready events 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     transport = FakeDatagramTransport()
 
@@ -306,13 +185,6 @@ def test_hub_accepts_canonical_source_and_sink_ready_events() -> None:
 def test_hub_rejects_invalid_rtp() -> None:
     # Given: a registered stream with a malformed RTP payload type.
 
-    """函数契约说明.
-
-    功能: 验证 hub rejects invalid rtp
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     transport = FakeDatagramTransport()
 
@@ -336,13 +208,6 @@ def test_hub_rejects_invalid_rtp() -> None:
 def test_hub_rejects_rtp_from_unregistered_peer() -> None:
     # Given: a registered stream and a valid packet from the Sound peer instead of Mic.
 
-    """函数契约说明.
-
-    功能: 验证 hub rejects rtp from
-    unregistered peer 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     transport = FakeDatagramTransport()
 
@@ -366,14 +231,6 @@ def test_hub_rejects_rtp_from_unregistered_peer() -> None:
 def test_hub_registers_authenticated_control_envelopes_and_rejects_duplicates() -> None:
     # Given: a hub receiving the canonical source and sink envelopes from WSS peers.
 
-    """函数契约说明.
-
-    功能: 验证 hub registers authenticated
-    control envelopes and rejects
-    duplicates 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     hub = RtpHub(FakeDatagramTransport())
 
@@ -395,14 +252,6 @@ def test_hub_registers_authenticated_control_envelopes_and_rejects_duplicates() 
 def test_authenticated_control_registers_only_matching_bearer_token() -> None:
     # Given: a production bearer token protecting a new Mic source route.
 
-    """函数契约说明.
-
-    功能: 验证 authenticated control
-    registers only matching bearer token
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     transport = FakeDatagramTransport()
 
@@ -436,14 +285,6 @@ def test_authenticated_control_registers_only_matching_bearer_token() -> None:
 def test_hub_removes_stream_routes_when_sound_cancels_stream() -> None:
     # Given: a pinned source route and registered sink route.
 
-    """函数契约说明.
-
-    功能: 验证 hub removes stream routes
-    when sound cancels stream
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     transport = FakeDatagramTransport()
 
@@ -467,23 +308,8 @@ def test_hub_removes_stream_routes_when_sound_cancels_stream() -> None:
 
 
 def test_dispatch_waits_for_sound_ready_before_releasing_mic() -> None:
-    """函数契约说明.
-
-    功能: 验证 dispatch waits for sound
-    ready before releasing mic
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     async def verify_startup_gate() -> None:
-        """函数契约说明.
-
-        功能: 校验相关输入、协议或运行时约束。
-        参数: 无显式业务参数。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
 
         dispatcher = TransportControlDispatch(RtpHub())
 
@@ -513,14 +339,6 @@ def test_dispatch_waits_for_sound_ready_before_releasing_mic() -> None:
 def test_runtime_reports_ready_after_listeners_start_and_closes_them() -> None:
     # Given: injected control and datagram listeners for an explicit loopback runtime.
 
-    """函数契约说明.
-
-    功能: 验证 runtime reports ready after
-    listeners start and closes them
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     datagram_transport = FakeDatagramTransport()
 
@@ -554,14 +372,6 @@ def test_runtime_reports_ready_after_listeners_start_and_closes_them() -> None:
 def test_control_connection_routes_comments_through_scheduler_runtime() -> None:
     # Given: one real transport control loop bound to its production session runtime.
 
-    """函数契约说明.
-
-    功能: 验证 control connection routes
-    comments through scheduler runtime
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = TransportRuntime(_loopback_config())
 
@@ -611,14 +421,6 @@ def test_control_connection_routes_comments_through_scheduler_runtime() -> None:
 def test_control_connection_refuses_comments_without_valid_credential() -> None:
     # Given: a production-token transport and three valid-looking comments.
 
-    """函数契约说明.
-
-    功能: 验证 control connection refuses
-    comments without valid credential
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = TransportRuntime(_token_config())
 
@@ -670,14 +472,6 @@ def test_control_connection_routes_authenticated_profile_action_and_presentation
 ):
     # Given: one authenticated control connection carrying only canonical commands.
 
-    """函数契约说明.
-
-    功能: 验证 control connection routes
-    authenticated profile action and
-    presentation 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = TransportRuntime(_token_config())
 
@@ -739,14 +533,6 @@ def test_control_connection_routes_authenticated_profile_action_and_presentation
 def test_control_connection_skips_expired_presentation_mcp() -> None:
     # Given: an authenticated root runtime whose task deadline expires before selection.
 
-    """函数契约说明.
-
-    功能: 验证 control connection skips
-    expired presentation mcp
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     clock = _IncrementingClock()
 
@@ -781,14 +567,6 @@ def test_control_connection_skips_expired_presentation_mcp() -> None:
 
 
 def _source_registration() -> str:
-    """函数契约说明.
-
-    功能: 执行 _source_registration
-    的同步逻辑,并协调 _envelope, _codec,
-    _endpoint。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "media.rtp.source.register",
@@ -803,14 +581,6 @@ def _source_registration() -> str:
 
 
 def _audience_comment(session_id: str, trace_id: str, sequence: int) -> str:
-    """函数契约说明.
-
-    功能: 执行 _audience_comment 的同步逻辑,并协调
-    dumps。
-    参数: session_id: str。 必填。 trace_id:
-    str。 必填。 sequence: int。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return json.dumps(
         {
@@ -825,14 +595,6 @@ def _audience_comment(session_id: str, trace_id: str, sequence: int) -> str:
 
 
 def _profile_enrollment(session_id: str, trace_id: str, sequence: int) -> str:
-    """函数契约说明.
-
-    功能: 执行 _profile_enrollment 的同步逻辑,并协调
-    _envelope。
-    参数: session_id: str。 必填。 trace_id:
-    str。 必填。 sequence: int。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "profile.enroll.command",
@@ -850,14 +612,6 @@ def _profile_enrollment(session_id: str, trace_id: str, sequence: int) -> str:
 
 
 def _profile_revoke(session_id: str, trace_id: str, sequence: int) -> str:
-    """函数契约说明.
-
-    功能: 执行 _profile_revoke 的同步逻辑,并协调
-    _envelope。
-    参数: session_id: str。 必填。 trace_id:
-    str。 必填。 sequence: int。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "profile.revoke.command",
@@ -870,14 +624,6 @@ def _profile_revoke(session_id: str, trace_id: str, sequence: int) -> str:
 
 
 def _action_command(session_id: str, trace_id: str, sequence: int) -> str:
-    """函数契约说明.
-
-    功能: 执行 _action_command 的同步逻辑,并协调
-    _envelope。
-    参数: session_id: str。 必填。 trace_id:
-    str。 必填。 sequence: int。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "action.command",
@@ -890,14 +636,6 @@ def _action_command(session_id: str, trace_id: str, sequence: int) -> str:
 
 
 def _presentation_command(session_id: str, trace_id: str, sequence: int) -> str:
-    """函数契约说明.
-
-    功能: 执行 _presentation_command
-    的同步逻辑,并协调 _envelope。
-    参数: session_id: str。 必填。 trace_id:
-    str。 必填。 sequence: int。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "presentation.load.command",
@@ -915,14 +653,6 @@ def _presentation_command(session_id: str, trace_id: str, sequence: int) -> str:
 
 
 def _presentation_result(session_id: str, trace_id: str, sequence: int) -> str:
-    """函数契约说明.
-
-    功能: 执行 _presentation_result
-    的同步逻辑,并协调 _envelope。
-    参数: session_id: str。 必填。 trace_id:
-    str。 必填。 sequence: int。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "presentation.result",
@@ -935,13 +665,6 @@ def _presentation_result(session_id: str, trace_id: str, sequence: int) -> str:
 
 
 def _sink_registration() -> str:
-    """函数契约说明.
-
-    功能: 执行 _sink_registration 的同步逻辑,并协调
-    _envelope, _codec, _endpoint。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "media.rtp.sink.register",
@@ -951,13 +674,6 @@ def _sink_registration() -> str:
 
 
 def _source_ready() -> str:
-    """函数契约说明.
-
-    功能: 执行 _source_ready 的同步逻辑,并协调
-    _envelope。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "media.rtp.source.ready",
@@ -967,13 +683,6 @@ def _source_ready() -> str:
 
 
 def _sink_ready() -> str:
-    """函数契约说明.
-
-    功能: 执行 _sink_ready 的同步逻辑,并协调
-    _envelope。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "media.rtp.sink.ready",
@@ -983,13 +692,6 @@ def _sink_ready() -> str:
 
 
 def _stream_state(state: str) -> str:
-    """函数契约说明.
-
-    功能: 执行 _stream_state 的同步逻辑,并协调
-    _envelope。
-    参数: state: str。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "media.stream.state",
@@ -1007,15 +709,6 @@ def _envelope(  # noqa: PLR0913
     trace_id: str = "trace-001",
     sequence: int = 1,
 ) -> str:
-    """函数契约说明.
-
-    功能: 执行 _envelope 的同步逻辑,并协调 dumps。
-    参数: event_type: str。 必填。 source:
-    str。 必填。 data: dict[str, JsonValue]。
-    必填。 session_id: str。 可省略。 trace_id:
-    str。 可省略。 sequence: int。 可省略。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return json.dumps(
         {
@@ -1033,12 +726,6 @@ def _envelope(  # noqa: PLR0913
 
 
 def _codec() -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _codec 的同步逻辑,并维持签名契约。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     return {
         "format": "L16",
@@ -1050,23 +737,11 @@ def _codec() -> dict[str, JsonValue]:
 
 
 def _endpoint(port: int) -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _endpoint 的同步逻辑,并维持签名契约。
-    参数: port: int。 必填。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     return {"host": "declared.example.test", "port": port}
 
 
 def _rtp_packet(payload_type: int) -> bytes:
-    """函数契约说明.
-
-    功能: 执行 _rtp_packet 的同步逻辑,并协调 bytes。
-    参数: payload_type: int。 必填。
-    契约: 同步调用。 返回 `bytes`。
-    """
 
     header = bytes((0x80, payload_type, 0, 1, 0, 0, 0, 1, 0x12, 0x34, 0x56, 0x78))
 
@@ -1074,13 +749,6 @@ def _rtp_packet(payload_type: int) -> bytes:
 
 
 def _loopback_config() -> TransportConfig:
-    """函数契约说明.
-
-    功能: 执行 _loopback_config 的同步逻辑,并协调
-    TransportConfig。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `TransportConfig`。
-    """
 
     return TransportConfig(
         "127.0.0.1",
@@ -1098,12 +766,6 @@ def _loopback_config() -> TransportConfig:
 
 
 def _token_config() -> TransportConfig:
-    """函数契约说明.
-
-    功能: 将输入转换为目标表示。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `TransportConfig`。
-    """
 
     return TransportConfig(
         "127.0.0.1",
@@ -1121,24 +783,8 @@ def _token_config() -> TransportConfig:
 
 
 def _fake_datagram_listener(transport: FakeDatagramTransport) -> DatagramListener:
-    """函数契约说明.
-
-    功能: 执行 _fake_datagram_listener
-    的同步逻辑,并维持签名契约。
-    参数: transport:
-    FakeDatagramTransport。 必填。
-    契约: 同步调用。 返回 `DatagramListener`。
-    """
 
     async def listen(_host: str, _port: int, _hub: RtpHub) -> FakeDatagramTransport:
-        """函数契约说明.
-
-        功能: 执行 listen 的异步逻辑,并维持签名契约。
-        参数: _host: str。 必填。 _port: int。
-        必填。 _hub: RtpHub。 必填。
-        契约: 异步调用。 返回
-        `FakeDatagramTransport`。
-        """
 
         return transport
 
@@ -1146,26 +792,10 @@ def _fake_datagram_listener(transport: FakeDatagramTransport) -> DatagramListene
 
 
 def _fake_control_listener(server: FakeControlServer) -> ControlListener:
-    """函数契约说明.
-
-    功能: 执行 _fake_control_listener
-    的同步逻辑,并维持签名契约。
-    参数: server: FakeControlServer。 必填。
-    契约: 同步调用。 返回 `ControlListener`。
-    """
 
     async def listen(
         _config: TransportConfig, _handler: ControlHandler
     ) -> FakeControlServer:
-        """函数契约说明.
-
-        功能: 执行 listen 的异步逻辑,并维持签名契约。
-        参数: _config: TransportConfig。
-        必填。 _handler: ControlHandler。
-        必填。
-        契约: 异步调用。 返回
-        `FakeControlServer`。
-        """
 
         return server
 

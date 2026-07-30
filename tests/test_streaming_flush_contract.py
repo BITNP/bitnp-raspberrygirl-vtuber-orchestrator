@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -31,14 +26,6 @@ from orchestrator.transport_control import (
 
 
 def _flush_envelope(*, session_id: str = "session-001", epoch: int = 3) -> str:
-    """函数契约说明.
-
-    功能: 执行 _flush_envelope 的同步逻辑,并协调
-    dumps。
-    参数: session_id: str。 可省略。 epoch:
-    int。 可省略。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return json.dumps(
         {
@@ -67,14 +54,6 @@ def test_flush_envelope_parses_every_epoch_correlated_identity() -> None:
 
     # When: the WSS boundary parses it.
 
-    """函数契约说明.
-
-    功能: 验证 flush envelope parses every
-    epoch correlated identity
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     flush = parse_control_event(_flush_envelope())
 
@@ -106,14 +85,6 @@ def test_flush_envelope_parses_every_epoch_correlated_identity() -> None:
 def test_flush_acknowledgement_parses_every_envelope_and_command_correlation() -> None:
     # Given: a Sound acknowledgement preserving a generated-media flush identity.
 
-    """函数契约说明.
-
-    功能: 验证 flush acknowledgement parses
-    every envelope and command
-    correlation 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     acknowledgement_envelope = (
         _flush_envelope()
@@ -153,13 +124,6 @@ def test_flush_acknowledgement_parses_every_envelope_and_command_correlation() -
 def test_flush_envelope_rejects_missing_epoch() -> None:
     # Given: a flush missing its cancellation epoch.
 
-    """函数契约说明.
-
-    功能: 验证 flush envelope rejects
-    missing epoch 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     envelope = _flush_envelope().replace('"cancellation_epoch": 3, ', "")
 
@@ -175,58 +139,25 @@ def test_flush_envelope_rejects_missing_epoch() -> None:
 
 @dataclass
 class _FakeClock:
-    """类契约说明.
-
-    职责: 保存 _FakeClock
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: now_ms。 方法: advance。
-    """
 
     now_ms: int = 0
 
     def advance(self, milliseconds: int) -> None:
-        """函数契约说明.
-
-        功能: 执行 advance 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 milliseconds:
-        int。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.now_ms += milliseconds
 
 
 @dataclass
 class _RecordingFlushSender:
-    """类契约说明.
-
-    职责: 保存 _RecordingFlushSender
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: sent。 方法: send_flush。
-    """
 
     sent: list[StreamFlush] = field(default_factory=list)
 
     def send_flush(self, flush: StreamFlush) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 flush:
-        StreamFlush。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.sent.append(flush)
 
 
 def _flush() -> StreamFlush:
-    """函数契约说明.
-
-    功能: 执行 _flush 的同步逻辑,并协调 StreamFlush,
-    StreamKey, TurnId, SegmentId。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `StreamFlush`。
-    """
 
     return StreamFlush(
         stream=StreamKey(session_id="session-001", stream_id="stream-001"),
@@ -241,14 +172,6 @@ def _flush() -> StreamFlush:
 def test_replacement_admission_retries_once_then_accepts_matching_ack() -> None:
     # Given: a flush request whose Sound acknowledgement is delayed past its retry.
 
-    """函数契约说明.
-
-    功能: 验证 replacement admission retries
-    once then accepts matching ack
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     clock = _FakeClock()
 
@@ -280,14 +203,6 @@ def test_replacement_admission_retries_once_then_accepts_matching_ack() -> None:
 def test_replacement_admission_rejects_invalid_ack_and_fake_clock_timeout() -> None:
     # Given: a pending flush and an acknowledgement for a different session.
 
-    """函数契约说明.
-
-    功能: 验证 replacement admission rejects
-    invalid ack and fake clock timeout
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     clock = _FakeClock()
 
@@ -329,14 +244,6 @@ def test_replacement_admission_rejects_invalid_ack_and_fake_clock_timeout() -> N
 
 
 def test_replacement_admission_requires_the_exact_acknowledged_flush_identity() -> None:
-    """函数契约说明.
-
-    功能: 验证 replacement admission
-    requires the exact acknowledged
-    flush identity 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     clock = _FakeClock()
 

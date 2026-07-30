@@ -63,6 +63,7 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
+    "D",
     "COM812",
     "ISC001",
     "D203",
@@ -90,9 +91,6 @@ ignore = [
 "tests/test_multimodal_release_gates.py" = ["S603"]
 "tests/test_core_stability_certificate.py" = ["S603", "S607"]
 "src/orchestrator/release_certificate.py" = ["E501", "PLR0911"]
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"
 
 [tool.ruff.format]
 quote-style = "double"

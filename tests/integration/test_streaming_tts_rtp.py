@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -22,23 +17,10 @@ from orchestrator.tts_rtp import (
 
 @dataclass(slots=True)
 class _FakeClock:
-    """类契约说明.
-
-    职责: 保存 _FakeClock
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: now_ms。 方法: advance。
-    """
 
     now_ms: int
 
     def advance(self, milliseconds: int) -> None:
-        """函数契约说明.
-
-        功能: 执行 advance 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 milliseconds:
-        int。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.now_ms += milliseconds
 
@@ -46,14 +28,6 @@ class _FakeClock:
 def test_streaming_pcm_chunks_emit_continuous_network_order_l16_rtp() -> None:
     # Given: uneven PCM16LE chunks that split both a sample and a 20 ms RTP frame.
 
-    """函数契约说明.
-
-    功能: 验证 streaming pcm chunks emit
-    continuous network order l16 rtp
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     packetizer = TtsPcmRtpPacketizer(
         stream=StreamKey("session-streaming", "stream-streaming"),
@@ -90,14 +64,6 @@ def test_streaming_pcm_chunks_emit_continuous_network_order_l16_rtp() -> None:
 def test_streaming_pcm_rejects_bad_metadata_and_incomplete_sample() -> None:
     # Given: a packetizer and chunk values outside the fixed provider boundary.
 
-    """函数契约说明.
-
-    功能: 验证 streaming pcm rejects bad
-    metadata and incomplete sample
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     packetizer = TtsPcmRtpPacketizer(
         stream=StreamKey("session-streaming", "stream-malformed"),
@@ -123,14 +89,6 @@ def test_generated_ssrc_is_fresh_per_epoch_and_cancelled_packetizer_emits_nothin
 ):
     # Given: two epochs of one routed stream and a deterministic endpoint-final clock.
 
-    """函数契约说明.
-
-    功能: 验证 generated ssrc is fresh per
-    epoch and cancelled packetizer emits
-    nothing 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     stream = StreamKey("session-streaming", "stream-epochs")
 

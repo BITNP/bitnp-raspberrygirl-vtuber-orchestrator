@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from orchestrator.llm import build_llm_request
 from orchestrator.modes import AdaptiveAgentPolicy, AudienceInput, AudienceSource
@@ -12,14 +7,6 @@ from orchestrator.retrieval import KnowledgeRef, RetrievalFixtureProvider
 def test_fixture_retrieval_injects_context_refs_as_untrusted_prompt_data() -> None:
     # Given: a deterministic fixture provider for virtual-streamer topic context.
 
-    """函数契约说明.
-
-    功能: 验证 fixture retrieval injects
-    context refs as untrusted prompt
-    data 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     provider = RetrievalFixtureProvider(
         refs=(
@@ -70,14 +57,6 @@ def test_fixture_retrieval_injects_context_refs_as_untrusted_prompt_data() -> No
 def test_fixture_retrieval_can_be_empty_without_full_rag_pipeline() -> None:
     # Given: retrieval is optional for MVP.
 
-    """函数契约说明.
-
-    功能: 验证 fixture retrieval can be
-    empty without full rag pipeline
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     provider = RetrievalFixtureProvider(refs=())
 

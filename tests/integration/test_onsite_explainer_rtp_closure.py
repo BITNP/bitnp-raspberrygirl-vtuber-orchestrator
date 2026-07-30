@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -50,48 +45,20 @@ SYNTHESIZED_L16_PAYLOAD: Final = b"\x10\x20" * 320
 
 @dataclass(slots=True)
 class FakeDatagramTransport:
-    """类契约说明.
-
-    职责: 保存 FakeDatagramTransport
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: sent。 方法: sendto、close。
-    """
 
     sent: list[tuple[bytes, tuple[str, int]]] = field(default_factory=list)
 
     def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 data: bytes。
-        必填。 addr: tuple[str, int]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.sent.append((data, addr))
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         return
 
 
 @dataclass(slots=True)
 class FakeOnsiteExplainerBridge:
-    """类契约说明.
-
-    职责: 保存 FakeOnsiteExplainerBridge
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: asr_final、mic_packets、answer
-    s、_output、_tasks。 方法: set_output_cal
-    lback、submit_mic_rtp、_emit、invalidat
-    e_stream、wait_quiescent。
-    """
 
     asr_final: str
 
@@ -108,33 +75,12 @@ class FakeOnsiteExplainerBridge:
     def set_output_callback(
         self, callback: Callable[[StreamKey, CancellationEpoch, bytes], Awaitable[None]]
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 set_output_callback
-        的同步逻辑,并产出 _output。
-        参数: self 表示当前实例。 callback:
-        Callable[[StreamKey,
-        CancellationEpoch, bytes],
-        Awaitable[None]]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self._output = callback
 
     def submit_mic_rtp(
         self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 submit_mic_rtp 的同步逻辑,并协调
-        append, create_task, add,
-        add_done_callback。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 packet: bytes。
-        必填。 epoch: CancellationEpoch。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.mic_packets.append(packet)
 
@@ -145,18 +91,6 @@ class FakeOnsiteExplainerBridge:
         task.add_done_callback(self._tasks.discard)
 
     async def _emit(self, stream: StreamKey, epoch: CancellationEpoch) -> None:
-        """函数契约说明.
-
-        功能: 执行 _emit 的异步逻辑,并协调
-        OrchestratorTurnPipeline,
-        accept_audience_input,
-        process_next_turn, append。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 epoch:
-        CancellationEpoch。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
 
         if self.asr_final == "":
             return
@@ -217,15 +151,6 @@ class FakeOnsiteExplainerBridge:
     def invalidate_stream(
         self, stream: StreamKey, next_epoch: CancellationEpoch
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 invalidate_stream
-        的同步逻辑,并协调 tuple, cancel。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 next_epoch:
-        CancellationEpoch。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _ = (stream, next_epoch)
 
@@ -233,28 +158,12 @@ class FakeOnsiteExplainerBridge:
             _ = task.cancel()
 
     async def wait_quiescent(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 wait_quiescent 的异步逻辑,并协调
-        gather。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
 
         if self._tasks:
             _ = await asyncio.gather(*self._tasks, return_exceptions=True)
 
 
 def test_onsite_mic_rtp_is_ingested_and_replaced_with_synthesized_sound_rtp() -> None:
-    """函数契约说明.
-
-    功能: 验证 onsite mic rtp is ingested
-    and replaced with synthesized sound
-    rtp 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_replacement_proof())
 
@@ -262,15 +171,6 @@ def test_onsite_mic_rtp_is_ingested_and_replaced_with_synthesized_sound_rtp() ->
 async def _replacement_proof() -> None:
     # Given: authenticated Mic and Sound routes plus an onsite ASR/LLM/TTS bridge.
 
-    """函数契约说明.
-
-    功能: 执行 _replacement_proof 的异步逻辑,并协调
-    FakeDatagramTransport,
-    FakeOnsiteExplainerBridge,
-    _onsite_hub, register_control。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     transport = FakeDatagramTransport()
 
@@ -308,13 +208,6 @@ async def _replacement_proof() -> None:
 
 
 def test_onsite_blank_asr_final_emits_no_sound_rtp() -> None:
-    """函数契约说明.
-
-    功能: 验证 onsite blank asr final emits
-    no sound rtp 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_blank_asr_proof())
 
@@ -322,15 +215,6 @@ def test_onsite_blank_asr_final_emits_no_sound_rtp() -> None:
 async def _blank_asr_proof() -> None:
     # Given: authenticated Mic and Sound routes with a blank ASR final.
 
-    """函数契约说明.
-
-    功能: 执行 _blank_asr_proof 的异步逻辑,并协调
-    FakeDatagramTransport,
-    FakeOnsiteExplainerBridge,
-    _onsite_hub, register_control。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     transport = FakeDatagramTransport()
 
@@ -362,14 +246,6 @@ async def _blank_asr_proof() -> None:
 
 
 def _source_registration() -> str:
-    """函数契约说明.
-
-    功能: 执行 _source_registration
-    的同步逻辑,并协调 _envelope, _codec,
-    _endpoint。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "media.rtp.source.register",
@@ -387,14 +263,6 @@ def _onsite_hub(
     transport: FakeDatagramTransport,
     bridge: FakeOnsiteExplainerBridge,
 ) -> RtpHub:
-    """函数契约说明.
-
-    功能: 执行 _onsite_hub 的同步逻辑,并协调 RtpHub。
-    参数: transport:
-    FakeDatagramTransport。 必填。 bridge:
-    FakeOnsiteExplainerBridge。 必填。
-    契约: 同步调用。 返回 `RtpHub`。
-    """
 
     bridge_options = {"onsite_bridge": bridge}
 
@@ -402,13 +270,6 @@ def _onsite_hub(
 
 
 def _sink_registration() -> str:
-    """函数契约说明.
-
-    功能: 执行 _sink_registration 的同步逻辑,并协调
-    _envelope, _codec, _endpoint。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _envelope(
         "media.rtp.sink.register",
@@ -418,14 +279,6 @@ def _sink_registration() -> str:
 
 
 def _envelope(event_type: str, source: str, data: dict[str, JsonValue]) -> str:
-    """函数契约说明.
-
-    功能: 执行 _envelope 的同步逻辑,并协调 dumps。
-    参数: event_type: str。 必填。 source:
-    str。 必填。 data: dict[str, JsonValue]。
-    必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return json.dumps(
         {
@@ -443,12 +296,6 @@ def _envelope(event_type: str, source: str, data: dict[str, JsonValue]) -> str:
 
 
 def _codec() -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _codec 的同步逻辑,并维持签名契约。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     return {
         "format": "L16",
@@ -460,24 +307,10 @@ def _codec() -> dict[str, JsonValue]:
 
 
 def _endpoint(port: int) -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _endpoint 的同步逻辑,并维持签名契约。
-    参数: port: int。 必填。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     return {"host": "declared.example.test", "port": port}
 
 
 def _rtp_packet(*, ssrc: int, payload: bytes) -> bytes:
-    """函数契约说明.
-
-    功能: 执行 _rtp_packet 的同步逻辑,并协调
-    to_bytes。
-    参数: ssrc: int。 必填。 payload: bytes。
-    必填。
-    契约: 同步调用。 返回 `bytes`。
-    """
 
     return b"\x80\x60\x00\x01\x00\x00\x00\x01" + ssrc.to_bytes(4, "big") + payload

@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -34,13 +29,6 @@ if TYPE_CHECKING:
 
 @dataclass(slots=True)
 class FakeCapture:
-    """类契约说明.
-
-    职责: 保存 FakeCapture
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: first_block、closed、reads。
-    方法: open、read_block、aclose。
-    """
 
     first_block: bytes
 
@@ -49,22 +37,10 @@ class FakeCapture:
     reads: int = 0
 
     async def open(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 open 的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 异步调用。 返回 `None`。
-        """
 
         return
 
     async def read_block(self) -> bytes | None:
-        """函数契约说明.
-
-        功能: 执行 read_block 的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 异步调用。 返回 `bytes | None`。
-        """
 
         self.reads += 1
 
@@ -74,25 +50,12 @@ class FakeCapture:
         return None
 
     async def aclose(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 aclose 的异步逻辑,并产出 closed。
-        参数: self 表示当前实例。
-        契约: 异步调用。 返回 `None`。
-        """
 
         self.closed = True
 
 
 @dataclass(slots=True)
 class FakePortAudio:
-    """类契约说明.
-
-    职责: 保存 FakePortAudio
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: frames、frame_written、closed。
-    方法: write、close_stream、close。
-    """
 
     frames: list[L16PlaybackFrame] = field(default_factory=list)
 
@@ -101,63 +64,26 @@ class FakePortAudio:
     closed: bool = False
 
     def write(self, frame: L16PlaybackFrame) -> None:
-        """函数契约说明.
-
-        功能: 执行 write 的同步逻辑,并协调 append,
-        set。
-        参数: self 表示当前实例。 frame:
-        L16PlaybackFrame。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.frames.append(frame)
 
         self.frame_written.set()
 
     def close_stream(self, stream_id: str) -> None:
-        """函数契约说明.
-
-        功能: 执行 close_stream 的同步逻辑,并产出 _。
-        参数: self 表示当前实例。 stream_id: str。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _ = stream_id
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并产出 closed。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.closed = True
 
 
 def test_mic_orchestrator_sound_loopback_forwards_rejects_cancels_and_closes() -> None:
-    """函数契约说明.
-
-    功能: 验证 mic orchestrator sound
-    loopback forwards rejects cancels
-    and closes 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_run_loopback_proof())
 
 
 async def _run_loopback_proof() -> None:
-    """函数契约说明.
-
-    功能: 执行 _run_loopback_proof 的异步逻辑,并协调
-    TransportRuntime, FakeCapture,
-    FakePortAudio, _orchestrator_config。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     control_port = 37_561
 
@@ -252,15 +178,6 @@ async def _run_loopback_proof() -> None:
 
 
 def _orchestrator_config(control_port: int, rtp_port: int) -> TransportConfig:
-    """函数契约说明.
-
-    功能: 执行 _orchestrator_config
-    的同步逻辑,并协调
-    load_transport_config_from_env, str。
-    参数: control_port: int。 必填。 rtp_port:
-    int。 必填。
-    契约: 同步调用。 返回 `TransportConfig`。
-    """
 
     return load_transport_config_from_env(
         {
@@ -279,15 +196,6 @@ def _orchestrator_config(control_port: int, rtp_port: int) -> TransportConfig:
 def _mic_config(
     control_port: int, rtp_port: int, mic_port: int
 ) -> StreamingRuntimeConfig:
-    """函数契约说明.
-
-    功能: 执行 _mic_config 的同步逻辑,并协调
-    load_streaming_runtime_config, str。
-    参数: control_port: int。 必填。 rtp_port:
-    int。 必填。 mic_port: int。 必填。
-    契约: 同步调用。 返回
-    `StreamingRuntimeConfig`。
-    """
 
     return load_streaming_runtime_config(
         {
@@ -307,14 +215,6 @@ def _mic_config(
 
 
 def _sound_config(control_port: int, sound_port: int) -> SoundReceiveConfig:
-    """函数契约说明.
-
-    功能: 执行 _sound_config 的同步逻辑,并协调
-    load_runtime_config, str。
-    参数: control_port: int。 必填。
-    sound_port: int。 必填。
-    契约: 同步调用。 返回 `SoundReceiveConfig`。
-    """
 
     return load_runtime_config(
         {
@@ -331,13 +231,6 @@ def _sound_config(control_port: int, sound_port: int) -> SoundReceiveConfig:
 
 
 def _rtp_packet(ssrc: int) -> bytes:
-    """函数契约说明.
-
-    功能: 执行 _rtp_packet 的同步逻辑,并协调
-    to_bytes。
-    参数: ssrc: int。 必填。
-    契约: 同步调用。 返回 `bytes`。
-    """
 
     return (
         b"\x80\x60\x00\x00\x00\x01\x77\x00"
@@ -347,15 +240,6 @@ def _rtp_packet(ssrc: int) -> bytes:
 
 
 def _send_rtp(rtp_port: int, packet: bytes, source_port: int | None = None) -> None:
-    """函数契约说明.
-
-    功能: 执行 _send_rtp 的同步逻辑,并协调 socket,
-    sendto, bind。
-    参数: rtp_port: int。 必填。 packet:
-    bytes。 必填。 source_port: int | None。
-    可省略。
-    契约: 同步调用。 返回 `None`。
-    """
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
         if source_port is not None:
@@ -365,13 +249,6 @@ def _send_rtp(rtp_port: int, packet: bytes, source_port: int | None = None) -> N
 
 
 async def _assert_no_additional_frame(playback: FakePortAudio) -> None:
-    """函数契约说明.
-
-    功能: 执行 _assert_no_additional_frame
-    的异步逻辑,并协调 len, wait_for, wait。
-    参数: playback: FakePortAudio。 必填。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     initial_count = len(playback.frames)
 
@@ -385,14 +262,6 @@ async def _assert_no_additional_frame(playback: FakePortAudio) -> None:
 
 
 async def _cancel(task: asyncio.Task[None] | None) -> None:
-    """函数契约说明.
-
-    功能: 执行 _cancel 的异步逻辑,并协调 cancel,
-    done。
-    参数: task: asyncio.Task[None] | None。
-    必填。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     if task is None or task.done():
         return

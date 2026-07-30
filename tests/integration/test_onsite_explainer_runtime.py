@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -60,116 +55,49 @@ SOUND_BIND_HOST: Final = "127.0.0.1"
 
 @dataclass(slots=True)
 class _Datagrams:
-    """类契约说明.
-
-    职责: 保存 _Datagrams
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: sent。 方法: sendto、close。
-    """
 
     sent: list[tuple[bytes, tuple[str, int]]] = field(default_factory=list)
 
     def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 data: bytes。
-        必填。 addr: tuple[str, int]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.sent.append((data, addr))
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         return
 
 
 @dataclass(slots=True)
 class _SoundBinding:
-    """类契约说明.
-
-    职责: 保存 _SoundBinding
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: handler。 方法: port、set_packet
-    _handler、deliver、close。
-    """
 
     handler: Callable[[bytes], None] | None = None
 
     @property
     def port(self) -> int:
-        """函数契约说明.
-
-        功能: 执行 port 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `int`。
-        """
 
         return 50_006
 
     def set_packet_handler(self, handler: Callable[[bytes], None]) -> None:
-        """函数契约说明.
-
-        功能: 执行 set_packet_handler
-        的同步逻辑,并产出 handler。
-        参数: self 表示当前实例。 handler:
-        Callable[[bytes], None]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.handler = handler
 
     def deliver(self, packet: bytes) -> None:
-        """函数契约说明.
-
-        功能: 执行 deliver 的同步逻辑,并协调
-        handler。
-        参数: self 表示当前实例。 packet: bytes。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         assert self.handler is not None
 
         self.handler(packet)
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         return
 
 
 @dataclass(frozen=True, slots=True)
 class _SoundBinder:
-    """类契约说明.
-
-    职责: 保存 _SoundBinder
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: binding。 方法: bind。
-    """
 
     binding: _SoundBinding
 
     async def bind(self, host: str, port: int) -> _SoundBinding:
-        """函数契约说明.
-
-        功能: 执行 bind 的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 host: str。 必填。
-        port: int。 必填。
-        契约: 异步调用。 返回 `_SoundBinding`。
-        """
 
         assert (host, port) == (SOUND_BIND_HOST, 50_006)
 
@@ -178,13 +106,6 @@ class _SoundBinder:
 
 @dataclass(slots=True)
 class _SoundControl:
-    """类契约说明.
-
-    职责: 保存 _SoundControl
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: command、generated_packet、bin
-    ding、delivered。 方法: send、recv、close。
-    """
 
     command: str
 
@@ -195,23 +116,10 @@ class _SoundControl:
     delivered: bool = False
 
     async def send(self, message: str) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 message: str。
-        必填。
-        契约: 异步调用。 返回 `None`。
-        """
 
         _ = message
 
     async def recv(self) -> str | None:
-        """函数契约说明.
-
-        功能: 执行 recv 的异步逻辑,并协调 deliver。
-        参数: self 表示当前实例。
-        契约: 异步调用。 返回 `str | None`。
-        """
 
         if not self.delivered:
             self.delivered = True
@@ -223,35 +131,16 @@ class _SoundControl:
         return None
 
     async def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 异步调用。 返回 `None`。
-        """
 
         return
 
 
 @dataclass(frozen=True, slots=True)
 class _SoundConnector:
-    """类契约说明.
-
-    职责: 保存 _SoundConnector
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: control。 方法: connect。
-    """
 
     control: _SoundControl
 
     async def connect(self, url: str, headers: dict[str, str]) -> _SoundControl:
-        """函数契约说明.
-
-        功能: 执行 connect 的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 url: str。 必填。
-        headers: dict[str, str]。 必填。
-        契约: 异步调用。 返回 `_SoundControl`。
-        """
 
         assert url == "wss://orchestrator.example.test/control"
 
@@ -262,57 +151,24 @@ class _SoundConnector:
 
 @dataclass(slots=True)
 class _SoundSink:
-    """类契约说明.
-
-    职责: 保存 _SoundSink
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: frames。 方法:
-    write、close_stream、close。
-    """
 
     frames: list[L16PlaybackFrame] = field(default_factory=list)
 
     def write(self, frame: L16PlaybackFrame) -> None:
-        """函数契约说明.
-
-        功能: 执行 write 的同步逻辑,并协调 append。
-        参数: self 表示当前实例。 frame:
-        L16PlaybackFrame。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.frames.append(frame)
 
     def close_stream(self, stream_id: str) -> None:
-        """函数契约说明.
-
-        功能: 执行 close_stream 的同步逻辑,并产出 _。
-        参数: self 表示当前实例。 stream_id: str。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _ = stream_id
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         return
 
 
 @dataclass(frozen=True, slots=True)
 class _Asr:
-    """类契约说明.
-
-    职责: 保存 _Asr 不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: text、expected_audio_bytes。
-    方法: transcribe。
-    """
 
     text: str
 
@@ -328,21 +184,6 @@ class _Asr:
         seq: int,
         cancellation: ProviderCancellationHandle | None = None,
     ) -> ASRAudienceEvent | None:
-        """函数契约说明.
-
-        功能: 执行 transcribe 的同步逻辑,并协调
-        ASRAudienceEvent, len,
-        _wav_payload。
-        参数: self 表示当前实例。 audio: bytes。
-        必填。 filename: str。 必填。
-        received_at_ms: int。 必填。
-        segment_id: str。 必填。 seq: int。
-        必填。 cancellation:
-        ProviderCancellationHandle |
-        None。 可省略。
-        契约: 同步调用。 返回 `ASRAudienceEvent |
-        None`。
-        """
 
         _ = cancellation
 
@@ -355,11 +196,6 @@ class _Asr:
 
 @dataclass(frozen=True, slots=True)
 class _Tts:
-    """类契约说明.
-
-    职责: 保存 _Tts 不可变数据结构,用类型标注表达字段契约。
-    契约: 方法: stream_pcm16le、synthesize。
-    """
 
     def stream_pcm16le(
         self,
@@ -370,19 +206,6 @@ class _Tts:
         ref_text: str,
         cancellation: ProviderCancellationHandle | None = None,
     ) -> tuple[Pcm16leChunk, ...]:
-        """函数契约说明.
-
-        功能: 执行 stream_pcm16le 的同步逻辑,并协调
-        Pcm16leChunk。
-        参数: self 表示当前实例。 text: str。 必填。
-        voice: str。 必填。 ref_audio: str。
-        必填。 ref_text: str。 必填。
-        cancellation:
-        ProviderCancellationHandle |
-        None。 可省略。
-        契约: 同步调用。 返回
-        `tuple[Pcm16leChunk, ...]`。
-        """
 
         _ = cancellation
 
@@ -405,18 +228,6 @@ class _Tts:
         ref_text: str,
         cancellation: ProviderCancellationHandle | None = None,
     ) -> SynthesizedAudio:
-        """函数契约说明.
-
-        功能: 执行 synthesize 的同步逻辑,并协调
-        SynthesizedAudio, _wav。
-        参数: self 表示当前实例。 text: str。 必填。
-        voice: str。 必填。 ref_audio: str。
-        必填。 ref_text: str。 必填。
-        cancellation:
-        ProviderCancellationHandle |
-        None。 可省略。
-        契约: 同步调用。 返回 `SynthesizedAudio`。
-        """
 
         _ = cancellation
 
@@ -432,40 +243,16 @@ class _Tts:
 
 
 def test_onsite_runtime_composes_asr_pipeline_tts_and_replaces_mic_rtp() -> None:
-    """函数契约说明.
-
-    功能: 验证 onsite runtime composes asr
-    pipeline tts and replaces mic rtp
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_runtime_composition_proof())
 
 
 def test_onsite_runtime_baseline_preserves_current_generated_output() -> None:
-    """函数契约说明.
-
-    功能: 验证 onsite runtime baseline
-    preserves current generated output
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_runtime_composition_proof())
 
 
 def test_onsite_runtime_scheduler_fences_barge_in_until_exact_flush_ack() -> None:
-    """函数契约说明.
-
-    功能: 验证 onsite runtime scheduler
-    fences barge in until exact flush
-    ack 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_scheduler_barge_in_proof())
 
@@ -473,15 +260,6 @@ def test_onsite_runtime_scheduler_fences_barge_in_until_exact_flush_ack() -> Non
 async def _scheduler_barge_in_proof() -> None:
     # Given: generated output for a scheduler-owned active turn on a live route.
 
-    """函数契约说明.
-
-    功能: 执行 _scheduler_barge_in_proof
-    的异步逻辑,并协调 _Datagrams,
-    SessionScheduler,
-    SchedulerOutputFence, RtpHub。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     transport = _Datagrams()
 
@@ -633,14 +411,6 @@ async def _stale_epoch_gate_proof() -> None:
 async def _runtime_composition_proof() -> None:
     # Given: the real bridge with deterministic provider boundaries and pinned routes.
 
-    """函数契约说明.
-
-    功能: 执行 _runtime_composition_proof
-    的异步逻辑,并协调 _Datagrams, RtpHub,
-    register_control, _rtp。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     transport = _Datagrams()
 
@@ -693,13 +463,6 @@ async def _runtime_composition_proof() -> None:
 
 
 def test_onsite_runtime_drops_blank_asr_without_raw_rtp() -> None:
-    """函数契约说明.
-
-    功能: 验证 onsite runtime drops blank
-    asr without raw rtp 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_blank_asr_proof())
 
@@ -707,14 +470,6 @@ def test_onsite_runtime_drops_blank_asr_without_raw_rtp() -> None:
 async def _blank_asr_proof() -> None:
     # Given: a real bridge whose ASR boundary emits a blank final.
 
-    """函数契约说明.
-
-    功能: 执行 _blank_asr_proof 的异步逻辑,并协调
-    _Datagrams, RtpHub,
-    register_control, route_datagram。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     transport = _Datagrams()
 
@@ -742,14 +497,6 @@ async def _blank_asr_proof() -> None:
 
 
 def test_generated_onsite_command_ssrc_unlocks_real_sound_runtime_playback() -> None:
-    """函数契约说明.
-
-    功能: 验证 generated onsite command ssrc
-    unlocks real sound runtime playback
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_sound_runtime_playback_proof())
 
@@ -757,14 +504,6 @@ def test_generated_onsite_command_ssrc_unlocks_real_sound_runtime_playback() -> 
 async def _sound_runtime_playback_proof() -> None:
     # Given: an onsite-generated RTP packet and a Sound command bound to its SSRC.
 
-    """函数契约说明.
-
-    功能: 执行 _sound_runtime_playback_proof
-    的异步逻辑,并协调 _rtp, _bridge, isinstance,
-    from_bytes。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     mic_packet = _rtp(MIC_SSRC, b"\x01\x02" * 320)
 
@@ -819,16 +558,6 @@ async def _sound_runtime_playback_proof() -> None:
 
 
 def _bridge(text: str, expected_audio_bytes: int = 1_280) -> OnsiteExplainerBridge:
-    """函数契约说明.
-
-    功能: 执行 _bridge 的同步逻辑,并协调
-    OnsiteExplainerBridge, _Asr, _Tts,
-    OrchestratorTurnPipeline。
-    参数: text: str。 必填。
-    expected_audio_bytes: int。 可省略。
-    契约: 同步调用。 返回
-    `OnsiteExplainerBridge`。
-    """
 
     return OnsiteExplainerBridge(
         asr=_Asr(text, expected_audio_bytes),
@@ -849,12 +578,6 @@ def _bridge(text: str, expected_audio_bytes: int = 1_280) -> OnsiteExplainerBrid
 
 
 def _source() -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _source 的同步逻辑,并协调 _codec。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     return {
         "stream_id": STREAM_ID,
@@ -865,12 +588,6 @@ def _source() -> dict[str, JsonValue]:
 
 
 def _sink() -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _sink 的同步逻辑,并协调 _codec。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     return {
         "stream_id": STREAM_ID,
@@ -880,12 +597,6 @@ def _sink() -> dict[str, JsonValue]:
 
 
 def _codec() -> dict[str, JsonValue]:
-    """函数契约说明.
-
-    功能: 执行 _codec 的同步逻辑,并维持签名契约。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `dict[str, JsonValue]`。
-    """
 
     return {
         "format": "L16",
@@ -897,13 +608,6 @@ def _codec() -> dict[str, JsonValue]:
 
 
 def _sound_command(ssrc: int) -> str:
-    """函数契约说明.
-
-    功能: 执行 _sound_command 的同步逻辑,并协调
-    _registration, _codec。
-    参数: ssrc: int。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return _registration(
         "media.stream.command",
@@ -920,15 +624,6 @@ def _sound_command(ssrc: int) -> str:
 
 
 def _registration(event_type: str, source: str, data: dict[str, JsonValue]) -> str:
-    """函数契约说明.
-
-    功能: 执行 _registration 的同步逻辑,并协调
-    dumps。
-    参数: event_type: str。 必填。 source:
-    str。 必填。 data: dict[str, JsonValue]。
-    必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return json.dumps(
         {
@@ -946,14 +641,6 @@ def _registration(event_type: str, source: str, data: dict[str, JsonValue]) -> s
 
 
 def _rtp(ssrc: int, payload: bytes, sequence: int = 1, timestamp: int = 1) -> bytes:
-    """函数契约说明.
-
-    功能: 执行 _rtp 的同步逻辑,并协调 to_bytes。
-    参数: ssrc: int。 必填。 payload: bytes。
-    必填。 sequence: int。 可省略。 timestamp:
-    int。 可省略。
-    契约: 同步调用。 返回 `bytes`。
-    """
 
     return (
         b"\x80\x60"
@@ -965,13 +652,6 @@ def _rtp(ssrc: int, payload: bytes, sequence: int = 1, timestamp: int = 1) -> by
 
 
 def _wav(payload: bytes) -> bytes:
-    """函数契约说明.
-
-    功能: 执行 _wav 的同步逻辑,并协调 BytesIO,
-    getvalue, open, setnchannels。
-    参数: payload: bytes。 必填。
-    契约: 同步调用。 返回 `bytes`。
-    """
 
     output = io.BytesIO()
 
@@ -988,13 +668,6 @@ def _wav(payload: bytes) -> bytes:
 
 
 def _wav_payload(data: bytes) -> bytes:
-    """函数契约说明.
-
-    功能: 执行 _wav_payload 的同步逻辑,并协调 open,
-    readframes, BytesIO, getnframes。
-    参数: data: bytes。 必填。
-    契约: 同步调用。 返回 `bytes`。
-    """
 
     with wave.open(io.BytesIO(data), "rb") as audio:
         return audio.readframes(audio.getnframes())

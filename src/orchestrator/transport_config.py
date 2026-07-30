@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.transport_config
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -55,15 +49,6 @@ ControlScheme = Literal["ws", "wss"]
 
 @dataclass(frozen=True, slots=True)
 class TransportConfig:
-    """类契约说明.
-
-    职责: 保存 TransportConfig
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: control_bind_host、control_bi
-    nd_port、udp_bind_host、udp_bind_port、
-    advertised_host、advertised_control_p
-    ort。
-    """
 
     control_bind_host: str
 
@@ -89,15 +74,6 @@ class TransportConfig:
 
 
 def load_transport_config_from_env(env: Mapping[str, str]) -> TransportConfig:
-    """函数契约说明.
-
-    功能: 执行
-    load_transport_config_from_env
-    的同步逻辑,并协调 _parse_loopback_ws,
-    _require_text, TransportConfig, get。
-    参数: env: Mapping[str, str]。 必填。
-    契约: 同步调用。 返回 `TransportConfig`。
-    """
     loopback_ws = _parse_loopback_ws(env.get(LOOPBACK_WS_KEY))
 
     control_bind_host = _require_text(
@@ -148,13 +124,6 @@ def load_transport_config_from_env(env: Mapping[str, str]) -> TransportConfig:
 
 
 def _parse_loopback_ws(value: str | None) -> bool:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: value: str | None。 必填。
-    契约: 同步调用。 返回 `bool`。 可能抛出
-    ConfigParseError。
-    """
     match "false" if value is None else value.strip().lower():
         case "false":
             return False
@@ -167,15 +136,6 @@ def _parse_loopback_ws(value: str | None) -> bool:
 
 
 def _require_text(value: str | None, field_name: str) -> str:
-    """函数契约说明.
-
-    功能: 执行 _require_text 的同步逻辑,并协调
-    strip, ConfigParseError。
-    参数: value: str | None。 必填。
-    field_name: str。 必填。
-    契约: 同步调用。 返回 `str`。 可能抛出
-    ConfigParseError。
-    """
     if value is None or value.strip() == "":
         raise ConfigParseError(field_name=field_name)
 
@@ -183,14 +143,6 @@ def _require_text(value: str | None, field_name: str) -> str:
 
 
 def _parse_port(value: str | None, field_name: str) -> int:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: value: str | None。 必填。
-    field_name: str。 必填。
-    契约: 同步调用。 返回 `int`。 可能抛出
-    ConfigParseError。
-    """
     parsed = _require_text(value, field_name)
 
     if not parsed.isdecimal():
@@ -205,28 +157,11 @@ def _parse_port(value: str | None, field_name: str) -> int:
 
 
 def _require_loopback_host(host: str, field_name: str) -> None:
-    """函数契约说明.
-
-    功能: 执行 _require_loopback_host
-    的同步逻辑,并协调 lower, ConfigParseError。
-    参数: host: str。 必填。 field_name: str。
-    必填。
-    契约: 同步调用。 返回 `None`。 可能抛出
-    ConfigParseError。
-    """
     if host.lower() not in LOOPBACK_HOSTS:
         raise ConfigParseError(field_name=field_name)
 
 
 def _parse_token(value: str | None, loopback_ws: bool) -> TrustedLanToken | None:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: value: str | None。 必填。
-    loopback_ws: bool。 必填。
-    契约: 同步调用。 返回 `TrustedLanToken |
-    None`。
-    """
     if loopback_ws:
         return None
 
@@ -236,14 +171,6 @@ def _parse_token(value: str | None, loopback_ws: bool) -> TrustedLanToken | None
 def _parse_tls_path(
     value: str | None, field_name: str, loopback_ws: bool
 ) -> Path | None:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: value: str | None。 必填。
-    field_name: str。 必填。 loopback_ws:
-    bool。 必填。
-    契约: 同步调用。 返回 `Path | None`。
-    """
     if loopback_ws:
         return None
 

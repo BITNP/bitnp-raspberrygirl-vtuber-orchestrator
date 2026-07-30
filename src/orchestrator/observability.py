@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.observability
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from dataclasses import dataclass
 from typing import Final, Literal, TypedDict
@@ -34,12 +28,6 @@ type OnsiteStage = Literal[
 
 
 class JsonLogRecord(TypedDict):
-    """类契约说明.
-
-    职责: 定义 JsonLogRecord 的状态、行为和对外协作边界。
-    契约: 字段: service、service_version、leve
-    l、message、trace_id、session_id。
-    """
 
     service: str
 
@@ -56,13 +44,6 @@ class JsonLogRecord(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class LatencyMetric:
-    """类契约说明.
-
-    职责: 保存 LatencyMetric
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段:
-    service、operation、latency_ms。
-    """
 
     service: str
 
@@ -73,12 +54,6 @@ class LatencyMetric:
 
 @dataclass(frozen=True, slots=True)
 class QueueMetric:
-    """类契约说明.
-
-    职责: 保存 QueueMetric
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: service、queue_name、depth。
-    """
 
     service: str
 
@@ -89,13 +64,6 @@ class QueueMetric:
 
 @dataclass(frozen=True, slots=True)
 class StageCorrelation:
-    """类契约说明.
-
-    职责: 保存 StageCorrelation
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: trace_id、session_id、seq、turn
-    _id、segment_id、cancellation_epoch。
-    """
 
     trace_id: str
 
@@ -112,13 +80,6 @@ class StageCorrelation:
 
 @dataclass(frozen=True, slots=True)
 class StageRecord:
-    """类契约说明.
-
-    职责: 保存 StageRecord
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: stage、trace_id、session_id、se
-    q、turn_id、segment_id。
-    """
 
     stage: OnsiteStage
 
@@ -145,13 +106,6 @@ class StageRecord:
 
 @dataclass(frozen=True, slots=True)
 class StageDetails:
-    """类契约说明.
-
-    职责: 保存 StageDetails
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: latency_ms、queue_name、queue_
-    depth、drop_count。
-    """
 
     latency_ms: float | None = None
 
@@ -167,15 +121,6 @@ DEFAULT_STAGE_DETAILS: Final = StageDetails()
 
 @dataclass(slots=True)
 class OnsiteObservability:
-    """类契约说明.
-
-    职责: 保存 OnsiteObservability
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: config、records、logs、latencie
-    s、queues、journal。 方法: __init__、bind_
-    correlation、correlation、record、recor
-    d_stream。
-    """
 
     config: OrchestratorConfig
 
@@ -192,14 +137,6 @@ class OnsiteObservability:
     _envelopes: dict[StreamKey, EnvelopeCorrelation]
 
     def __init__(self, config: OrchestratorConfig) -> None:
-        """函数契约说明.
-
-        功能: 初始化 OnsiteObservability
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。 config:
-        OrchestratorConfig。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self.config = config
 
         self.records = []
@@ -217,15 +154,6 @@ class OnsiteObservability:
     def bind_correlation(
         self, stream: StreamKey, correlation: EnvelopeCorrelation
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 bind_correlation
-        的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 correlation:
-        EnvelopeCorrelation。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self._envelopes[stream] = correlation
 
     def correlation(
@@ -235,18 +163,6 @@ class OnsiteObservability:
         segment_id: str | None,
         epoch: CancellationEpoch | None,
     ) -> StageCorrelation | None:
-        """函数契约说明.
-
-        功能: 执行 correlation 的同步逻辑,并协调
-        get, StageCorrelation, int。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 turn_id: str |
-        None。 必填。 segment_id: str |
-        None。 必填。 epoch:
-        CancellationEpoch | None。 必填。
-        契约: 同步调用。 返回 `StageCorrelation |
-        None`。
-        """
         envelope = self._envelopes.get(stream)
 
         if envelope is None:
@@ -267,17 +183,6 @@ class OnsiteObservability:
         correlation: StageCorrelation,
         details: StageDetails = DEFAULT_STAGE_DETAILS,
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 record 的同步逻辑,并协调 append,
-        StageRecord, json_log_record,
-        OperationalRecord。
-        参数: self 表示当前实例。 stage:
-        OnsiteStage。 必填。 correlation:
-        StageCorrelation。 必填。 details:
-        StageDetails。 可省略。
-        契约: 同步调用。 返回 `None`。
-        """
         self.records.append(
             StageRecord(
                 stage=stage,
@@ -339,17 +244,6 @@ class OnsiteObservability:
         command: StageCorrelation | None = None,
         details: StageDetails = DEFAULT_STAGE_DETAILS,
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 record_stream 的同步逻辑,并协调
-        correlation, record。
-        参数: self 表示当前实例。 stage:
-        OnsiteStage。 必填。 stream:
-        StreamKey。 必填。 command:
-        StageCorrelation | None。 可省略。
-        details: StageDetails。 可省略。
-        契约: 同步调用。 返回 `None`。
-        """
         correlation = command or self.correlation(stream, None, None, None)
 
         if correlation is not None:
@@ -364,17 +258,6 @@ def json_log_record(
     trace_id: str,
     session_id: str,
 ) -> JsonLogRecord:
-    """函数契约说明.
-
-    功能: 执行 json_log_record
-    的同步逻辑,并维持签名契约。
-    参数: config: OrchestratorConfig。 必填。
-    level: Literal['debug', 'info',
-    'warning', 'error']。 必填。 message:
-    str。 必填。 trace_id: str。 必填。
-    session_id: str。 必填。
-    契约: 同步调用。 返回 `JsonLogRecord`。
-    """
     return {
         "service": config.service_name,
         "service_version": config.service_version,
@@ -391,15 +274,6 @@ def latency_metric(
     operation: str,
     latency_ms: float,
 ) -> LatencyMetric:
-    """函数契约说明.
-
-    功能: 执行 latency_metric 的同步逻辑,并协调
-    LatencyMetric。
-    参数: config: OrchestratorConfig。 必填。
-    operation: str。 必填。 latency_ms:
-    float。 必填。
-    契约: 同步调用。 返回 `LatencyMetric`。
-    """
     return LatencyMetric(
         service=config.service_name,
         operation=operation,
@@ -413,24 +287,10 @@ def queue_metric(
     queue_name: str,
     depth: int,
 ) -> QueueMetric:
-    """函数契约说明.
-
-    功能: 执行 queue_metric 的同步逻辑,并协调
-    QueueMetric。
-    参数: config: OrchestratorConfig。 必填。
-    queue_name: str。 必填。 depth: int。 必填。
-    契约: 同步调用。 返回 `QueueMetric`。
-    """
     return QueueMetric(service=config.service_name, queue_name=queue_name, depth=depth)
 
 
 def _stage_outcome(stage: OnsiteStage) -> str:
-    """函数契约说明.
-
-    功能: 执行 _stage_outcome 的同步逻辑,并维持签名契约。
-    参数: stage: OnsiteStage。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     if stage in {"asr_failure", "classifier_failure"}:
         return "failure"
 

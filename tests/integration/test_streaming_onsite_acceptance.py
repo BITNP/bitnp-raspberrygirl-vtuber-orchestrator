@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -39,13 +34,6 @@ _SAMPLE_RATE: Final = 16_000
 
 @dataclass(slots=True)
 class _FakeProvider:
-    """类契约说明.
-
-    职责: 保存 _FakeProvider
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: mode、_server、_thread。 方法:
-    __post_init__、__enter__、__exit__。
-    """
 
     mode: _Mode
 
@@ -54,13 +42,6 @@ class _FakeProvider:
     _thread: threading.Thread = field(init=False)
 
     def __post_init__(self) -> None:
-        """函数契约说明.
-
-        功能: 初始化 _FakeProvider
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _ProviderHandler.mode = self.mode
 
@@ -69,28 +50,12 @@ class _FakeProvider:
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     def __enter__(self) -> str:
-        """函数契约说明.
-
-        功能: 执行 __enter__ 的同步逻辑,并协调
-        start。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `str`。
-        """
 
         self._thread.start()
 
         return f"http://127.0.0.1:{self._server.server_port}/v1"
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        """函数契约说明.
-
-        功能: 执行 __exit__ 的同步逻辑,并协调
-        shutdown, join, server_close。
-        参数: self 表示当前实例。 exc_type:
-        object。 必填。 exc: object。 必填。
-        traceback: object。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self._server.shutdown()
 
@@ -100,24 +65,10 @@ class _FakeProvider:
 
 
 class _ProviderHandler(BaseHTTPRequestHandler):
-    """类契约说明.
-
-    职责: 定义 _ProviderHandler
-    的状态、行为和对外协作边界。
-    契约: 字段: mode。 方法:
-    do_POST、_json、_sse、_wav、log_message。
-    """
 
     mode: ClassVar[_Mode]
 
     def do_POST(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 do_POST 的同步逻辑,并协调 read,
-        int, endswith, send_response。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _ = self.rfile.read(int(self.headers["content-length"]))
 
@@ -150,15 +101,6 @@ class _ProviderHandler(BaseHTTPRequestHandler):
                 self.end_headers()
 
     def _json(self, body: bytes) -> None:
-        """函数契约说明.
-
-        功能: 执行 _json 的同步逻辑,并协调
-        send_response, send_header,
-        end_headers, write。
-        参数: self 表示当前实例。 body: bytes。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.send_response(200)
 
@@ -171,15 +113,6 @@ class _ProviderHandler(BaseHTTPRequestHandler):
         _ = self.wfile.write(body)
 
     def _sse(self, events: tuple[str, ...]) -> None:
-        """函数契约说明.
-
-        功能: 执行 _sse 的同步逻辑,并协调
-        send_response, send_header,
-        end_headers, write。
-        参数: self 表示当前实例。 events:
-        tuple[str, ...]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.send_response(200)
 
@@ -193,14 +126,6 @@ class _ProviderHandler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
     def _wav(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 _wav 的同步逻辑,并协调 _wav,
-        send_response, send_header,
-        end_headers。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         data = _wav(b"\x10\x20" * 320)
 
@@ -216,94 +141,41 @@ class _ProviderHandler(BaseHTTPRequestHandler):
 
     @override
     def log_message(self, format: str, *args: object) -> None:
-        """函数契约说明.
-
-        功能: 执行 log_message 的同步逻辑,并产出 _。
-        参数: self 表示当前实例。 format: str。
-        必填。 *args: object。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _ = (format, args)
 
 
 @dataclass(slots=True)
 class _Binding:
-    """类契约说明.
-
-    职责: 保存 _Binding 不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: handler。 方法: port、set_packet
-    _handler、deliver、close。
-    """
 
     handler: Callable[[bytes], None] | None = None
 
     @property
     def port(self) -> int:
-        """函数契约说明.
-
-        功能: 执行 port 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `int`。
-        """
 
         return 50_006
 
     def set_packet_handler(self, handler: Callable[[bytes], None]) -> None:
-        """函数契约说明.
-
-        功能: 执行 set_packet_handler
-        的同步逻辑,并产出 handler。
-        参数: self 表示当前实例。 handler:
-        Callable[[bytes], None]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.handler = handler
 
     def deliver(self, packet: bytes) -> None:
-        """函数契约说明.
-
-        功能: 执行 deliver 的同步逻辑,并协调
-        handler。
-        参数: self 表示当前实例。 packet: bytes。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         assert self.handler is not None
 
         self.handler(packet)
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         return
 
 
 @dataclass(frozen=True, slots=True)
 class _Binder:
-    """类契约说明.
-
-    职责: 保存 _Binder 不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: binding。 方法: bind。
-    """
 
     binding: _Binding
 
     async def bind(self, host: str, port: int) -> _Binding:
-        """函数契约说明.
-
-        功能: 执行 bind 的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 host: str。 必填。
-        port: int。 必填。
-        契约: 异步调用。 返回 `_Binding`。
-        """
 
         assert (host, port) == ("127.0.0.1", 50_006)
 
@@ -312,12 +184,6 @@ class _Binder:
 
 @dataclass(slots=True)
 class _Control:
-    """类契约说明.
-
-    职责: 保存 _Control 不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: command、packet、binding、sent、
-    delivered。 方法: send、recv、close。
-    """
 
     command: str
 
@@ -330,23 +196,10 @@ class _Control:
     delivered: bool = False
 
     async def send(self, message: str) -> None:
-        """函数契约说明.
-
-        功能: 发送协议消息或媒体数据。
-        参数: self 表示当前实例。 message: str。
-        必填。
-        契约: 异步调用。 返回 `None`。
-        """
 
         self.sent.append(message)
 
     async def recv(self) -> str | None:
-        """函数契约说明.
-
-        功能: 执行 recv 的异步逻辑,并协调 deliver。
-        参数: self 表示当前实例。
-        契约: 异步调用。 返回 `str | None`。
-        """
 
         if not self.delivered:
             self.delivered = True
@@ -358,35 +211,16 @@ class _Control:
         return None
 
     async def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 异步调用。 返回 `None`。
-        """
 
         return
 
 
 @dataclass(frozen=True, slots=True)
 class _Connector:
-    """类契约说明.
-
-    职责: 保存 _Connector
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: control。 方法: connect。
-    """
 
     control: _Control
 
     async def connect(self, url: str, headers: dict[str, str]) -> _Control:
-        """函数契约说明.
-
-        功能: 执行 connect 的异步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 url: str。 必填。
-        headers: dict[str, str]。 必填。
-        契约: 异步调用。 返回 `_Control`。
-        """
 
         assert url == "wss://orchestrator.example.test/control"
 
@@ -397,58 +231,23 @@ class _Connector:
 
 @dataclass(slots=True)
 class _Playback:
-    """类契约说明.
-
-    职责: 保存 _Playback
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: frames。 方法:
-    write、close_stream、close。
-    """
 
     frames: list[L16PlaybackFrame] = field(default_factory=list)
 
     def write(self, frame: L16PlaybackFrame) -> None:
-        """函数契约说明.
-
-        功能: 执行 write 的同步逻辑,并协调 append。
-        参数: self 表示当前实例。 frame:
-        L16PlaybackFrame。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.frames.append(frame)
 
     def close_stream(self, stream_id: str) -> None:
-        """函数契约说明.
-
-        功能: 执行 close_stream 的同步逻辑,并产出 _。
-        参数: self 表示当前实例。 stream_id: str。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _ = stream_id
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         return
 
 
 def test_fake_local_provider_chain_generates_sound_queued_then_playing() -> None:
-    """函数契约说明.
-
-    功能: 验证 fake local provider chain
-    generates sound queued then playing
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     asyncio.run(_assert_full_chain())
 
@@ -456,14 +255,6 @@ def test_fake_local_provider_chain_generates_sound_queued_then_playing() -> None
 async def _assert_full_chain() -> None:
     # Given: fake-local providers and a real Sound runtime.
 
-    """函数契约说明.
-
-    功能: 执行 _assert_full_chain 的异步逻辑,并协调
-    isinstance, _Binding, _Control,
-    _Playback。
-    参数: 无显式业务参数。
-    契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     with _FakeProvider("success") as endpoint:
         bridge = _bridge(endpoint)
@@ -524,14 +315,6 @@ async def _assert_full_chain() -> None:
 def test_fake_local_provider_non_success_drops_mic_without_raw_fallback() -> None:
     # Given: a fake-local ASR provider that returns a non-2xx response.
 
-    """函数契约说明.
-
-    功能: 验证 fake local provider non
-    success drops mic without raw
-    fallback 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     with _FakeProvider("asr_failure") as endpoint:
         bridge = _bridge(endpoint)
@@ -546,17 +329,6 @@ def test_fake_local_provider_non_success_drops_mic_without_raw_fallback() -> Non
 
 
 def _bridge(endpoint: str) -> OnsiteExplainerBridge:
-    """函数契约说明.
-
-    功能: 执行 _bridge 的同步逻辑,并协调
-    PipelineAdapters,
-    OnsiteExplainerBridge,
-    AdaptiveAgentPolicy,
-    OpenAICompatibleLLMRuntimeAdapter。
-    参数: endpoint: str。 必填。
-    契约: 同步调用。 返回
-    `OnsiteExplainerBridge`。
-    """
 
     adapters = PipelineAdapters(
         mode_policy=AdaptiveAgentPolicy(),
@@ -584,13 +356,6 @@ def _bridge(endpoint: str) -> OnsiteExplainerBridge:
 
 
 def _command(packet: bytes) -> str:
-    """函数契约说明.
-
-    功能: 执行 _command 的同步逻辑,并协调 dumps,
-    from_bytes。
-    参数: packet: bytes。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
 
     return json.dumps(
         {
@@ -621,24 +386,11 @@ def _command(packet: bytes) -> str:
 
 
 def _rtp(payload: bytes) -> bytes:
-    """函数契约说明.
-
-    功能: 执行 _rtp 的同步逻辑,并维持签名契约。
-    参数: payload: bytes。 必填。
-    契约: 同步调用。 返回 `bytes`。
-    """
 
     return b"\x80\x60\x00\x01\x00\x00\x00\x01\x10\x20\x30\x40" + payload
 
 
 def _wav(payload: bytes) -> bytes:
-    """函数契约说明.
-
-    功能: 执行 _wav 的同步逻辑,并协调 BytesIO,
-    getvalue, open, setnchannels。
-    参数: payload: bytes。 必填。
-    契约: 同步调用。 返回 `bytes`。
-    """
 
     output = io.BytesIO()
 

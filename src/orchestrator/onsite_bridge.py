@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.onsite_bridge
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -65,21 +59,8 @@ if TYPE_CHECKING:
 
 
 class PipelineFactory(Protocol):
-    """类契约说明.
-
-    职责: 声明 PipelineFactory
-    协议接口,约束实现方必须提供的行为。
-    契约: 方法: __call__。
-    """
 
     def __call__(self) -> OrchestratorTurnPipeline:
-        """函数契约说明.
-
-        功能: 执行 __call__ 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回
-        `OrchestratorTurnPipeline`。
-        """
         ...
 
 
@@ -89,26 +70,11 @@ type OnsiteOutput = Callable[[StreamKey, CancellationEpoch, bytes], Awaitable[No
 async def _discard_output(
     stream: StreamKey, epoch: CancellationEpoch, packet: bytes
 ) -> None:
-    """函数契约说明.
-
-    功能: 执行 _discard_output 的异步逻辑,并产出 _。
-    参数: stream: StreamKey。 必填。 epoch:
-    CancellationEpoch。 必填。 packet:
-    bytes。 必填。
-    契约: 异步调用。 返回 `None`。
-    """
     _ = (stream, epoch, packet)
 
 
 @dataclass(frozen=True, slots=True)
 class _LegacyTurn:
-    """类契约说明.
-
-    职责: 保存 _LegacyTurn
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: utterance、sequence、segment_i
-    d、stream、epoch、pipeline。
-    """
 
     utterance: bytes
 
@@ -143,16 +109,6 @@ _RTP_HEADER_PREFIX = bytes((RTP_V2_HEADER, RTP_PAYLOAD_TYPE))
 
 @dataclass(slots=True)
 class OnsiteExplainerBridge:
-    """类契约说明.
-
-    职责: 保存 OnsiteExplainerBridge
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: asr、tts、pipeline_factory、voi
-    ce、ref_audio、ref_text。 方法: set_outpu
-    t_callback、set_observability、submit_
-    mic_rtp、_record_partial、invalidate_s
-    tream、aclose_stream。
-    """
 
     asr: AsrAdapter
 
@@ -191,40 +147,14 @@ class OnsiteExplainerBridge:
     observability: OnsiteObservability | None = None
 
     def set_output_callback(self, callback: OnsiteOutput) -> None:
-        """函数契约说明.
-
-        功能: 执行 set_output_callback
-        的同步逻辑,并产出 output。
-        参数: self 表示当前实例。 callback:
-        OnsiteOutput。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self.output = callback
 
     def set_observability(self, observability: OnsiteObservability) -> None:
-        """函数契约说明.
-
-        功能: 执行 set_observability
-        的同步逻辑,并产出 observability。
-        参数: self 表示当前实例。 observability:
-        OnsiteObservability。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self.observability = observability
 
     def submit_mic_rtp(
         self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 submit_mic_rtp 的同步逻辑,并协调
-        setdefault, push, get, submit。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 packet: bytes。
-        必填。 epoch: CancellationEpoch。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
         endpointer = self._input_actors.setdefault(stream, StreamEndpointer(stream))
 
         endpoint: EndpointedUtterance | None = None
@@ -259,15 +189,6 @@ class OnsiteExplainerBridge:
     def _record_partial(
         self, partial: PartialUtterance, epoch: CancellationEpoch
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 _record_partial 的同步逻辑,并协调
-        correlation, str, record。
-        参数: self 表示当前实例。 partial:
-        PartialUtterance。 必填。 epoch:
-        CancellationEpoch。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         observability = self.observability
 
         if observability is not None:
@@ -281,15 +202,6 @@ class OnsiteExplainerBridge:
     def invalidate_stream(
         self, stream: StreamKey, next_epoch: CancellationEpoch
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 invalidate_stream
-        的同步逻辑,并协调 pop, invalidate。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 next_epoch:
-        CancellationEpoch。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         _ = self._input_actors.pop(stream, None)
 
         actor = self._stream_actors.pop(stream, None)
@@ -300,17 +212,6 @@ class OnsiteExplainerBridge:
             self._closing_actors[stream] = actor
 
     async def aclose_stream(self, stream: StreamKey) -> None:
-        """函数契约说明.
-
-        功能: 执行 aclose_stream 的异步逻辑,并协调
-        pop, invalidate,
-        CancellationEpoch,
-        wait_quiescent。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         actor = self._stream_actors.pop(stream, None)
 
         if actor is not None:
@@ -324,15 +225,6 @@ class OnsiteExplainerBridge:
             await closing.wait_quiescent()
 
     async def wait_quiescent(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 wait_quiescent 的异步逻辑,并协调
-        tuple, values, items,
-        wait_quiescent。
-        参数: self 表示当前实例。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         for actor in tuple(self._stream_actors.values()):
             await actor.wait_quiescent()
 
@@ -344,20 +236,6 @@ class OnsiteExplainerBridge:
     async def ingest_mic_rtp(
         self, stream: StreamKey | bytes, packet: bytes = b""
     ) -> bytes | tuple[bytes, ...] | None:
-        """函数契约说明.
-
-        功能: 执行 ingest_mic_rtp 的异步逻辑,并协调
-        isinstance,
-        _ingest_legacy_batch,
-        _ingest_legacy_keyed_batch,
-        to_thread。
-        参数: self 表示当前实例。 stream:
-        StreamKey | bytes。 必填。 packet:
-        bytes。 可省略。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `bytes | tuple[bytes, ...] |
-        None`。
-        """
         if isinstance(stream, bytes):
             return await self._ingest_legacy_batch(stream)
 
@@ -378,16 +256,6 @@ class OnsiteExplainerBridge:
             )
 
     def disconnect_stream(self, stream: StreamKey) -> None:
-        """函数契约说明.
-
-        功能: 执行 disconnect_stream
-        的同步逻辑,并协调 get,
-        invalidate_stream, pop,
-        CancellationEpoch。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         actor = self._stream_actors.get(stream)
 
         next_epoch = (
@@ -405,19 +273,6 @@ class OnsiteExplainerBridge:
     async def _ingest_legacy_keyed_batch(
         self, stream: StreamKey, packet: bytes
     ) -> bytes | tuple[bytes, ...] | None:
-        """函数契约说明.
-
-        功能: 执行
-        _ingest_legacy_keyed_batch
-        的异步逻辑,并协调 setdefault, append,
-        join, clear。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 packet: bytes。
-        必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `bytes | tuple[bytes, ...] |
-        None`。
-        """
         frames = self._legacy_keyed_frames.setdefault(stream, [])
 
         frames.append(packet[RTP_HEADER_BYTES:])
@@ -451,17 +306,6 @@ class OnsiteExplainerBridge:
     async def _ingest_legacy_batch(
         self, packet: bytes
     ) -> bytes | tuple[bytes, ...] | None:
-        """函数契约说明.
-
-        功能: 执行 _ingest_legacy_batch
-        的异步逻辑,并协调 append, join, clear,
-        len。
-        参数: self 表示当前实例。 packet: bytes。
-        必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `bytes | tuple[bytes, ...] |
-        None`。
-        """
         self._frames.append(packet[RTP_HEADER_BYTES:])
 
         if len(self._frames) < self.frames_per_utterance:
@@ -489,17 +333,6 @@ class OnsiteExplainerBridge:
             )
 
     def _process_utterance(self, work: _LegacyTurn) -> bytes | tuple[bytes, ...] | None:
-        """函数契约说明.
-
-        功能: 执行 _process_utterance
-        的同步逻辑,并协调 CancellationToken,
-        transcribe_endpoint, answer,
-        strip。
-        参数: self 表示当前实例。 work:
-        _LegacyTurn。 必填。
-        契约: 同步调用。 返回 `bytes |
-        tuple[bytes, ...] | None`。
-        """
         cancellation = CancellationToken()
 
         event = self.transcribe_endpoint(
@@ -539,20 +372,6 @@ class OnsiteExplainerBridge:
         segment_id: str | None = None,
         cancellation: CancellationToken | None = None,
     ) -> ASRAudienceEvent | None:
-        """函数契约说明.
-
-        功能: 执行 transcribe_endpoint
-        的同步逻辑,并协调 wav_from_l16,
-        isinstance, pcm16le_from_l16,
-        transcribe。
-        参数: self 表示当前实例。 utterance:
-        bytes。 必填。 sequence: int。 必填。
-        segment_id: str | None。 可省略。
-        cancellation: CancellationToken
-        | None。 可省略。
-        契约: 同步调用。 返回 `ASRAudienceEvent |
-        None`。
-        """
         audio = wav_from_l16(utterance)
 
         filename = "onsite-l16.wav"
@@ -581,19 +400,6 @@ class OnsiteExplainerBridge:
         event: ASRAudienceEvent,
         cancellation: CancellationToken,
     ) -> TurnResult | None:
-        """函数契约说明.
-
-        功能: 执行 answer 的同步逻辑,并协调
-        accept_audience_input,
-        process_next_turn。
-        参数: self 表示当前实例。 pipeline:
-        OrchestratorTurnPipeline。 必填。
-        event: ASRAudienceEvent。 必填。
-        cancellation: CancellationToken。
-        必填。
-        契约: 同步调用。 返回 `TurnResult |
-        None`。
-        """
         if not pipeline.accept_audience_input(event):
             return None
 
@@ -606,18 +412,6 @@ class OnsiteExplainerBridge:
     def synthesize(
         self, text: str, cancellation: CancellationToken
     ) -> tuple[Pcm16leChunk, ...] | None:
-        """函数契约说明.
-
-        功能: 执行 synthesize 的同步逻辑,并协调
-        isinstance, synthesize,
-        l16_from_wav, join。
-        参数: self 表示当前实例。 text: str。 必填。
-        cancellation: CancellationToken。
-        必填。
-        契约: 同步调用。 返回
-        `tuple[Pcm16leChunk, ...] |
-        None`。
-        """
         try:
             if isinstance(self.tts, StreamingTtsAdapter):
                 return self.tts.stream_pcm16le(
@@ -653,18 +447,6 @@ class OnsiteExplainerBridge:
         turn: TurnResult,
         chunks: tuple[Pcm16leChunk, ...],
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 complete 的同步逻辑,并协调
-        complete_synthesis,
-        MockSynthesisResult,
-        AudioMetadata, sum。
-        参数: self 表示当前实例。 pipeline:
-        OrchestratorTurnPipeline。 必填。
-        turn: TurnResult。 必填。 chunks:
-        tuple[Pcm16leChunk, ...]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         _ = pipeline.complete_synthesis(
             MockSynthesisResult(
                 turn_id=turn.turn_id,
@@ -691,19 +473,6 @@ class OnsiteExplainerBridge:
         stream: StreamKey,
         cancellation_epoch: CancellationEpoch,
     ) -> tuple[bytes, ...]:
-        """函数契约说明.
-
-        功能: 执行 _packets 的同步逻辑,并协调
-        TtsPcmRtpPacketizer, tuple,
-        finish, push。
-        参数: self 表示当前实例。 chunks:
-        tuple[Pcm16leChunk, ...]。 必填。
-        stream: StreamKey。 必填。
-        cancellation_epoch:
-        CancellationEpoch。 必填。
-        契约: 同步调用。 返回 `tuple[bytes,
-        ...]`。
-        """
         packetizer = TtsPcmRtpPacketizer(
             stream=stream,
             cancellation_epoch=cancellation_epoch,
@@ -716,14 +485,6 @@ class OnsiteExplainerBridge:
 
 @dataclass(frozen=True, slots=True)
 class _BridgeStages(OnsiteStages):
-    """类契约说明.
-
-    职责: 保存 _BridgeStages
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: bridge、pipeline。 方法: transcr
-    ibe、answer、synthesize、complete、outpu
-    t。
-    """
 
     bridge: OnsiteExplainerBridge
 
@@ -733,17 +494,6 @@ class _BridgeStages(OnsiteStages):
     def transcribe(
         self, endpoint: EndpointedUtterance, cancellation: CancellationToken
     ) -> ASRAudienceEvent | None:
-        """函数契约说明.
-
-        功能: 执行 transcribe 的同步逻辑,并协调
-        transcribe_endpoint, str, int。
-        参数: self 表示当前实例。 endpoint:
-        EndpointedUtterance。 必填。
-        cancellation: CancellationToken。
-        必填。
-        契约: 同步调用。 返回 `ASRAudienceEvent |
-        None`。
-        """
         return self.bridge.transcribe_endpoint(
             endpoint.payload,
             int(endpoint.cancellation_epoch) + 1,
@@ -755,62 +505,22 @@ class _BridgeStages(OnsiteStages):
     def answer(
         self, event: ASRAudienceEvent, cancellation: CancellationToken
     ) -> TurnResult | None:
-        """函数契约说明.
-
-        功能: 执行 answer 的同步逻辑,并协调 answer。
-        参数: self 表示当前实例。 event:
-        ASRAudienceEvent。 必填。
-        cancellation: CancellationToken。
-        必填。
-        契约: 同步调用。 返回 `TurnResult |
-        None`。
-        """
         return self.bridge.answer(self.pipeline, event, cancellation)
 
     @override
     def synthesize(
         self, turn: TurnResult, cancellation: CancellationToken
     ) -> tuple[Pcm16leChunk, ...] | None:
-        """函数契约说明.
-
-        功能: 执行 synthesize 的同步逻辑,并协调
-        synthesize。
-        参数: self 表示当前实例。 turn:
-        TurnResult。 必填。 cancellation:
-        CancellationToken。 必填。
-        契约: 同步调用。 返回
-        `tuple[Pcm16leChunk, ...] |
-        None`。
-        """
         return self.bridge.synthesize(turn.answer_text, cancellation)
 
     @override
     def complete(self, turn: TurnResult, chunks: tuple[Pcm16leChunk, ...]) -> None:
-        """函数契约说明.
-
-        功能: 执行 complete 的同步逻辑,并协调
-        complete。
-        参数: self 表示当前实例。 turn:
-        TurnResult。 必填。 chunks:
-        tuple[Pcm16leChunk, ...]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self.bridge.complete(self.pipeline, turn, chunks)
 
     @override
     async def output(
         self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 output 的异步逻辑,并协调 output。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 epoch:
-        CancellationEpoch。 必填。 packet:
-        bytes。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
         await self.bridge.output(stream, epoch, packet)
 
 
@@ -821,16 +531,6 @@ def build_onsite_bridge(
     ref_audio: str,
     ref_text: str,
 ) -> OnsiteExplainerBridge:
-    """函数契约说明.
-
-    功能: 构造协议对象、配置或测试夹具。
-    参数: config: OrchestratorConfig。 必填。
-    voice: str。 必填。 ref_audio: str。 必填。
-    ref_text: str。 必填。
-    契约: 同步调用。 返回
-    `OnsiteExplainerBridge`。 可能抛出
-    OnsiteBridgeConfigError。
-    """
     if (
         config.asr_provider not in {"openai_compatible", "funasr"}
         or config.tts_provider != "vllm_omni"
@@ -867,15 +567,6 @@ def build_onsite_bridge(
     pipeline_config = PipelineConfig(1, "turn-onsite", "segment-onsite")
 
     def pipeline_factory() -> OrchestratorTurnPipeline:
-        """函数契约说明.
-
-        功能: 执行 pipeline_factory
-        的同步逻辑,并协调
-        OrchestratorTurnPipeline。
-        参数: 无显式业务参数。
-        契约: 同步调用。 返回
-        `OrchestratorTurnPipeline`。
-        """
         return OrchestratorTurnPipeline(adapters=adapters, config=pipeline_config)
 
     asr = OpenAICompatibleASRAdapter(

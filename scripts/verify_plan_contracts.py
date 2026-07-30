@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-"""模块契约说明.
-
-职责: 提供命令行脚本的参数处理、验证或运维流程。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -20,12 +15,6 @@ CHINESE: Final = re.compile(r"[\u4e00-\u9fff]")
 
 
 def parse_args() -> argparse.Namespace:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `argparse.Namespace`。
-    """
     parser = argparse.ArgumentParser(description="Verify final-wave plan contracts.")
 
     _ = parser.add_argument("--plan", required=True, type=Path)
@@ -42,12 +31,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """函数契约说明.
-
-    功能: 执行命令行或服务入口流程并返回进程级结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `int`。
-    """
     args = parse_args()
 
     root = args.root.resolve()
@@ -84,14 +67,6 @@ def main() -> int:
 
 
 def chinese_prompt_errors(root: Path) -> list[str]:
-    """函数契约说明.
-
-    功能: 执行 chinese_prompt_errors
-    的同步逻辑,并协调 tuple, rglob, search,
-    read_text。
-    参数: root: Path。 必填。
-    契约: 同步调用。 返回 `list[str]`。
-    """
     prompt_files = tuple((root / "src").rglob("*prompt*.py"))
 
     if not prompt_files:
@@ -105,13 +80,6 @@ def chinese_prompt_errors(root: Path) -> list[str]:
 
 
 def raw_mic_errors(plan: str, root: Path) -> list[str]:
-    """函数契约说明.
-
-    功能: 执行 raw_mic_errors 的同步逻辑,并协调
-    compile, extend, lower, append。
-    参数: plan: str。 必填。 root: Path。 必填。
-    契约: 同步调用。 返回 `list[str]`。
-    """
     errors: list[str] = []
 
     if "no raw mic rtp to sound" not in plan.lower():
@@ -130,14 +98,6 @@ def raw_mic_errors(plan: str, root: Path) -> list[str]:
 
 
 def task_snapshot_errors(plan: str, root: Path) -> list[str]:
-    """函数契约说明.
-
-    功能: 执行 task_snapshot_errors
-    的同步逻辑,并协调 lower, append, is_file,
-    read_text。
-    参数: plan: str。 必填。 root: Path。 必填。
-    契约: 同步调用。 返回 `list[str]`。
-    """
     errors: list[str] = []
 
     if "snapshot" not in plan.lower():
@@ -154,14 +114,6 @@ def task_snapshot_errors(plan: str, root: Path) -> list[str]:
 
 
 def write_evidence(root: Path, errors: list[str]) -> None:
-    """函数契约说明.
-
-    功能: 执行 write_evidence 的同步逻辑,并协调
-    mkdir, write_text, dumps。
-    参数: root: Path。 必填。 errors:
-    list[str]。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
     path = root.parent / ".omo" / "evidence" / "f1-plan-compliance.json"
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -174,13 +126,6 @@ def write_evidence(root: Path, errors: list[str]) -> None:
 
 
 def workspace_path(path: Path) -> Path:
-    """函数契约说明.
-
-    功能: 执行 workspace_path 的同步逻辑,并协调
-    is_absolute。
-    参数: path: Path。 必填。
-    契约: 同步调用。 返回 `Path`。
-    """
     if not path.is_absolute() and path.parts[:1] == (".omo",):
         return ROOT.parent / path
 

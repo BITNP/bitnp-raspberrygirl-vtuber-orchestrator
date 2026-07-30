@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from dataclasses import replace
 
@@ -25,13 +20,6 @@ from orchestrator.task_registry import (
 def test_reflex_runs_before_queued_lower_priority_lanes() -> None:
     # Given: queued work in every lane plus a reflex task submitted last.
 
-    """函数契约说明.
-
-    功能: 验证 reflex runs before queued
-    lower priority lanes 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     registry = _registry()
 
@@ -56,14 +44,6 @@ def test_reflex_runs_before_queued_lower_priority_lanes() -> None:
 def test_executor_bounds_each_lane_and_expires_work_before_execution() -> None:
     # Given: one-slot lanes and a deadline already elapsed on an interactive task.
 
-    """函数契约说明.
-
-    功能: 验证 executor bounds each lane and
-    expires work before execution
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     registry = _registry()
 
@@ -99,14 +79,6 @@ def test_executor_bounds_each_lane_and_expires_work_before_execution() -> None:
 def test_executor_skips_superseded_task_before_worker_selection() -> None:
     # Given: a queued task replaced by work for a newer turn.
 
-    """函数契约说明.
-
-    功能: 验证 executor skips superseded
-    task before worker selection
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     registry = _registry()
 
@@ -137,14 +109,6 @@ def test_executor_skips_superseded_task_before_worker_selection() -> None:
 
 
 def _registry() -> TaskRegistry:
-    """函数契约说明.
-
-    功能: 执行 _registry 的同步逻辑,并协调
-    TaskRegistry, SessionId,
-    SchedulerTaskConfig, frozenset。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `TaskRegistry`。
-    """
 
     return TaskRegistry(
         session_id=SessionId("session-1"),
@@ -153,15 +117,6 @@ def _registry() -> TaskRegistry:
 
 
 def _request(kind: TaskKind, index: int, *, deadline_ms: int = 100) -> TaskRequest:
-    """函数契约说明.
-
-    功能: 执行 _request 的同步逻辑,并协调
-    TaskRequest, TaskId, SessionId,
-    TurnId。
-    参数: kind: TaskKind。 必填。 index: int。
-    必填。 deadline_ms: int。 可省略。
-    契约: 同步调用。 返回 `TaskRequest`。
-    """
 
     return TaskRequest(
         task_id=TaskId(f"task-{index}"),
@@ -177,13 +132,5 @@ def _request(kind: TaskKind, index: int, *, deadline_ms: int = 100) -> TaskReque
 
 
 def _admit(registry: TaskRegistry, request: TaskRequest) -> None:
-    """函数契约说明.
-
-    功能: 执行 _admit 的同步逻辑,并协调 isinstance,
-    register。
-    参数: registry: TaskRegistry。 必填。
-    request: TaskRequest。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     assert isinstance(registry.register(request), TaskRegistrationAccepted)

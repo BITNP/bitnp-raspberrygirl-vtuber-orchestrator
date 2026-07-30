@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from pathlib import Path
 
@@ -14,14 +9,6 @@ from orchestrator.server import OrchestratorServer
 
 
 def test_real_provider_readiness_reports_missing_llm_key_without_crashing() -> None:
-    """函数契约说明.
-
-    功能: 验证 real provider readiness
-    reports missing llm key without
-    crashing 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     config = load_config_from_env(
         {
@@ -40,14 +27,6 @@ def test_real_provider_readiness_reports_missing_llm_key_without_crashing() -> N
 
 
 def test_real_provider_readiness_reports_invalid_token_without_crashing() -> None:
-    """函数契约说明.
-
-    功能: 验证 real provider readiness
-    reports invalid token without
-    crashing 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     config = load_config_from_env(
         {
@@ -69,13 +48,6 @@ def test_real_provider_readiness_reports_invalid_token_without_crashing() -> Non
 
 
 def test_observability_helpers_emit_json_logs_and_metrics() -> None:
-    """函数契约说明.
-
-    功能: 验证 observability helpers emit
-    json logs and metrics 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     config = load_config_from_env({})
 
@@ -105,14 +77,6 @@ def test_observability_helpers_emit_json_logs_and_metrics() -> None:
 def test_authenticated_readiness_rejects_wrong_token_without_leaking_state() -> None:
     # Given: a server whose readiness surface is protected by a LAN token.
 
-    """函数契约说明.
-
-    功能: 验证 authenticated readiness
-    rejects wrong token without leaking
-    state 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     config = load_config_from_env({"TRUSTED_LAN_TOKEN": "readiness-token-123"})
 
@@ -128,13 +92,6 @@ def test_authenticated_readiness_rejects_wrong_token_without_leaking_state() -> 
 
 
 def test_env_examples_do_not_commit_real_secrets() -> None:
-    """函数契约说明.
-
-    功能: 验证 env examples do not commit
-    real secrets 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     repo_root = Path(__file__).resolve().parents[1]
 

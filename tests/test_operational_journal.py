@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -12,13 +7,6 @@ from orchestrator.operational_journal import OperationalJournal, OperationalReco
 def test_journal_redacts_correlation_and_sensitive_sentinels() -> None:
     # Given: a complete lifecycle record with identifiers adjacent to sensitive values.
 
-    """函数契约说明.
-
-    功能: 验证 journal redacts correlation
-    and sensitive sentinels 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     journal = OperationalJournal()
 
@@ -69,14 +57,6 @@ def test_journal_redacts_correlation_and_sensitive_sentinels() -> None:
 def test_journal_preserves_redacted_task_correlation_across_lifecycle() -> None:
     # Given: accepted and rejected lifecycle transitions for one task.
 
-    """函数契约说明.
-
-    功能: 验证 journal preserves redacted
-    task correlation across lifecycle
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     journal = OperationalJournal()
 

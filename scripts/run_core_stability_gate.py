@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-"""模块契约说明.
-
-职责: 提供命令行脚本的参数处理、验证或运维流程。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -44,11 +39,6 @@ REPOSITORIES: Final = (
 
 @dataclass(frozen=True, slots=True)
 class Command:
-    """类契约说明.
-
-    职责: 保存 Command 不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: repository、arguments。
-    """
 
     repository: str
 
@@ -57,13 +47,6 @@ class Command:
 
 @dataclass(frozen=True, slots=True)
 class GateRequest:
-    """类契约说明.
-
-    职责: 保存 GateRequest
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: workspace、evidence、plan、time
-    out_seconds。
-    """
 
     workspace: Path
 
@@ -75,12 +58,6 @@ class GateRequest:
 
 
 def parse_args() -> argparse.Namespace:
-    """函数契约说明.
-
-    功能: 从边界输入解析类型化值。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `argparse.Namespace`。
-    """
     parser = argparse.ArgumentParser(description="Run the Task 8 core stability gate.")
 
     _ = parser.add_argument("--workspace", type=Path, default=WORKSPACE)
@@ -95,12 +72,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(request: GateRequest) -> int:
-    """函数契约说明.
-
-    功能: 运行流程并协调其依赖步骤。
-    参数: request: GateRequest。 必填。
-    契约: 同步调用。 返回 `int`。
-    """
     certificate = request.evidence / "task-8-core-loop-before-frontend.json"
 
     certificate.unlink(missing_ok=True)
@@ -145,16 +116,6 @@ def run(request: GateRequest) -> int:
 
 
 def _run_matrix(request: GateRequest, run_number: int, baseline: str) -> Path:
-    """函数契约说明.
-
-    功能: 执行 _run_matrix 的同步逻辑,并协调 exists,
-    mkdir, write_text, rmtree。
-    参数: request: GateRequest。 必填。
-    run_number: int。 必填。 baseline: str。
-    必填。
-    契约: 同步调用。 返回 `Path`。 可能抛出
-    RuntimeError。
-    """
     artifact = request.evidence / f"core-stability-run-{run_number}"
 
     if artifact.exists():
@@ -190,15 +151,6 @@ def _run_matrix(request: GateRequest, run_number: int, baseline: str) -> Path:
 
 
 def _copy_siblings(source: Path, destination: Path) -> None:
-    """函数契约说明.
-
-    功能: 执行 _copy_siblings 的同步逻辑,并协调
-    ignore_patterns, mkdir, copy2,
-    copytree。
-    参数: source: Path。 必填。 destination:
-    Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
     ignored = shutil.ignore_patterns(
         ".venv", "__pycache__", ".pytest_cache", ".mypy_cache"
     )
@@ -220,16 +172,6 @@ def _copy_siblings(source: Path, destination: Path) -> None:
 def _execute_matrix(
     root: Path, artifact: Path, timeout_seconds: int
 ) -> list[dict[str, str | int]]:
-    """函数契约说明.
-
-    功能: 执行 _execute_matrix 的同步逻辑,并协调
-    enumerate, _commands, write_text,
-    append。
-    参数: root: Path。 必填。 artifact: Path。
-    必填。 timeout_seconds: int。 必填。
-    契约: 同步调用。 返回 `list[dict[str, str |
-    int]]`。
-    """
     records: list[dict[str, str | int]] = []
 
     for index, command in enumerate(_commands()):
@@ -285,12 +227,6 @@ def _execute_matrix(
 
 
 def _commands() -> tuple[Command, ...]:
-    """函数契约说明.
-
-    功能: 执行 _commands 的同步逻辑,并协调 Command。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `tuple[Command, ...]`。
-    """
     orchestrator = "bitnp-raspberrygirl-vtuber-orchestrator"
 
     return (
@@ -337,13 +273,6 @@ def _commands() -> tuple[Command, ...]:
 
 
 def _frontend_baseline(workspace: Path) -> str:
-    """函数契约说明.
-
-    功能: 执行 _frontend_baseline 的同步逻辑,并协调
-    run, strip。
-    参数: workspace: Path。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=workspace / "bitnp-raspberrygirl-vtuber-frontend",
@@ -356,13 +285,6 @@ def _frontend_baseline(workspace: Path) -> str:
 
 
 def _source_digest(workspace: Path) -> str:
-    """函数契约说明.
-
-    功能: 执行 _source_digest 的同步逻辑,并协调
-    sha256, hexdigest, sorted, rglob。
-    参数: workspace: Path。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     digest = hashlib.sha256()
 
     ignored = {".git", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache"}
@@ -378,35 +300,14 @@ def _source_digest(workspace: Path) -> str:
 
 
 def _sha256(path: Path) -> str:
-    """函数契约说明.
-
-    功能: 执行 _sha256 的同步逻辑,并协调 hexdigest,
-    sha256, read_bytes。
-    参数: path: Path。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _sha256_text(value: str) -> str:
-    """函数契约说明.
-
-    功能: 执行 _sha256_text 的同步逻辑,并协调
-    hexdigest, sha256, encode。
-    参数: value: str。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     return hashlib.sha256(value.encode()).hexdigest()
 
 
 def _stable_manifest(path: Path) -> str:
-    """函数契约说明.
-
-    功能: 执行 _stable_manifest 的同步逻辑,并协调
-    loads, dumps, read_text。
-    参数: path: Path。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     for record in payload["records"]:
@@ -418,26 +319,12 @@ def _stable_manifest(path: Path) -> str:
 
 
 def _stable_output(value: str, root: Path) -> str:
-    """函数契约说明.
-
-    功能: 执行 _stable_output 的同步逻辑,并协调
-    replace, sub, str。
-    参数: value: str。 必填。 root: Path。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     root_normalized = value.replace(str(root), "<disposable-sibling-root>")
 
     return re.sub(r"\b\d+(?:\.\d+)?(?:ms|s)\b", "<duration>", root_normalized)
 
 
 def _timeout_text(value: str | bytes | None) -> str:
-    """函数契约说明.
-
-    功能: 执行 _timeout_text 的同步逻辑,并协调
-    decode。
-    参数: value: str | bytes | None。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     match value:
         case str() as text:
             return text

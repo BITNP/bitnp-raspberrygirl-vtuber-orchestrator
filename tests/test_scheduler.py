@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from dataclasses import asdict
 
@@ -25,13 +20,6 @@ from orchestrator.sessions import (
 def test_start_turn_rejects_a_stale_snapshot_revision() -> None:
     # Given: a scheduler whose initial revision has already accepted one event.
 
-    """函数契约说明.
-
-    功能: 验证 start turn rejects a stale
-    snapshot revision 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     scheduler = SessionScheduler(
         session_id=SessionId("session-local"),
@@ -87,14 +75,6 @@ def test_start_turn_rejects_a_stale_snapshot_revision() -> None:
 def test_accepted_events_preserve_correlation_and_allocate_monotonic_turns() -> None:
     # Given: an empty local scheduler and two correlated audience events.
 
-    """函数契约说明.
-
-    功能: 验证 accepted events preserve
-    correlation and allocate monotonic
-    turns 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     session_id = SessionId("session-local")
 
@@ -180,13 +160,6 @@ def test_accepted_events_preserve_correlation_and_allocate_monotonic_turns() -> 
 def test_start_turn_rejects_events_for_another_session() -> None:
     # Given: a scheduler with an empty session-local history.
 
-    """函数契约说明.
-
-    功能: 验证 start turn rejects events for
-    another session 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     scheduler = SessionScheduler(
         session_id=SessionId("session-local"),

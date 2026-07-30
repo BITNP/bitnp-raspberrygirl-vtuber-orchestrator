@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 提供命令行脚本的参数处理、验证或运维流程。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -23,12 +18,6 @@ from orchestrator.lecturer_script import LectureStep, parse_lecture_script  # no
 
 @dataclass(frozen=True, slots=True)
 class DemoStepRun:
-    """类契约说明.
-
-    职责: 保存 DemoStepRun
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: index、step。
-    """
 
     index: int
 
@@ -36,12 +25,6 @@ class DemoStepRun:
 
 
 def run_demo(script_path: Path) -> JsonObject:
-    """函数契约说明.
-
-    功能: 运行流程并协调其依赖步骤。
-    参数: script_path: Path。 必填。
-    契约: 同步调用。 返回 `JsonObject`。
-    """
     lecture = parse_lecture_script(script_path)
 
     events: list[JsonObject] = [
@@ -70,14 +53,6 @@ def run_demo(script_path: Path) -> JsonObject:
 
 
 def write_demo_evidence(script_path: Path, evidence_path: Path) -> None:
-    """函数契约说明.
-
-    功能: 执行 write_demo_evidence 的同步逻辑,并协调
-    mkdir, write_text, dumps, run_demo。
-    参数: script_path: Path。 必填。
-    evidence_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
 
     evidence_path.write_text(
@@ -91,15 +66,6 @@ def _append_step(
     edges: list[JsonObject],
     run: DemoStepRun,
 ) -> None:
-    """函数契约说明.
-
-    功能: 执行 _append_step 的同步逻辑,并协调
-    extend, len, append, event。
-    参数: events: list[JsonObject]。 必填。
-    edges: list[JsonObject]。 必填。 run:
-    DemoStepRun。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
     turn_id = f"turn-demo-{run.index:04d}"
 
     segment_id = f"seg-demo-{run.index:04d}"

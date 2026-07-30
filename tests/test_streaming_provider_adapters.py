@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -41,14 +36,6 @@ _StreamMode = Literal["asr", "llm", "malformed", "error", "block", "final_block"
 
 @dataclass(slots=True)
 class _FakeStreamingServer:
-    """类契约说明.
-
-    职责: 保存 _FakeStreamingServer
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: mode、entered_block、release_b
-    lock、_server、_thread。 方法:
-    __post_init__、__enter__、__exit__。
-    """
 
     mode: _StreamMode
 
@@ -61,13 +48,6 @@ class _FakeStreamingServer:
     _thread: threading.Thread = field(init=False)
 
     def __post_init__(self) -> None:
-        """函数契约说明.
-
-        功能: 初始化 _FakeStreamingServer
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _StreamingHandler.mode = self.mode
 
@@ -80,28 +60,12 @@ class _FakeStreamingServer:
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     def __enter__(self) -> str:
-        """函数契约说明.
-
-        功能: 执行 __enter__ 的同步逻辑,并协调
-        start。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `str`。
-        """
 
         self._thread.start()
 
         return f"http://127.0.0.1:{self._server.server_port}/v1"
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        """函数契约说明.
-
-        功能: 执行 __exit__ 的同步逻辑,并协调 set,
-        shutdown, join, server_close。
-        参数: self 表示当前实例。 exc_type:
-        object。 必填。 exc: object。 必填。
-        traceback: object。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.release_block.set()
 
@@ -113,14 +77,6 @@ class _FakeStreamingServer:
 
 
 class _StreamingHandler(BaseHTTPRequestHandler):
-    """类契约说明.
-
-    职责: 定义 _StreamingHandler
-    的状态、行为和对外协作边界。
-    契约: 字段:
-    mode、entered_block、release_block。
-    方法: do_POST、_sse、log_message。
-    """
 
     mode: ClassVar[_StreamMode]
 
@@ -129,13 +85,6 @@ class _StreamingHandler(BaseHTTPRequestHandler):
     release_block: ClassVar[threading.Event]
 
     def do_POST(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 do_POST 的同步逻辑,并协调 read,
-        int, _sse, send_response。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _ = self.rfile.read(int(self.headers["content-length"]))
 
@@ -197,15 +146,6 @@ class _StreamingHandler(BaseHTTPRequestHandler):
                 _ = self.wfile.write(b'{"text":"stale final"}')
 
     def _sse(self, chunks: tuple[str, ...]) -> None:
-        """函数契约说明.
-
-        功能: 执行 _sse 的同步逻辑,并协调
-        send_response, send_header,
-        end_headers, write。
-        参数: self 表示当前实例。 chunks:
-        tuple[str, ...]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.send_response(200)
 
@@ -220,59 +160,24 @@ class _StreamingHandler(BaseHTTPRequestHandler):
 
     @override
     def log_message(self, format: str, *args: object) -> None:
-        """函数契约说明.
-
-        功能: 执行 log_message 的同步逻辑,并产出 _。
-        参数: self 表示当前实例。 format: str。
-        必填。 *args: object。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _ = (format, args)
 
 
 @final
 class _RaceSocket:
-    """类契约说明.
-
-    职责: 定义 _RaceSocket 的状态、行为和对外协作边界。
-    契约: 方法: settimeout。
-    """
 
     def settimeout(self, _seconds: float) -> None:
-        """函数契约说明.
-
-        功能: 执行 settimeout 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 _seconds:
-        float。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         return
 
 
 @final
 class _ResponseCloseRace:
-    """类契约说明.
-
-    职责: 定义 _ResponseCloseRace
-    的状态、行为和对外协作边界。
-    契约: 字段: status。 方法:
-    __init__、read、close。
-    """
 
     status: int = 200
 
     def __init__(self, read_error: Exception | None = None) -> None:
-        """函数契约说明.
-
-        功能: 初始化 _ResponseCloseRace
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。 read_error:
-        Exception | None。 可省略。
-        契约: 同步调用。 返回 `None`。 可能抛出
-        AttributeError。
-        """
 
         self.entered: threading.Event = threading.Event()
 
@@ -283,12 +188,6 @@ class _ResponseCloseRace:
         self._read_error = AttributeError() if read_error is None else read_error
 
     def read(self) -> bytes:
-        """函数契约说明.
-
-        功能: 执行 read 的同步逻辑,并协调 set, wait。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `bytes`。
-        """
 
         self.entered.set()
 
@@ -297,12 +196,6 @@ class _ResponseCloseRace:
         raise self._read_error
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并协调 set。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.closed = True
 
@@ -311,23 +204,8 @@ class _ResponseCloseRace:
 
 @final
 class _RaceConnection:
-    """类契约说明.
-
-    职责: 定义 _RaceConnection
-    的状态、行为和对外协作边界。
-    契约: 方法:
-    __init__、request、getresponse、close。
-    """
 
     def __init__(self, response: _ResponseCloseRace) -> None:
-        """函数契约说明.
-
-        功能: 初始化 _RaceConnection
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。 response:
-        _ResponseCloseRace。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.sock: _RaceSocket = _RaceSocket()
 
@@ -338,48 +216,19 @@ class _RaceConnection:
     def request(
         self, _method: str, _path: str, *, body: bytes, headers: dict[str, str]
     ) -> None:
-        """函数契约说明.
-
-        功能: 执行 request 的同步逻辑,并产出 _。
-        参数: self 表示当前实例。 _method: str。
-        必填。 _path: str。 必填。 body: bytes。
-        必填。 headers: dict[str, str]。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         _ = (body, headers)
 
     def getresponse(self) -> _ResponseCloseRace:
-        """函数契约说明.
-
-        功能: 执行 getresponse
-        的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回
-        `_ResponseCloseRace`。
-        """
 
         return self._response
 
     def close(self) -> None:
-        """函数契约说明.
-
-        功能: 执行 close 的同步逻辑,并产出 closed。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.closed = True
 
 
 def _deadlines(*, read_seconds: float = 1.0) -> ProviderDeadlines:
-    """函数契约说明.
-
-    功能: 执行 _deadlines 的同步逻辑,并协调
-    ProviderDeadlines。
-    参数: read_seconds: float。 可省略。
-    契约: 同步调用。 返回 `ProviderDeadlines`。
-    """
 
     return ProviderDeadlines(
         connect_seconds=1.0,
@@ -391,14 +240,6 @@ def _deadlines(*, read_seconds: float = 1.0) -> ProviderDeadlines:
 def test_streaming_asr_normalizes_partial_then_final_events() -> None:
     # Given: a fake OpenAI-compatible ASR server producing provider SSE events.
 
-    """函数契约说明.
-
-    功能: 验证 streaming asr normalizes
-    partial then final events
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     server = _FakeStreamingServer(mode="asr")
 
@@ -425,14 +266,6 @@ def test_streaming_asr_normalizes_partial_then_final_events() -> None:
 def test_streaming_llm_emits_sse_tokens_in_provider_order() -> None:
     # Given: a fake chat-completions stream with two ordered deltas.
 
-    """函数契约说明.
-
-    功能: 验证 streaming llm emits sse
-    tokens in provider order
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     server = _FakeStreamingServer(mode="llm")
 
@@ -461,13 +294,6 @@ def test_streaming_llm_emits_sse_tokens_in_provider_order() -> None:
 def test_final_only_asr_does_not_claim_streaming() -> None:
     # Given: the default OpenAI-compatible ASR adapter capability.
 
-    """函数契约说明.
-
-    功能: 验证 final only asr does not claim
-    streaming 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     adapter = OpenAICompatibleASRAdapter(
         endpoint="http://127.0.0.1:8000/v1",
@@ -486,14 +312,6 @@ def test_final_only_asr_does_not_claim_streaming() -> None:
 def test_final_only_asr_cancellation_closes_in_flight_response_without_final() -> None:
     # Given: an ASR final response blocked before it can return stale transcript text.
 
-    """函数契约说明.
-
-    功能: 验证 final only asr cancellation
-    closes in flight response without
-    final 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     server = _FakeStreamingServer(mode="final_block")
 
@@ -544,15 +362,6 @@ def test_final_only_asr_cancellation_absorbs_response_close_attribute_race(
 ) -> None:
     # Given: a final-only response whose concurrent close corrupts its read buffer.
 
-    """函数契约说明.
-
-    功能: 验证 final only asr cancellation
-    absorbs response close attribute
-    race 的回归场景和可观察结果。
-    参数: monkeypatch: pytest.MonkeyPatch。
-    必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     response = _ResponseCloseRace()
 
@@ -567,15 +376,6 @@ def test_final_only_asr_cancellation_absorbs_response_close_attribute_race(
     def connection_factory(
         _url: str, _deadlines: ProviderDeadlines, _stage: str
     ) -> _RaceConnection:
-        """函数契约说明.
-
-        功能: 执行 connection_factory
-        的同步逻辑,并维持签名契约。
-        参数: _url: str。 必填。 _deadlines:
-        ProviderDeadlines。 必填。 _stage:
-        str。 必填。
-        契约: 同步调用。 返回 `_RaceConnection`。
-        """
 
         return connection
 
@@ -619,15 +419,6 @@ def test_final_only_asr_cancellation_absorbs_response_not_ready_race(
 ) -> None:
     # Given: closing a final-only HTTP response makes its in-flight read idle.
 
-    """函数契约说明.
-
-    功能: 验证 final only asr cancellation
-    absorbs response not ready race
-    的回归场景和可观察结果。
-    参数: monkeypatch: pytest.MonkeyPatch。
-    必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     response = _ResponseCloseRace(ResponseNotReady("Idle"))
 
@@ -642,15 +433,6 @@ def test_final_only_asr_cancellation_absorbs_response_not_ready_race(
     def connection_factory(
         _url: str, _deadlines: ProviderDeadlines, _stage: str
     ) -> _RaceConnection:
-        """函数契约说明.
-
-        功能: 执行 connection_factory
-        的同步逻辑,并维持签名契约。
-        参数: _url: str。 必填。 _deadlines:
-        ProviderDeadlines。 必填。 _stage:
-        str。 必填。
-        契约: 同步调用。 返回 `_RaceConnection`。
-        """
 
         return connection
 
@@ -695,15 +477,6 @@ def test_streaming_providers_reject_non_success_or_malformed_events(
 ) -> None:
     # Given: a fake provider that fails before producing a valid event.
 
-    """函数契约说明.
-
-    功能: 验证 streaming providers reject
-    non success or malformed events
-    的回归场景和可观察结果。
-    参数: mode: Literal['error',
-    'malformed']。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     server = _FakeStreamingServer(mode=mode)
 
@@ -724,14 +497,6 @@ def test_streaming_providers_reject_non_success_or_malformed_events(
 def test_streaming_llm_honors_read_deadline_without_time_based_test_sleep() -> None:
     # Given: a server that establishes a stream but sends no readable event line.
 
-    """函数契约说明.
-
-    功能: 验证 streaming llm honors read
-    deadline without time based test
-    sleep 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     server = _FakeStreamingServer(mode="block")
 
@@ -752,14 +517,6 @@ def test_streaming_llm_honors_read_deadline_without_time_based_test_sleep() -> N
 def test_streaming_llm_cancellation_closes_mid_read_without_stale_tokens() -> None:
     # Given: a stream that has yielded one token and is blocked before its next token.
 
-    """函数契约说明.
-
-    功能: 验证 streaming llm cancellation
-    closes mid read without stale tokens
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     server = _FakeStreamingServer(mode="block")
 
@@ -814,16 +571,6 @@ def _consume_remaining(
     result: list[LLMStreamEvent],
     failure: list[BaseException],
 ) -> None:
-    """函数契约说明.
-
-    功能: 执行 _consume_remaining 的同步逻辑,并协调
-    extend, append。
-    参数: stream:
-    Iterator[LLMStreamEvent]。 必填。
-    result: list[LLMStreamEvent]。 必填。
-    failure: list[BaseException]。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     try:
         result.extend(stream)
@@ -837,16 +584,6 @@ def _consume_asr(
     result: list[ASRAudienceEvent],
     failure: list[BaseException],
 ) -> None:
-    """函数契约说明.
-
-    功能: 执行 _consume_asr 的同步逻辑,并协调
-    extend, append。
-    参数: stream:
-    Iterator[ASRAudienceEvent]。 必填。
-    result: list[ASRAudienceEvent]。 必填。
-    failure: list[BaseException]。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     try:
         result.extend(stream)

@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 import asyncio
 import json
@@ -51,14 +46,6 @@ from orchestrator.task_registry import (
 def test_runtime_dispatches_valid_proposal_and_rejects_replay_without_effect() -> None:
     # Given: one production-composed session runtime and its first comment proposal.
 
-    """函数契约说明.
-
-    功能: 验证 runtime dispatches valid
-    proposal and rejects replay without
-    effect 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = SessionRuntime.create(
         session_id=SessionId("session-1"),
@@ -106,13 +93,6 @@ def test_runtime_dispatches_valid_proposal_and_rejects_replay_without_effect() -
 def test_runtime_rejects_invalid_task_results_without_effect() -> None:
     # Given: a registered interactive task for the runtime's current turn.
 
-    """函数契约说明.
-
-    功能: 验证 runtime rejects invalid task
-    results without effect 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = SessionRuntime.create(
         session_id=SessionId("session-1"),
@@ -177,13 +157,6 @@ def test_runtime_rejects_invalid_task_results_without_effect() -> None:
 def test_runtime_composes_the_adaptive_agent_policy() -> None:
     # Given: one production-composed session runtime.
 
-    """函数契约说明.
-
-    功能: 验证 runtime composes the adaptive
-    agent policy 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     # When: the runtime is created without a product-mode selector.
 
@@ -201,14 +174,6 @@ def test_runtime_composes_the_adaptive_agent_policy() -> None:
 def test_runtime_opens_one_turn_only_for_semantically_accepted_asr_final() -> None:
     # Given: final ASR events and deterministic accept and discard gate providers.
 
-    """函数契约说明.
-
-    功能: 验证 runtime opens one turn only
-    for semantically accepted asr final
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = SessionRuntime.create(
         session_id=SessionId("session-1"),
@@ -260,13 +225,6 @@ def test_runtime_opens_one_turn_only_for_semantically_accepted_asr_final() -> No
 def test_runtime_rejects_stale_task_before_lane_enqueue() -> None:
     # Given: a live turn and a task request captured before that turn revision.
 
-    """函数契约说明.
-
-    功能: 验证 runtime rejects stale task
-    before lane enqueue 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = _runtime()
 
@@ -294,14 +252,6 @@ def test_runtime_rejects_stale_task_before_lane_enqueue() -> None:
 def test_runtime_rejects_overdue_and_cancelled_task_completions() -> None:
     # Given: a fake monotonic clock, one overdue task, and one cancelled task.
 
-    """函数契约说明.
-
-    功能: 验证 runtime rejects overdue and
-    cancelled task completions
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     clock = _Clock(now_ms=201)
 
@@ -344,14 +294,6 @@ def test_runtime_rejects_overdue_and_cancelled_task_completions() -> None:
 def test_runtime_skips_cancelled_task_queued_before_worker_selection() -> None:
     # Given: a scheduler-admitted task that is cancelled while still queued.
 
-    """函数契约说明.
-
-    功能: 验证 runtime skips cancelled task
-    queued before worker selection
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = _runtime()
 
@@ -383,14 +325,6 @@ def test_runtime_skips_cancelled_task_queued_before_worker_selection() -> None:
 def test_profile_revoke_cancels_pending_task_before_worker_selection() -> None:
     # Given: scheduler-admitted pending work that may depend on profile context.
 
-    """函数契约说明.
-
-    功能: 验证 profile revoke cancels
-    pending task before worker selection
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = _runtime()
 
@@ -418,14 +352,6 @@ def test_runtime_records_governed_interaction_outcomes_without_sensitive_values(
 ):
     # Given: one live scheduler session, a consented profile, and a pending task.
 
-    """函数契约说明.
-
-    功能: 验证 runtime records governed
-    interaction outcomes without
-    sensitive values 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = _runtime()
 
@@ -523,14 +449,6 @@ def test_runtime_records_governed_interaction_outcomes_without_sensitive_values(
 def test_live_mcp_worker_requires_exact_correlated_ack_before_deck_commit() -> None:
     # Given: a reducer-admitted deck command and a live successful adapter.
 
-    """函数契约说明.
-
-    功能: 验证 live mcp worker requires
-    exact correlated ack before deck
-    commit 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = _runtime()
 
@@ -623,14 +541,6 @@ def test_duplicate_presentation_command_id_dispatches_adapter_once() -> None:
 def test_live_mcp_worker_reconciles_ambiguity_without_adapter_state_commit() -> None:
     # Given: an ambiguous adapter result followed by its explicit reconciliation.
 
-    """函数契约说明.
-
-    功能: 验证 live mcp worker reconciles
-    ambiguity without adapter state
-    commit 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime = _runtime()
 
@@ -688,47 +598,18 @@ def test_live_mcp_worker_reconciles_ambiguity_without_adapter_state_commit() -> 
 
 
 class _SuccessfulAdapter:
-    """类契约说明.
-
-    职责: 定义 _SuccessfulAdapter
-    的状态、行为和对外协作边界。
-    契约: 方法: __init__、execute、reconcile。
-    """
 
     def __init__(self) -> None:
-        """函数契约说明.
-
-        功能: 初始化 _SuccessfulAdapter
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.calls: list[CommandId] = []
 
     def dispatch(self, intent: DeckDispatchIntent) -> DeckEffectResult:
-        """函数契约说明.
-
-        功能: 执行 execute 的同步逻辑,并协调 append,
-        succeeded。
-        参数: self 表示当前实例。 intent:
-        DeckDispatchIntent。 必填。
-        契约: 同步调用。 返回 `DeckEffectResult`。
-        """
 
         self.calls.append(intent.command.command_id)
 
         return DeckEffectResult.succeeded()
 
     def reconcile(self, intent: DeckDispatchIntent) -> DeckEffectResult:
-        """函数契约说明.
-
-        功能: 执行 reconcile 的同步逻辑,并协调
-        execute。
-        参数: self 表示当前实例。 intent:
-        DeckDispatchIntent。 必填。
-        契约: 同步调用。 返回 `DeckEffectResult`。
-        """
 
         return self.dispatch(intent)
 
@@ -741,49 +622,20 @@ class _SuccessfulAdapter:
 
 @final
 class _ResultAdapter:
-    """类契约说明.
-
-    职责: 定义 _ResultAdapter 的状态、行为和对外协作边界。
-    契约: 方法: __init__、execute、reconcile。
-    """
 
     def __init__(self, *results: DeckEffectResult) -> None:
-        """函数契约说明.
-
-        功能: 初始化 _ResultAdapter
-        的字段并建立实例不变式。
-        参数: self 表示当前实例。 *results:
-        DeckEffectResult。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self._results = results
 
         self.calls: list[CommandId] = []
 
     def dispatch(self, intent: DeckDispatchIntent) -> DeckEffectResult:
-        """函数契约说明.
-
-        功能: 执行 execute 的同步逻辑,并协调 append,
-        len。
-        参数: self 表示当前实例。 intent:
-        DeckDispatchIntent。 必填。
-        契约: 同步调用。 返回 `DeckEffectResult`。
-        """
 
         self.calls.append(intent.command.command_id)
 
         return self._results[len(self.calls) - 1]
 
     def reconcile(self, intent: DeckDispatchIntent) -> DeckEffectResult:
-        """函数契约说明.
-
-        功能: 执行 reconcile 的同步逻辑,并协调
-        execute。
-        参数: self 表示当前实例。 intent:
-        DeckDispatchIntent。 必填。
-        契约: 同步调用。 返回 `DeckEffectResult`。
-        """
 
         return self.dispatch(intent)
 
@@ -797,14 +649,6 @@ class _ResultAdapter:
 def test_mcp_cancel_before_worker_removes_retained_intent_without_ack_commit() -> None:
     # Given: scheduled deck work that has not reached the worker.
 
-    """函数契约说明.
-
-    功能: 验证 mcp cancel before worker
-    removes retained intent without ack
-    commit 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime, request, _, correlation, adapter = _scheduled_deck("cancel")
 
@@ -828,14 +672,6 @@ def test_mcp_cancel_before_worker_removes_retained_intent_without_ack_commit() -
 def test_mcp_deadline_before_worker_times_out_without_adapter_call() -> None:
     # Given: deck work whose scheduler deadline is already elapsed.
 
-    """函数契约说明.
-
-    功能: 验证 mcp deadline before worker
-    times out without adapter call
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime, request, command, correlation, adapter = _scheduled_deck(
         "before", deadline_ms=0
@@ -867,14 +703,6 @@ def test_mcp_deadline_before_worker_times_out_without_adapter_call() -> None:
 def test_ambiguous_reconcile_after_deadline_times_out_without_commit() -> None:
     # Given: a live ambiguous adapter invocation awaiting reconciliation.
 
-    """函数契约说明.
-
-    功能: 验证 ambiguous reconcile after
-    deadline times out without commit
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime, request, command, correlation, adapter = _scheduled_deck(
         "ambiguous-timeout",
@@ -912,14 +740,6 @@ def test_ambiguous_reconcile_after_deadline_times_out_without_commit() -> None:
 def test_late_exact_ack_after_cancellation_is_rejected_without_deck_state() -> None:
     # Given: a scheduled deck command cancelled before its adapter executes.
 
-    """函数契约说明.
-
-    功能: 验证 late exact ack after
-    cancellation is rejected without
-    deck state 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     runtime, request, command, correlation, _ = _scheduled_deck("late-ack")
 
@@ -943,14 +763,6 @@ def test_active_local_mcp_cancellation_rejects_late_completion_without_ack_commi
 ):
     # Given: a root-composed local deck adapter and one admitted MCP task.
 
-    """函数契约说明.
-
-    功能: 验证 active local mcp cancellation
-    rejects late completion without ack
-    commit 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 可能等待 I/O 或协程结果。 返回 `None`。
-    """
 
     runtime = _runtime()
 
@@ -973,13 +785,6 @@ def test_active_local_mcp_cancellation_rejects_late_completion_without_ack_commi
     # When: task cancellation wins during the adapter's async execution yield point.
 
     async def run() -> DeckDispatchOutcome:
-        """函数契约说明.
-
-        功能: 运行流程并协调其依赖步骤。
-        参数: 无显式业务参数。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `DeckDispatchOutcome`。
-        """
 
         worker = asyncio.create_task(
             runtime.run_deck_worker_async(now_ms=0, correlation=correlation)
@@ -1012,19 +817,6 @@ def _scheduled_deck(
 ) -> tuple[
     SessionRuntime, TaskRequest, PresentationCommand, EventCorrelation, _ResultAdapter
 ]:
-    """函数契约说明.
-
-    功能: 执行 _scheduled_deck 的同步逻辑,并协调
-    _runtime, _open_turn, _correlation,
-    PresentationCommand。
-    参数: suffix: str。 必填。
-    adapter_results:
-    tuple[DeckEffectResult, ...] | None。
-    可省略。 deadline_ms: int。 可省略。
-    契约: 同步调用。 返回 `tuple[SessionRuntime,
-    TaskRequest, PresentationCommand,
-    EventCorrelation, _ResultAdapter]`。
-    """
 
     runtime = _runtime()
 
@@ -1058,15 +850,6 @@ def _scheduled_deck(
 
 
 def _correlation(session_id: str, trace_id: str, sequence: int) -> EventCorrelation:
-    """函数契约说明.
-
-    功能: 执行 _correlation 的同步逻辑,并协调
-    EventCorrelation, TraceId,
-    SessionId, EventSequence。
-    参数: session_id: str。 必填。 trace_id:
-    str。 必填。 sequence: int。 必填。
-    契约: 同步调用。 返回 `EventCorrelation`。
-    """
 
     return EventCorrelation(
         TraceId(trace_id),
@@ -1076,14 +859,6 @@ def _correlation(session_id: str, trace_id: str, sequence: int) -> EventCorrelat
 
 
 def _runtime(clock: "_Clock | None" = None) -> SessionRuntime:
-    """函数契约说明.
-
-    功能: 执行 _runtime 的同步逻辑,并协调 create,
-    SessionId, SchedulerTaskConfig,
-    frozenset。
-    参数: clock: '_Clock | None'。 可省略。
-    契约: 同步调用。 返回 `SessionRuntime`。
-    """
 
     return SessionRuntime.create(
         session_id=SessionId("session-1"),
@@ -1094,14 +869,6 @@ def _runtime(clock: "_Clock | None" = None) -> SessionRuntime:
 
 
 def _open_turn(runtime: SessionRuntime) -> TurnId:
-    """函数契约说明.
-
-    功能: 执行 _open_turn 的同步逻辑,并协调
-    receive_comment, CommentProposal,
-    _correlation。
-    参数: runtime: SessionRuntime。 必填。
-    契约: 同步调用。 返回 `TurnId`。
-    """
 
     outcome = runtime.receive_comment(
         CommentProposal("开始", _correlation("session-1", "trace-turn", 1))
@@ -1119,16 +886,6 @@ def _request(
     task_id: str = "task-1",
     deadline_ms: int = 200,
 ) -> TaskRequest:
-    """函数契约说明.
-
-    功能: 执行 _request 的同步逻辑,并协调
-    TaskRequest, TaskId, TaskDeadlineMs,
-    IdempotencyKey。
-    参数: runtime: SessionRuntime。 必填。
-    turn_id: TurnId。 必填。 task_id: str。
-    可省略。 deadline_ms: int。 可省略。
-    契约: 同步调用。 返回 `TaskRequest`。
-    """
 
     return TaskRequest(
         task_id=TaskId(task_id),
@@ -1143,13 +900,6 @@ def _request(
 
 
 def _result(request: TaskRequest) -> TaskResult:
-    """函数契约说明.
-
-    功能: 执行 _result 的同步逻辑,并协调 TaskResult,
-    TaskEffect。
-    参数: request: TaskRequest。 必填。
-    契约: 同步调用。 返回 `TaskResult`。
-    """
 
     return TaskResult(
         task_id=request.task_id,
@@ -1161,34 +911,14 @@ def _result(request: TaskRequest) -> TaskResult:
 
 
 class _Clock:
-    """类契约说明.
-
-    职责: 定义 _Clock 的状态、行为和对外协作边界。
-    契约: 字段: now_ms。 方法:
-    __init__、monotonic_ms。
-    """
 
     now_ms: int
 
     def __init__(self, *, now_ms: int) -> None:
-        """函数契约说明.
-
-        功能: 初始化 _Clock 的字段并建立实例不变式。
-        参数: self 表示当前实例。 now_ms: int。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
 
         self.now_ms = now_ms
 
     def monotonic_ms(self) -> int:
-        """函数契约说明.
-
-        功能: 执行 monotonic_ms
-        的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `int`。
-        """
 
         return self.now_ms
 
@@ -1200,16 +930,6 @@ def _assert_no_effect(
     *,
     rejection_count: int = 1,
 ) -> None:
-    """函数契约说明.
-
-    功能: 执行 _assert_no_effect
-    的同步逻辑,并维持签名契约。
-    参数: runtime: SessionRuntime。 必填。
-    baseline: RuntimeObservables。 必填。
-    correlation: EventCorrelation。 必填。
-    rejection_count: int。 可省略。
-    契约: 同步调用。 返回 `None`。
-    """
 
     assert runtime.observables.snapshot == baseline.snapshot
 
@@ -1225,12 +945,5 @@ def _assert_no_effect(
 
 
 def _monotonic_clock() -> int:
-    """函数契约说明.
-
-    功能: 执行 _monotonic_clock
-    的同步逻辑,并维持签名契约。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `int`。
-    """
 
     return 0

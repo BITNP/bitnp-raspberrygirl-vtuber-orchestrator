@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 import pytest
 
@@ -25,14 +20,6 @@ from orchestrator.retrieval import KnowledgeRef
 def test_mock_llm_streams_deterministic_chunks_and_final_answer() -> None:
     # Given: a lecturer prompt built from a selected answer candidate.
 
-    """函数契约说明.
-
-    功能: 验证 mock llm streams
-    deterministic chunks and final
-    answer 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     policy = AdaptiveAgentPolicy()
 
@@ -77,14 +64,6 @@ def test_mock_llm_streams_deterministic_chunks_and_final_answer() -> None:
 def test_openai_compatible_adapter_builds_request_payload_without_api_key() -> None:
     # Given: a virtual streamer prompt and an OpenAI-compatible adapter boundary.
 
-    """函数契约说明.
-
-    功能: 验证 openai compatible adapter
-    builds request payload without api
-    key 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     policy = AdaptiveAgentPolicy()
 
@@ -127,14 +106,6 @@ def test_openai_compatible_adapter_builds_request_payload_without_api_key() -> N
 def test_openai_adapter_rejects_malformed_model_boundary_input() -> None:
     # Given: malformed provider configuration crossing the adapter boundary.
 
-    """函数契约说明.
-
-    功能: 验证 openai adapter rejects
-    malformed model boundary input
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     candidate = AdaptiveAgentPolicy().select_answer_candidate(
         (

@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.openai_llm_runtime
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -36,16 +30,6 @@ from orchestrator.provider_streaming import (
 
 @dataclass(frozen=True, slots=True)
 class OpenAICompatibleLLMRuntimeAdapter:
-    """类契约说明.
-
-    职责: 保存
-    OpenAICompatibleLLMRuntimeAdapter
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: endpoint、model、api_key、timeo
-    ut_seconds、capability、deadlines。 方法:
-    __post_init__、stream、_stream_final_o
-    nly、_stream_sse。
-    """
 
     endpoint: str
 
@@ -60,14 +44,6 @@ class OpenAICompatibleLLMRuntimeAdapter:
     deadlines: ProviderDeadlines = field(default_factory=ProviderDeadlines)
 
     def __post_init__(self) -> None:
-        """函数契约说明.
-
-        功能: 初始化 OpenAICompatibleLLMRunti
-        meAdapter 的字段并建立实例不变式。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `None`。 可能抛出
-        AdapterConfigError。
-        """
         if self.endpoint.strip() == "":
             raise AdapterConfigError(field_name="endpoint")
 
@@ -83,16 +59,6 @@ class OpenAICompatibleLLMRuntimeAdapter:
         *,
         cancellation: CancellationToken | None = None,
     ) -> Iterator[LLMStreamEvent]:
-        """函数契约说明.
-
-        功能: 执行 stream 的同步逻辑,并协调
-        _stream_final_only, _stream_sse。
-        参数: self 表示当前实例。 request:
-        LLMRequest。 必填。 cancellation:
-        CancellationToken | None。 可省略。
-        契约: 同步调用。 返回迭代或生成器协议。 返回
-        `Iterator[LLMStreamEvent]`。
-        """
         if cancellation is not None and cancellation.cancelled:
             return
 
@@ -106,19 +72,6 @@ class OpenAICompatibleLLMRuntimeAdapter:
     def _stream_final_only(
         self, request: LLMRequest, cancellation: CancellationToken | None
     ) -> Iterator[LLMStreamEvent]:
-        """函数契约说明.
-
-        功能: 执行 _stream_final_only
-        的同步逻辑,并协调 post_bytes, get,
-        ProviderRequest,
-        parse_json_value。
-        参数: self 表示当前实例。 request:
-        LLMRequest。 必填。 cancellation:
-        CancellationToken | None。 必填。
-        契约: 同步调用。 返回迭代或生成器协议。 返回
-        `Iterator[LLMStreamEvent]`。 可能抛出
-        AdapterConfigError。
-        """
         response = post_bytes(
             ProviderRequest(
                 f"{self.endpoint.rstrip('/')}/chat/completions",
@@ -184,18 +137,6 @@ class OpenAICompatibleLLMRuntimeAdapter:
     def _stream_sse(
         self, request: LLMRequest, cancellation: CancellationToken | None
     ) -> Iterator[LLMStreamEvent]:
-        """函数契约说明.
-
-        功能: 执行 _stream_sse 的同步逻辑,并协调
-        encode, post_sse,
-        ProviderRequest, _sse_delta。
-        参数: self 表示当前实例。 request:
-        LLMRequest。 必填。 cancellation:
-        CancellationToken | None。 必填。
-        契约: 同步调用。 返回迭代或生成器协议。 返回
-        `Iterator[LLMStreamEvent]`。 可能抛出
-        ProviderResponseError。
-        """
         chunks: list[str] = []
 
         done = False
@@ -244,15 +185,6 @@ class OpenAICompatibleLLMRuntimeAdapter:
 
 
 def _sse_delta(data: str) -> str:
-    """函数契约说明.
-
-    功能: 执行 _sse_delta 的同步逻辑,并协调 get,
-    parse_json_value, isinstance,
-    ProviderResponseError。
-    参数: data: str。 必填。
-    契约: 同步调用。 返回 `str`。 可能抛出
-    ProviderResponseError。
-    """
     try:
         payload = parse_json_value(data)
 

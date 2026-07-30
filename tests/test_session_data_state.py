@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from pathlib import Path
 
@@ -70,14 +65,6 @@ from orchestrator.transient_context import (
 def test_session_data_state_admits_only_approved_memory_and_finalized_context() -> None:
     # Given: one live session with immutable knowledge attribution.
 
-    """函数契约说明.
-
-    功能: 验证 session data state admits
-    only approved memory and finalized
-    context 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     state = _state()
 
@@ -105,14 +92,6 @@ def test_session_data_state_admits_only_approved_memory_and_finalized_context() 
 def test_session_data_state_reset_and_profile_deletion_invalidate_prior_work() -> None:
     # Given: work captured after a consented profile and finalized context exist.
 
-    """函数契约说明.
-
-    功能: 验证 session data state reset and
-    profile deletion invalidate prior
-    work 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     state = _state()
 
@@ -152,14 +131,6 @@ def test_session_data_state_reset_and_profile_deletion_invalidate_prior_work() -
 def test_memory_delete_rejects_previously_admitted_task_without_effect() -> None:
     # Given: a task admitted against the current session data snapshot.
 
-    """函数契约说明.
-
-    功能: 验证 memory delete rejects
-    previously admitted task without
-    effect 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
 
     state = _state()
 
@@ -215,14 +186,6 @@ def test_memory_store_persists_human_readable_approved_preference(
 ) -> None:
     # Given: a real scheduler-owned file store for a new session.
 
-    """函数契约说明.
-
-    功能: 验证 memory store persists human
-    readable approved preference
-    的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     path = tmp_path / "ordinary-preferences.json"
 
@@ -250,14 +213,6 @@ def test_memory_store_persists_human_readable_approved_preference(
 
 
 def _state() -> SessionDataState:
-    """函数契约说明.
-
-    功能: 执行 _state 的同步逻辑,并协调 create,
-    SessionId, RetrievalFixtureProvider,
-    KnowledgeRef。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `SessionDataState`。
-    """
 
     return SessionDataState.create(
         session_id=SessionId("session-1"),
@@ -278,14 +233,6 @@ def _state() -> SessionDataState:
 
 
 def _memory_proposal() -> MemoryProposal:
-    """函数契约说明.
-
-    功能: 执行 _memory_proposal 的同步逻辑,并协调
-    MemoryProposal, MemoryKey,
-    MemoryConfidence, ProposalRevision。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `MemoryProposal`。
-    """
 
     return MemoryProposal(
         key=MemoryKey("preferred_name"),
@@ -304,14 +251,6 @@ def _memory_proposal() -> MemoryProposal:
 
 
 def _finalized_input(text: str) -> FinalizedInput:
-    """函数契约说明.
-
-    功能: 执行 _finalized_input 的同步逻辑,并协调
-    FinalizedInput, ContextProvenance,
-    SessionId, TurnId。
-    参数: text: str。 必填。
-    契约: 同步调用。 返回 `FinalizedInput`。
-    """
 
     return FinalizedInput(
         ContextProvenance(
@@ -329,16 +268,6 @@ def _task_request(
     scheduler: SessionScheduler,
     data_snapshot: TaskStateSnapshot,
 ) -> TaskRequest:
-    """函数契约说明.
-
-    功能: 执行 _task_request 的同步逻辑,并协调
-    TaskRequest, TaskId, SessionId,
-    TaskDeadlineMs。
-    参数: scheduler: SessionScheduler。 必填。
-    data_snapshot: TaskStateSnapshot。
-    必填。
-    契约: 同步调用。 返回 `TaskRequest`。
-    """
 
     assert scheduler.snapshot.active_turn_id is not None
 
@@ -356,13 +285,6 @@ def _task_request(
 
 
 def _task_result(request: TaskRequest) -> TaskResult:
-    """函数契约说明.
-
-    功能: 执行 _task_result 的同步逻辑,并协调
-    TaskResult, TaskEffect。
-    参数: request: TaskRequest。 必填。
-    契约: 同步调用。 返回 `TaskResult`。
-    """
 
     return TaskResult(
         task_id=request.task_id,

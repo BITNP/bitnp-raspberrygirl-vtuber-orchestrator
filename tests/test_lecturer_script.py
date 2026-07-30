@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -20,13 +15,6 @@ if TYPE_CHECKING:
 def test_parse_lecture_script_returns_typed_steps_when_valid(tmp_path: Path) -> None:
     # Given: a user-authored lecture script with narration and frontend cues.
 
-    """函数契约说明.
-
-    功能: 验证 parse lecture script returns
-    typed steps when valid 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     script_path = tmp_path / "lecture.json"
 
@@ -81,13 +69,6 @@ def test_parse_lecture_script_returns_typed_steps_when_valid(tmp_path: Path) -> 
 def test_parse_lecture_script_rejects_missing_narration(tmp_path: Path) -> None:
     # Given: a malformed script step without the required narration text.
 
-    """函数契约说明.
-
-    功能: 验证 parse lecture script rejects
-    missing narration 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     script_path = tmp_path / "bad-lecture.json"
 
@@ -119,13 +100,6 @@ def test_parse_lecture_script_rejects_missing_narration(tmp_path: Path) -> None:
 def test_parse_lecture_script_rejects_missing_expression(tmp_path: Path) -> None:
     # Given: a step without the required frontend expression cue.
 
-    """函数契约说明.
-
-    功能: 验证 parse lecture script rejects
-    missing expression 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     script_path = tmp_path / "missing-expression-lecture.json"
 
@@ -157,13 +131,6 @@ def test_parse_lecture_script_rejects_missing_expression(tmp_path: Path) -> None
 def test_lecture_script_rejects_zero_slide_page_at_boundary(tmp_path: Path) -> None:
     # Given: a structurally complete lecture step with an invalid zero page.
 
-    """函数契约说明.
-
-    功能: 验证 lecture script rejects zero
-    slide page at boundary 的回归场景和可观察结果。
-    参数: tmp_path: Path。 必填。
-    契约: 同步调用。 返回 `None`。
-    """
 
     script_path = tmp_path / "zero-page-lecture.json"
 

@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.pipeline_contracts
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from dataclasses import dataclass
 from typing import Literal
@@ -13,13 +7,6 @@ from orchestrator.ids import SegmentId, TurnId
 
 @dataclass(frozen=True, slots=True)
 class CommentAudienceEvent:
-    """类契约说明.
-
-    职责: 保存 CommentAudienceEvent
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段:
-    platform、source、user、text、timestamp。
-    """
 
     platform: str
 
@@ -34,13 +21,6 @@ class CommentAudienceEvent:
 
 @dataclass(frozen=True, slots=True)
 class ASRAudienceEvent:
-    """类契约说明.
-
-    职责: 保存 ASRAudienceEvent
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段:
-    text、received_at_ms、segment_id、seq。
-    """
 
     text: str
 
@@ -53,13 +33,6 @@ class ASRAudienceEvent:
 
 @dataclass(frozen=True, slots=True)
 class PipelineConfig:
-    """类契约说明.
-
-    职责: 保存 PipelineConfig
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: queue_capacity、turn_id_prefi
-    x、segment_id_prefix。
-    """
 
     queue_capacity: int
 
@@ -70,13 +43,6 @@ class PipelineConfig:
 
 @dataclass(frozen=True, slots=True)
 class AudioMetadata:
-    """类契约说明.
-
-    职责: 保存 AudioMetadata
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: sample_rate、channels、codec、d
-    uration_ms、byte_length。
-    """
 
     sample_rate: int
 
@@ -91,13 +57,6 @@ class AudioMetadata:
 
 @dataclass(frozen=True, slots=True)
 class MediaStreamCommand:
-    """类契约说明.
-
-    职责: 保存 MediaStreamCommand
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: turn_id、segment_id、stream_id
-    、audio、start_at_ms、event_type。
-    """
 
     turn_id: TurnId
 
@@ -114,14 +73,6 @@ class MediaStreamCommand:
 
 @dataclass(frozen=True, slots=True)
 class MediaStreamState:
-    """类契约说明.
-
-    职责: 保存 MediaStreamState
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: turn_id、segment_id、stream_id
-    、state、playback_position_ms、event_ty
-    pe。
-    """
 
     turn_id: TurnId
 
@@ -138,13 +89,6 @@ class MediaStreamState:
 
 @dataclass(frozen=True, slots=True)
 class VtuberCaptionCommand:
-    """类契约说明.
-
-    职责: 保存 VtuberCaptionCommand
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: turn_id、segment_id、text、star
-    t_at_ms、event_type。
-    """
 
     turn_id: TurnId
 
@@ -159,13 +103,6 @@ class VtuberCaptionCommand:
 
 @dataclass(frozen=True, slots=True)
 class VtuberActionCommand:
-    """类契约说明.
-
-    职责: 保存 VtuberActionCommand
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: turn_id、segment_id、action、st
-    art_at_ms、event_type。
-    """
 
     turn_id: TurnId
 
@@ -180,13 +117,6 @@ class VtuberActionCommand:
 
 @dataclass(frozen=True, slots=True)
 class VtuberExpressionCommand:
-    """类契约说明.
-
-    职责: 保存 VtuberExpressionCommand
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: turn_id、segment_id、expressio
-    n、start_at_ms、event_type。
-    """
 
     turn_id: TurnId
 
@@ -201,13 +131,6 @@ class VtuberExpressionCommand:
 
 @dataclass(frozen=True, slots=True)
 class VtuberSceneCommand:
-    """类契约说明.
-
-    职责: 保存 VtuberSceneCommand
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: turn_id、segment_id、scene、sli
-    de_id、slide_title、slide_page。
-    """
 
     turn_id: TurnId
 
@@ -228,13 +151,6 @@ class VtuberSceneCommand:
 
 @dataclass(frozen=True, slots=True)
 class MockSynthesisResult:
-    """类契约说明.
-
-    职责: 保存 MockSynthesisResult
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: turn_id、segment_id、audio、exp
-    ression、action、scene。
-    """
 
     turn_id: TurnId
 
@@ -255,13 +171,6 @@ class MockSynthesisResult:
 
 @dataclass(frozen=True, slots=True)
 class SynthesisCueResult:
-    """类契约说明.
-
-    职责: 保存 SynthesisCueResult
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: media、caption、expression、act
-    ion、scene。
-    """
 
     media: MediaStreamCommand | None
 
@@ -276,13 +185,6 @@ class SynthesisCueResult:
 
 @dataclass(frozen=True, slots=True)
 class CancelCommand:
-    """类契约说明.
-
-    职责: 保存 CancelCommand
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: turn_id、segment_id、target、re
-    ason、event_type。
-    """
 
     turn_id: TurnId
 
@@ -297,13 +199,6 @@ class CancelCommand:
 
 @dataclass(frozen=True, slots=True)
 class TurnResult:
-    """类契约说明.
-
-    职责: 保存 TurnResult
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: turn_id、segment_id、answer_te
-    xt、used_fallback。
-    """
 
     turn_id: TurnId
 

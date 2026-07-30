@@ -1,9 +1,3 @@
-"""模块契约说明.
-
-职责: 提供 orchestrator.streaming_endpoint
-模块的领域模型、边界函数和运行时协作逻辑。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -34,11 +28,6 @@ _SEQUENCE_HALF_RANGE: Final = 32_768
 
 
 class EndpointReason(StrEnum):
-    """类契约说明.
-
-    职责: 定义 EndpointReason 的状态、行为和对外协作边界。
-    契约: 字段、不变式和资源归属由类体声明与类型标注共同约束。
-    """
 
     SILENCE = "silence"
 
@@ -51,13 +40,6 @@ class EndpointReason(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class PartialUtterance:
-    """类契约说明.
-
-    职责: 保存 PartialUtterance
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: stream、payload、turn_id、segme
-    nt_id、cancellation_epoch。
-    """
 
     stream: StreamKey
 
@@ -72,13 +54,6 @@ class PartialUtterance:
 
 @dataclass(frozen=True, slots=True)
 class EndpointedUtterance:
-    """类契约说明.
-
-    职责: 保存 EndpointedUtterance
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: stream、payload、reason、turn_i
-    d、segment_id、cancellation_epoch。
-    """
 
     stream: StreamKey
 
@@ -98,16 +73,6 @@ type EndpointEvent = PartialUtterance | EndpointedUtterance
 
 @dataclass(slots=True)
 class StreamEndpointer:
-    """类契约说明.
-
-    职责: 保存 StreamEndpointer
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: stream、_pre_roll、_utterance、
-    _pending、_expected_sequence、_expecte
-    d_timestamp。 方法: push、disconnect、_ac
-    cept_ordered、_drain_pending、_finaliz
-    e、_reset_ordering。
-    """
 
     stream: StreamKey
 
@@ -132,16 +97,6 @@ class StreamEndpointer:
     _epoch: int = 0
 
     def push(self, packet: bytes) -> tuple[EndpointEvent, ...]:
-        """函数契约说明.
-
-        功能: 执行 push 的同步逻辑,并协调
-        from_bytes, extend,
-        _reset_ordering, tuple。
-        参数: self 表示当前实例。 packet: bytes。
-        必填。
-        契约: 同步调用。 返回
-        `tuple[EndpointEvent, ...]`。
-        """
         sequence = int.from_bytes(packet[2:4], "big")
 
         if self._expected_sequence is None:
@@ -177,14 +132,6 @@ class StreamEndpointer:
         return tuple(events)
 
     def disconnect(self) -> EndpointedUtterance | None:
-        """函数契约说明.
-
-        功能: 执行 disconnect 的同步逻辑,并协调
-        _finalize, clear。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回
-        `EndpointedUtterance | None`。
-        """
         events = self._finalize(EndpointReason.DISCONNECT)
 
         self._pre_roll.clear()
@@ -198,16 +145,6 @@ class StreamEndpointer:
         return events[0] if events else None
 
     def _accept_ordered(self, packet: bytes) -> list[EndpointEvent]:
-        """函数契约说明.
-
-        功能: 执行 _accept_ordered 的同步逻辑,并协调
-        from_bytes, _is_speech, extend,
-        append。
-        参数: self 表示当前实例。 packet: bytes。
-        必填。
-        契约: 同步调用。 返回
-        `list[EndpointEvent]`。
-        """
         timestamp = int.from_bytes(packet[4:8], "big")
 
         if (
@@ -280,14 +217,6 @@ class StreamEndpointer:
         return events
 
     def _drain_pending(self) -> list[EndpointEvent]:
-        """函数契约说明.
-
-        功能: 执行 _drain_pending 的同步逻辑,并协调
-        pop, extend, _accept_ordered。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回
-        `list[EndpointEvent]`。
-        """
         events: list[EndpointEvent] = []
 
         while self._expected_sequence in self._pending:
@@ -298,16 +227,6 @@ class StreamEndpointer:
         return events
 
     def _finalize(self, reason: EndpointReason) -> list[EndpointedUtterance]:
-        """函数契约说明.
-
-        功能: 执行 _finalize 的同步逻辑,并协调
-        EndpointedUtterance, clear,
-        join, TurnId。
-        参数: self 表示当前实例。 reason:
-        EndpointReason。 必填。
-        契约: 同步调用。 返回
-        `list[EndpointedUtterance]`。
-        """
         if not self._utterance:
             return []
 
@@ -337,14 +256,6 @@ class StreamEndpointer:
         return [event]
 
     def _reset_ordering(self, sequence: int) -> None:
-        """函数契约说明.
-
-        功能: 执行 _reset_ordering 的同步逻辑,并协调
-        clear。
-        参数: self 表示当前实例。 sequence: int。
-        必填。
-        契约: 同步调用。 返回 `None`。
-        """
         self._pending.clear()
 
         self._expected_sequence = sequence
@@ -352,24 +263,9 @@ class StreamEndpointer:
         self._expected_timestamp = None
 
     def _is_stale(self, sequence: int, expected: int) -> bool:
-        """函数契约说明.
-
-        功能: 执行 _is_stale 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。 sequence: int。
-        必填。 expected: int。 必填。
-        契约: 同步调用。 返回 `bool`。
-        """
         return (expected - sequence) % 65_536 <= _SEQUENCE_HALF_RANGE
 
     def _is_speech(self, payload: bytes) -> bool:
-        """函数契约说明.
-
-        功能: 执行 _is_speech 的同步逻辑,并协调
-        range, any, abs, from_bytes。
-        参数: self 表示当前实例。 payload: bytes。
-        必填。
-        契约: 同步调用。 返回 `bool`。
-        """
         samples = range(0, L16_FRAME_BYTES, 2)
 
         return any(

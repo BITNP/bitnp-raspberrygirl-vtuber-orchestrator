@@ -1,8 +1,3 @@
-"""模块契约说明.
-
-职责: 提供命令行脚本的参数处理、验证或运维流程。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
 
 from __future__ import annotations
 
@@ -56,13 +51,6 @@ VERSION: Final = re.compile(
 
 @dataclass(frozen=True, slots=True)
 class ProtocolValidationError:
-    """类契约说明.
-
-    职责: 保存 ProtocolValidationError
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: code、path、message。 方法:
-    as_json。
-    """
 
     code: str
 
@@ -71,35 +59,14 @@ class ProtocolValidationError:
     message: str
 
     def as_json(self) -> JsonObject:
-        """函数契约说明.
-
-        功能: 执行 as_json 的同步逻辑,并维持签名契约。
-        参数: self 表示当前实例。
-        契约: 同步调用。 返回 `JsonObject`。
-        """
         return {"code": self.code, "message": self.message, "path": self.path}
 
 
 def read_json(path: Path) -> JsonValue:
-    """函数契约说明.
-
-    功能: 执行 read_json 的同步逻辑,并协调 loads,
-    read_text。
-    参数: path: Path。 必填。
-    契约: 同步调用。 返回 `JsonValue`。
-    """
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def validate_file(path: Path, schema_root: Path) -> list[ProtocolValidationError]:
-    """函数契约说明.
-
-    功能: 校验相关输入、协议或运行时约束。
-    参数: path: Path。 必填。 schema_root:
-    Path。 必填。
-    契约: 同步调用。 返回
-    `list[ProtocolValidationError]`。
-    """
     parsed = read_json(path)
 
     schema = _canonical_schema(schema_root)
@@ -123,15 +90,6 @@ def validate_file(path: Path, schema_root: Path) -> list[ProtocolValidationError
 
 
 def _canonical_schema(schema_root: Path) -> JsonObject:
-    """函数契约说明.
-
-    功能: 执行 _canonical_schema 的同步逻辑,并协调
-    read_json, get, sorted,
-    RuntimeError。
-    参数: schema_root: Path。 必填。
-    契约: 同步调用。 返回 `JsonObject`。 可能抛出
-    RuntimeError。
-    """
     envelope = read_json(schema_root / "envelope.schema.json")
 
     event_data = read_json(schema_root / "event-data.schema.json")
@@ -177,15 +135,6 @@ def _canonical_schema(schema_root: Path) -> JsonObject:
 
 
 def _event_branch(event_type: str, definition: JsonValue) -> JsonObject:
-    """函数契约说明.
-
-    功能: 执行 _event_branch 的同步逻辑,并协调 dict,
-    isinstance, RuntimeError, get。
-    参数: event_type: str。 必填。 definition:
-    JsonValue。 必填。
-    契约: 同步调用。 返回 `JsonObject`。 可能抛出
-    RuntimeError。
-    """
     if not isinstance(definition, dict):
         raise RuntimeError("event definition must be a JSON object")
 
@@ -229,18 +178,6 @@ def _event_branch(event_type: str, definition: JsonValue) -> JsonObject:
 def _schema_errors(
     validator: Draft202012Validator, event: JsonValue, index: int
 ) -> list[ProtocolValidationError]:
-    """函数契约说明.
-
-    功能: 执行 _schema_errors 的同步逻辑,并协调
-    ProtocolValidationError, sorted,
-    _json_path, iter_errors。
-    参数: validator: Draft202012Validator。
-    必填。 event: JsonValue。 必填。 index:
-    int。 必填。
-    契约: 同步调用。 返回
-    `list[ProtocolValidationError]`。
-    可能抛出 ProtocolValidationError。
-    """
     return [
         ProtocolValidationError(
             code="schema_validation",
@@ -254,15 +191,6 @@ def _schema_errors(
 
 
 def _semantic_errors(events: list[JsonObject]) -> list[ProtocolValidationError]:
-    """函数契约说明.
-
-    功能: 执行 _semantic_errors 的同步逻辑,并协调
-    set, enumerate, extend,
-    _version_errors。
-    参数: events: list[JsonObject]。 必填。
-    契约: 同步调用。 返回
-    `list[ProtocolValidationError]`。
-    """
     errors: list[ProtocolValidationError] = []
 
     event_ids: set[str] = set()
@@ -282,17 +210,6 @@ def _semantic_errors(events: list[JsonObject]) -> list[ProtocolValidationError]:
 
 
 def _version_errors(event: JsonObject, index: int) -> list[ProtocolValidationError]:
-    """函数契约说明.
-
-    功能: 执行 _version_errors 的同步逻辑,并协调
-    isinstance, fullmatch,
-    ProtocolValidationError, _json_path。
-    参数: event: JsonObject。 必填。 index:
-    int。 必填。
-    契约: 同步调用。 返回
-    `list[ProtocolValidationError]`。
-    可能抛出 ProtocolValidationError。
-    """
     version = event["schema_version"]
 
     if not isinstance(version, str) or VERSION.fullmatch(version) is None:
@@ -319,18 +236,6 @@ def _version_errors(event: JsonObject, index: int) -> list[ProtocolValidationErr
 def _event_id_errors(
     event: JsonObject, event_ids: set[str], index: int
 ) -> list[ProtocolValidationError]:
-    """函数契约说明.
-
-    功能: 执行 _event_id_errors 的同步逻辑,并协调
-    add, isinstance,
-    ProtocolValidationError, _json_path。
-    参数: event: JsonObject。 必填。
-    event_ids: set[str]。 必填。 index: int。
-    必填。
-    契约: 同步调用。 返回
-    `list[ProtocolValidationError]`。
-    可能抛出 ProtocolValidationError。
-    """
     event_id = event["event_id"]
 
     if not isinstance(event_id, str):
@@ -353,18 +258,6 @@ def _event_id_errors(
 def _sequence_errors(
     event: JsonObject, sequences: dict[str, int], index: int
 ) -> list[ProtocolValidationError]:
-    """函数契约说明.
-
-    功能: 执行 _sequence_errors 的同步逻辑,并协调
-    get, isinstance,
-    ProtocolValidationError, _json_path。
-    参数: event: JsonObject。 必填。
-    sequences: dict[str, int]。 必填。
-    index: int。 必填。
-    契约: 同步调用。 返回
-    `list[ProtocolValidationError]`。
-    可能抛出 ProtocolValidationError。
-    """
     session_id = event["session_id"]
 
     sequence = event["seq"]
@@ -389,17 +282,6 @@ def _sequence_errors(
 
 
 def _correlation_errors(event: JsonObject, index: int) -> list[ProtocolValidationError]:
-    """函数契约说明.
-
-    功能: 执行 _correlation_errors 的同步逻辑,并协调
-    fromkeys, ProtocolValidationError,
-    _json_path, isinstance。
-    参数: event: JsonObject。 必填。 index:
-    int。 必填。
-    契约: 同步调用。 返回
-    `list[ProtocolValidationError]`。
-    可能抛出 ProtocolValidationError。
-    """
     event_type = event["event_type"]
 
     required_fields = dict.fromkeys(
@@ -421,14 +303,6 @@ def _correlation_errors(event: JsonObject, index: int) -> list[ProtocolValidatio
 
 
 def _json_path(index: int, path: Sequence[object]) -> str:
-    """函数契约说明.
-
-    功能: 执行 _json_path 的同步逻辑,并协调 join,
-    str。
-    参数: index: int。 必填。 path:
-    Sequence[object]。 必填。
-    契约: 同步调用。 返回 `str`。
-    """
     parts = ".".join(str(part) for part in path)
 
     return f"$[{index}]" if parts == "" else f"$[{index}].{parts}"
