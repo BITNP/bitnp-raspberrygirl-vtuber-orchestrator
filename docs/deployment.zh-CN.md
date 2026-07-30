@@ -54,3 +54,17 @@ loopback 集成检查只验证 WS 和 UDP 测试路径。它不能替代具有�
 每个已接受的 Mic 话语会先累积五十个 20 ms 规范 L16 帧，再将固定的 16 kHz 单声道 PCM WAV 发送给 ASR，取得 LLM 回答后发送给 vLLM-Omni TTS 扩展，验证其返回的固定 16 kHz 单声道 PCM WAV，最后向 Sound 发出生成的 L16 RTP。该模式不会转发原始 Mic RTP。
 
 Mic 与 Sound 必须使用相同的 session ID 和 stream ID、已部署的 `wss://<host>/control` 端点及共享 trusted-LAN token。两者保持 mode-agnostic，且没有直接 peer 端点。Frontend 不属于此现场音频部署。有关密钥挂载、私有 LAN 防火墙规则、PortAudio 访问、启动与回滚顺序和实时生成 TTS 验收测试，请参阅 [systemd 部署包](../deploy/README.md)。
+
+## 流式能力按指标发布
+
+在推广流式 ASR、说话人分离或已同意的识别能力前，运行以下已脱敏中文 fixture gate：
+
+```bash
+uv run python scripts/benchmark_multimodal.py --fixtures tests/fixtures/multimodal_benchmark --baseline .omo/evidence/asr-baseline.json --report .omo/evidence/task-8-benchmark.json --max-cer-regression-pp 1.0 --max-duplicate-turns 0 --require-p95-final-latency-improvement-percent 20
+uv run python scripts/verify_plan_contracts.py --plan .omo/plans/multimodal-agent-scheduler.md --require-chinese-prompts --forbid-raw-mic-to-sound --require-task-snapshot-validation
+uv run python scripts/verify_scheduler_scope.py --forbid-peer-links --forbid-biometric-authorization --require-closed-command-validation --require-memory-provenance
+```
+
+报告记录 provider、model、配置和语料版本，以及 CER、p95 最终结果延迟、过期与重复 turn 比率和带 provenance 完整性汇总的 shadow-memory 决策。fixture 与报告只能包含合成文本和不透明 ID；不得加入音频、录音、记忆值、原始 prompt、凭据或生物特征模板。
+
+任一阈值失败都会阻止发布。回滚时，在受保护的环境文件中恢复记录的 final-only ASR provider、model 与配置值，按 Mic、Sound、Orchestrator 的顺序停止，并按 Orchestrator、Sound、Mic 的顺序启动。对相同 benchmark 语料重新执行并保留脱敏的前后报告。不得以转发原始 Mic RTP 或建立 Mic 与 Sound 直连作为回滚方式。

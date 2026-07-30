@@ -51,6 +51,43 @@ The loopback integration check verifies the WS and UDP test path only. It does n
 
 Set `ORCHESTRATOR_MODE=onsite_explainer` only for the real onsite loop. It requires `ORCHESTRATOR_ASR_PROVIDER=openai_compatible`, `ORCHESTRATOR_LLM_PROVIDER=openai_compatible`, and `ORCHESTRATOR_TTS_PROVIDER=vllm_omni`, plus every matching endpoint and model variable in `.env.example`. Supply the provider API keys through secret injection. The LLM API key is required. Set nonempty `ORCHESTRATOR_TTS_VOICE`, `ORCHESTRATOR_TTS_REF_AUDIO`, and `ORCHESTRATOR_TTS_REF_TEXT`; the voice-reference WAV path must be mounted read-only outside source control.
 
-For each accepted Mic utterance, the bridge batches fifty 20 ms canonical L16 frames, sends a fixed 16 kHz mono PCM WAV to ASR, obtains an LLM answer, sends it to the vLLM-Omni TTS extension, validates its fixed 16 kHz mono PCM WAV response, and emits generated L16 RTP to Sound. It does not forward raw Mic RTP in this mode.
+For each accepted Mic utterance, the bridge applies the documented deterministic VAD endpoint before sending fixed 16 kHz mono PCM WAV to ASR: threshold 400, ten-frame pre-roll, 600 ms silence close, and 15 s forced close. It then obtains an LLM answer, sends it to the vLLM-Omni TTS extension, validates its fixed 16 kHz mono PCM WAV response, and emits generated L16 RTP to Sound. It does not forward raw Mic RTP in this mode.
 
 Mic and Sound must use the same session ID and stream ID, the deployed `wss://<host>/control` endpoint, and the shared trusted-LAN token. They remain mode-agnostic and have no direct peer endpoint. Frontend is excluded from this onsite audio deployment. See [the systemd deployment bundle](../deploy/README.md) for secret mounts, private-LAN firewall rules, PortAudio access, startup and rollback ordering, and the live generated-TTS acceptance test.
+
+Validate the checked-in systemd and sanitized Mic/Sound environment manifests before
+deployment:
+
+```bash
+python scripts/verify_topology.py --deployment-root ..
+```
+
+For normal, credential-free provider and deployment acceptance, run:
+
+```bash
+uv run pytest tests/integration/test_streaming_onsite_acceptance.py tests/test_deployment_topology.py -q
+```
+
+The fake-local provider compatibility smoke is explicitly opt in:
+
+```bash
+BITNP_REAL_ADAPTER_FAKE_LOCAL=1 uv run pytest -m real_adapter -q
+```
+
+Production WSS/TLS and 16 kHz capture/playback checks need the protected provider,
+token, certificate, and device environment. Missing values reject startup; keep the
+sanitized `queued` and `playing` Sound envelopes as deployment acceptance evidence.
+
+## Measured Streaming Rollout
+
+Before promoting streaming ASR, diarization, or consented recognition, run:
+
+```bash
+uv run python scripts/benchmark_multimodal.py --fixtures tests/fixtures/multimodal_benchmark --baseline .omo/evidence/asr-baseline.json --report .omo/evidence/task-8-benchmark.json --max-cer-regression-pp 1.0 --max-duplicate-turns 0 --require-p95-final-latency-improvement-percent 20
+uv run python scripts/verify_plan_contracts.py --plan .omo/plans/multimodal-agent-scheduler.md --require-chinese-prompts --forbid-raw-mic-to-sound --require-task-snapshot-validation
+uv run python scripts/verify_scheduler_scope.py --forbid-peer-links --forbid-biometric-authorization --require-closed-command-validation --require-memory-provenance
+```
+
+The report records provider/model/configuration/corpus versions, CER, p95 final latency, stale and duplicate turns, and aggregate shadow-memory decisions with provenance completeness. Fixtures and reports contain synthetic text and opaque IDs only: never add audio, recordings, memory values, raw prompts, credentials, or biometric templates.
+
+Threshold failures block promotion. To roll back, restore the recorded final-only ASR provider/model/configuration values in the protected environment, stop Mic then Sound then Orchestrator, and restart Orchestrator then Sound then Mic. Re-run the same benchmark corpus and retain the sanitized before/after reports. Never replace this rollback with raw Mic RTP forwarding or a direct Mic-to-Sound path.

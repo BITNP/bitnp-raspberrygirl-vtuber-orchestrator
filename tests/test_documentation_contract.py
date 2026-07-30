@@ -53,7 +53,7 @@ def test_documentation_tree_and_protocol_ownership_contract() -> None:
         assert not (repository / "schemas").exists()
         assert not tuple(repository.rglob("*.schema.json"))
 
-    # Then: frontend changes are limited to the documentation surface.
+        # Then: frontend changes remain limited to its control protocol surface.
     frontend = WORKSPACE / "bitnp-raspberrygirl-vtuber-frontend"
     status = subprocess.run(
         ["/usr/bin/git", "status", "--porcelain"],
@@ -65,6 +65,15 @@ def test_documentation_tree_and_protocol_ownership_contract() -> None:
     assert status.returncode == 0, status.stderr
     changed_paths = tuple(line[3:] for line in status.stdout.splitlines())
     assert all(
-        path in {".gitignore", "README.md"} or path.startswith("docs/")
+            path in {
+                ".gitignore",
+                "README.md",
+                "scripts/vtuber_control_client.gd",
+                "raspberry_girl.tscn",
+                "tests/protocol_smoke.gd",
+                "tests/fixtures/vtuber_control_commands.json",
+                "tests/fixtures/vtuber_control_invalid.json",
+            }
+            or path.startswith("docs/")
         for path in changed_paths
     )
