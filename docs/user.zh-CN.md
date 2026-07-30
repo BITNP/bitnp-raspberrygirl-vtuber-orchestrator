@@ -14,7 +14,7 @@ Raspberry Girl 是一个面向公开讲解、虚拟主播和现场产品介绍�
 
 ## 快速开始
 
-开发和测试默认使用 `ORCHESTRATOR_LLM_PROVIDER=mock`，不需要凭据、GPU、外部服务、真实音频设备或 Godot。
+开发和测试默认使用 `ORCHESTRATOR_LLM_PROVIDER=mock`，不需要凭据、GPU、外部服务、真实音频设备或 Godot。`.env.example` 展示的是现场语音链路的生产配置形状；普通开发不要直接采用其中的 `openai_compatible` provider 值。
 
 ```bash
 cd bitnp-raspberrygirl-vtuber-orchestrator
