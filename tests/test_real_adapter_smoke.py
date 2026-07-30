@@ -66,6 +66,19 @@ def test_openai_compatible_malformed_endpoint_reports_readiness_error() -> None:
         _ = _post_chat_completion("http://127.0.0.1:1", b'{"model":"smoke"}')
 
 
+def test_provider_smoke_requires_explicit_opt_in_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: the normal test environment has no provider endpoint or credential.
+    monkeypatch.delenv(FAKE_LOCAL_ENV, raising=False)
+    monkeypatch.delenv(LLM_ENDPOINT_ENV, raising=False)
+    monkeypatch.delenv(LLM_API_KEY_ENV, raising=False)
+
+    # When / Then: the real-provider helper declines to construct any network target.
+    with pytest.raises(pytest.skip.Exception, match="BITNP_REAL_LLM_ENDPOINT"):
+        _ = _llm_endpoint_or_skip()
+
+
 def _llm_endpoint_or_skip() -> _FakeLLMServer | _StaticEndpoint:
     if os.environ.get(FAKE_LOCAL_ENV) == "1":
         return _FakeLLMServer()
