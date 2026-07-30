@@ -6,7 +6,7 @@
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from time import monotonic_ns
 
 from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
@@ -19,7 +19,7 @@ from orchestrator.control_ingress import (
     SessionControl,
 )
 from orchestrator.identity import ProfileEnrollment, VoiceProfileId
-from orchestrator.ids import SessionId, TraceId, TurnId
+from orchestrator.ids import SessionId, TurnId
 from orchestrator.interaction_ingress import SessionInteractionIngress
 from orchestrator.interactions import (
     ActionProposal,
@@ -27,11 +27,9 @@ from orchestrator.interactions import (
     CommentProposal,
     InteractionAccepted,
     McpCapability,
-    McpDispatchProposal,
     PresentationCommand,
     PresentationResult,
 )
-from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.mcp_adapters import (
     LocalDeckAdapter,
     McpDispatchOutcome,
@@ -47,18 +45,23 @@ from orchestrator.runtime_contracts import (
     RuntimeOutcome,
     RuntimeRejection,
 )
+from orchestrator.runtime_control_parsing import parse_presentation_result_control
+from orchestrator.runtime_mcp_planning import (
+    PresentationMcpPlanInput,
+    build_presentation_mcp_plan,
+)
+from orchestrator.runtime_records import interaction_record, task_result_record
 from orchestrator.scheduler_reflex import SchedulerOutputFence
 from orchestrator.sessions import (
     EventCorrelation,
-    EventSequence,
     SchedulerEvent,
     SessionScheduler,
-    SessionSnapshot,
     StartTurn,
     TransitionAccepted,
 )
 from orchestrator.state_snapshots import TaskStateSnapshot
 from orchestrator.streaming_contracts import CancellationEpoch
+from orchestrator.task_admission import scheduling_rejection, with_current_data_snapshot
 from orchestrator.task_executor import TaskLaneExecutor
 from orchestrator.task_reducer import (
     TaskEffect,
@@ -67,11 +70,8 @@ from orchestrator.task_reducer import (
     TaskResultReducer,
 )
 from orchestrator.task_registry import (
-    IdempotencyKey,
     SchedulerTaskConfig,
-    TaskDeadlineMs,
     TaskId,
-    TaskKind,
     TaskRegistrationAccepted,
     TaskRegistrationRejected,
     TaskRegistrationRejection,
@@ -95,18 +95,8 @@ def _monotonic_ms() -> int:
 
 @dataclass(slots=True)
 class _RuntimeJournal:
-    """类契约说明.
-
-    职责: 保存 _RuntimeJournal
-    不可变数据结构,用类型标注表达字段契约。
-    契约: 字段:
-    dispatches、task_commits、rejections。
-    """
-
     dispatches: list[RuntimeDispatch] = field(default_factory=list)
-
     task_commits: list[TaskResult] = field(default_factory=list)
-
     rejections: list[RuntimeRejection] = field(default_factory=list)
 
 
@@ -294,48 +284,15 @@ class SessionRuntime:
         str。 必填。
         契约: 同步调用。 返回 `bool`。
         """
-        try:
-            value = parse_json_value(raw_message)
-
-        except JsonBoundaryError:
+        parsed = parse_presentation_result_control(
+            raw_message, self.scheduler.snapshot.session_id
+        )
+        if parsed is None:
             return False
-
-        if (
-            not isinstance(value, dict)
-            or value.get("event_type") != "presentation.result"
-        ):
-            return False
-
-        data = value.get("data")
-
-        trace_id = value.get("trace_id")
-
-        session_id = value.get("session_id")
-
-        sequence = value.get("seq")
-
-        command_id = data.get("command_id") if isinstance(data, dict) else None
-
-        succeeded = data.get("succeeded") if isinstance(data, dict) else None
-
-        if (
-            value.get("source") != "frontend"
-            or not isinstance(trace_id, str)
-            or not isinstance(session_id, str)
-            or session_id != self.scheduler.snapshot.session_id
-            or type(sequence) is not int
-            or not isinstance(command_id, str)
-            or type(succeeded) is not bool
-        ):
-            return False
-
+        result, correlation = parsed
         _ = self.receive_presentation_result(
-            PresentationResult(CommandId(command_id), succeeded),
-            EventCorrelation(
-                TraceId(trace_id),
-                SessionId(session_id),
-                EventSequence(sequence),
-            ),
+            result,
+            correlation,
         )
 
         return True
@@ -418,31 +375,17 @@ class SessionRuntime:
         if not outcome.accepted or turn_id is None:
             return outcome
 
-        deadline_ms = self.clock() + 5_000
-
-        request = TaskRequest(
-            task_id=TaskId(f"mcp-{proposal.command_id}"),
-            session_id=self.scheduler.snapshot.session_id,
-            turn_id=turn_id,
-            parent_task_id=None,
-            deadline_ms=TaskDeadlineMs(deadline_ms),
-            snapshot_revision=self.scheduler.snapshot.revision,
-            idempotency_key=IdempotencyKey(f"mcp-{proposal.command_id}"),
-            kind=TaskKind.INTERACTIVE,
-            data_snapshot=self._task_data_snapshot,
+        plan = build_presentation_mcp_plan(
+            PresentationMcpPlanInput(
+                proposal=proposal,
+                snapshot=self.scheduler.snapshot,
+                turn_id=turn_id,
+                data_snapshot=self._task_data_snapshot,
+                deadline_ms=self.clock() + 5_000,
+            )
         )
 
-        intent = McpIntent(
-            McpDispatchProposal(
-                McpCapability.PRESENTATION_DECK,
-                proposal.command_id,
-                cancelled=False,
-            ),
-            proposal,
-            deadline_ms,
-        )
-
-        scheduled = self.schedule_mcp_task(intent, request, correlation)
+        scheduled = self.schedule_mcp_task(plan.intent, plan.request, correlation)
 
         if not scheduled.accepted:
             self.interaction_ingress.reducer.cancel_presentation(proposal.command_id)
@@ -655,8 +598,14 @@ class SessionRuntime:
         if outcome.accepted:
             self._mcp_intents[request.task_id] = intent
 
-        self._record_interaction(
-            correlation, "mcp_task", outcome.accepted, request.task_id
+        self.operational_journal.append(
+            interaction_record(
+                correlation,
+                self.scheduler.snapshot,
+                "mcp_task",
+                outcome.accepted,
+                request.task_id,
+            )
         )
 
         return outcome
@@ -737,8 +686,14 @@ class SessionRuntime:
         finally:
             _ = self._active_mcp_tasks.pop(request.task_id, None)
 
-        self._record_interaction(
-            correlation, "mcp_dispatch", outcome.accepted, request.task_id
+        self.operational_journal.append(
+            interaction_record(
+                correlation,
+                self.scheduler.snapshot,
+                "mcp_dispatch",
+                outcome.accepted,
+                request.task_id,
+            )
         )
 
         if not outcome.accepted:
@@ -878,7 +833,7 @@ class SessionRuntime:
         return self.interaction_ingress.data.task_snapshot
 
     def _admit_task(self, request: TaskRequest) -> TaskRegistrationResult:
-        rejection = _scheduling_rejection(request, self.scheduler.snapshot)
+        rejection = scheduling_rejection(request, self.scheduler.snapshot)
 
         if rejection is not None:
             return TaskRegistrationRejected(rejection)
@@ -901,7 +856,7 @@ class SessionRuntime:
         EventCorrelation。 必填。
         契约: 同步调用。 返回 `RuntimeOutcome`。
         """
-        task_request = _with_current_data_snapshot(request, self._task_data_snapshot)
+        task_request = with_current_data_snapshot(request, self._task_data_snapshot)
 
         admission = self._admit_task(task_request)
 
@@ -977,14 +932,14 @@ class SessionRuntime:
                 self._journal.task_commits.append(result)
 
                 self.operational_journal.append(
-                    _task_result_record(result, correlation, "accepted")
+                    task_result_record(result, correlation, "accepted")
                 )
 
                 return RuntimeOutcome(accepted=True, correlation=correlation)
 
             case _:
                 self.operational_journal.append(
-                    _task_result_record(result, correlation, "rejected")
+                    task_result_record(result, correlation, "rejected")
                 )
 
                 return self._reject(correlation, "task_result_rejected")
@@ -1022,113 +977,17 @@ class SessionRuntime:
         task_id: TaskId | None。 必填。
         契约: 同步调用。 返回 `RuntimeOutcome`。
         """
-        self._record_interaction(correlation, stage, accepted, task_id)
+        self.operational_journal.append(
+            interaction_record(
+                correlation,
+                self.scheduler.snapshot,
+                stage,
+                accepted,
+                task_id,
+            )
+        )
 
         if accepted:
             return RuntimeOutcome(accepted=True, correlation=correlation)
 
         return self._reject(correlation, stage)
-
-    def _record_interaction(
-        self,
-        correlation: EventCorrelation,
-        stage: str,
-        accepted: bool,
-        task_id: TaskId | None,
-    ) -> None:
-        """函数契约说明.
-
-        功能: 执行 _record_interaction
-        的同步逻辑,并协调 append,
-        OperationalRecord, str,
-        _active_turn_id。
-        参数: self 表示当前实例。 correlation:
-        EventCorrelation。 必填。 stage:
-        str。 必填。 accepted: bool。 必填。
-        task_id: TaskId | None。 必填。
-        契约: 同步调用。 返回 `None`。
-        """
-        self.operational_journal.append(
-            OperationalRecord(
-                stage=stage,
-                trace_id=str(correlation.trace_id),
-                session_id=str(correlation.session_id),
-                turn_id=_active_turn_id(self.scheduler.snapshot),
-                segment_id=None,
-                task_id=None if task_id is None else str(task_id),
-                outcome="accepted" if accepted else "rejected",
-            )
-        )
-
-
-def _task_result_record(
-    result: TaskResult, correlation: EventCorrelation, outcome: str
-) -> OperationalRecord:
-    """函数契约说明.
-
-    功能: 执行 _task_result_record 的同步逻辑,并协调
-    OperationalRecord, str。
-    参数: result: TaskResult。 必填。
-    correlation: EventCorrelation。 必填。
-    outcome: str。 必填。
-    契约: 同步调用。 返回 `OperationalRecord`。
-    """
-    return OperationalRecord(
-        stage="task_result",
-        trace_id=str(correlation.trace_id),
-        session_id=str(correlation.session_id),
-        turn_id=str(result.turn_id),
-        segment_id=None,
-        task_id=str(result.task_id),
-        outcome=outcome,
-    )
-
-
-def _active_turn_id(snapshot: SessionSnapshot) -> str | None:
-    """函数契约说明.
-
-    功能: 执行 _active_turn_id 的同步逻辑,并协调
-    str。
-    参数: snapshot: SessionSnapshot。 必填。
-    契约: 同步调用。 返回 `str | None`。
-    """
-    active_turn_id = snapshot.active_turn_id
-
-    if active_turn_id is None:
-        return None
-
-    return str(active_turn_id)
-
-
-def _with_current_data_snapshot(
-    request: TaskRequest,
-    data_snapshot: TaskStateSnapshot,
-) -> TaskRequest:
-    """函数契约说明.
-
-    功能: 执行 _with_current_data_snapshot
-    的同步逻辑,并协调 initial, replace。
-    参数: request: TaskRequest。 必填。
-    data_snapshot: TaskStateSnapshot。
-    必填。
-    契约: 同步调用。 返回 `TaskRequest`。
-    """
-    if request.data_snapshot == TaskStateSnapshot.initial():
-        return replace(request, data_snapshot=data_snapshot)
-
-    return request
-
-
-def _scheduling_rejection(
-    request: TaskRequest, snapshot: SessionSnapshot
-) -> TaskRegistrationRejection | None:
-    if request.session_id != snapshot.session_id:
-        return TaskRegistrationRejection.SESSION_MISMATCH
-
-    if request.turn_id != snapshot.active_turn_id:
-        return TaskRegistrationRejection.ACTIVE_TURN_MISMATCH
-
-    if request.snapshot_revision != snapshot.revision:
-        return TaskRegistrationRejection.STALE_SNAPSHOT
-
-    return None

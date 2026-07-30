@@ -602,6 +602,43 @@ def test_live_mcp_worker_requires_exact_correlated_ack_before_deck_commit() -> N
     assert runtime.interaction_ingress.reducer.presentation_state == ("deck-1", "v1", 1)
 
 
+def test_duplicate_presentation_command_id_dispatches_adapter_once() -> None:
+    # Given: a live deck adapter and one reducer-admitted presentation command.
+    runtime = _runtime()
+    _ = _open_turn(runtime)
+    correlation = _correlation("session-1", "trace-duplicate-deck", 2)
+    command = PresentationCommand(
+        PresentationCommandKind.LOAD, "deck-duplicate", 1, CommandId("deck-duplicate")
+    )
+    adapter = _SuccessfulAdapter()
+    runtime.mcp_dispatcher = ScopedMcpAdapterDispatcher(
+        runtime.interaction_ingress.reducer, {McpCapability.PRESENTATION_DECK: adapter}
+    )
+
+    # When: the same command ID is scheduled through the runtime twice.
+    first = runtime.receive_presentation(command, correlation)
+    second = runtime.receive_presentation(command, correlation)
+    scheduled = runtime.schedule_mcp_task(
+        McpIntent(
+            McpDispatchProposal(
+                McpCapability.PRESENTATION_DECK, command.command_id, cancelled=False
+            ),
+            command,
+            deadline_ms=100,
+        ),
+        _request(runtime, TurnId("turn-0001"), task_id="duplicate-deck"),
+        correlation,
+    )
+    outcome = runtime.run_mcp_worker(now_ms=0, correlation=correlation)
+
+    # Then: duplicate admission creates no second dispatch or adapter side effect.
+    assert first.accepted is True
+    assert second.accepted is False
+    assert scheduled.accepted is True
+    assert outcome.accepted is True
+    assert adapter.calls == [command.command_id]
+
+
 def test_live_mcp_worker_reconciles_ambiguity_without_adapter_state_commit() -> None:
     # Given: an ambiguous adapter result followed by its explicit reconciliation.
 
