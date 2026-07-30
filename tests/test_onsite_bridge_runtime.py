@@ -21,6 +21,7 @@ from orchestrator.transport_runtime import ControlHandler, TransportRuntime
 
 if TYPE_CHECKING:
     from orchestrator.json_boundary import JsonValue
+    from orchestrator.provider_streaming import ProviderCancellationHandle
     from orchestrator.transport_hub import RtpHub
 
 
@@ -58,8 +59,10 @@ class _DatagramListener:
 class _DelayedAsr:
     started: threading.Event = field(default_factory=threading.Event)
     release: threading.Event = field(default_factory=threading.Event)
+    completed: threading.Event = field(default_factory=threading.Event)
+    cancelled: threading.Event = field(default_factory=threading.Event)
 
-    def transcribe(
+    def transcribe(  # noqa: PLR0913
         self,
         *,
         audio: bytes,
@@ -67,19 +70,33 @@ class _DelayedAsr:
         received_at_ms: int,
         segment_id: str,
         seq: int,
+        cancellation: ProviderCancellationHandle | None = None,
     ) -> ASRAudienceEvent:
         _ = (audio, filename)
-        self.started.set()
+        if cancellation is not None:
+            _ = cancellation.bind(self._cancel)
+        _ = self.started.set()
         _ = self.release.wait()
+        _ = self.completed.set()
         return ASRAudienceEvent("Explain BitNet", received_at_ms, segment_id, seq)
+
+    def _cancel(self) -> None:
+        _ = self.cancelled.set()
+        _ = self.release.set()
 
 
 @dataclass(frozen=True, slots=True)
 class _Tts:
     def synthesize(
-        self, *, text: str, voice: str, ref_audio: str, ref_text: str
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
     ) -> SynthesizedAudio:
-        _ = (text, voice, ref_audio, ref_text)
+        _ = (text, voice, ref_audio, ref_text, cancellation)
         return SynthesizedAudio(_wav(b"\x10\x20" * 320), "audio/wav")
 
 
@@ -115,6 +132,38 @@ async def _cancellation_proof() -> None:
     await runtime.close()
 
     # Then: the callback released the loop and no stale RTP reached Sound.
+    assert transport.sent == []
+
+
+def test_runtime_close_cancels_blocking_asr_and_drops_its_late_output() -> None:
+    asyncio.run(_close_before_release_proof())
+
+
+async def _close_before_release_proof() -> None:
+    # Given: an onsite ASR worker blocked until its provider resource is cancelled.
+    transport = _Datagrams()
+    listener = _DatagramListener(transport)
+    asr = _DelayedAsr()
+    runtime = TransportRuntime(
+        _loopback_config(),
+        datagram_listener=listener.listen,
+        control_listener=_control_listener,
+        onsite_bridge=_bridge(asr),
+    )
+    await runtime.start()
+    assert listener.hub is not None
+    listener.hub.register_control(_source_registration(), "127.0.0.1")
+    listener.hub.register_control(_sink_registration(), "127.0.0.1")
+    assert runtime.route_datagram(_rtp_packet(), ("127.0.0.1", 41_000)) is False
+    _ = await asyncio.to_thread(asr.started.wait)
+
+    # When: runtime shutdown invalidates the route before the blocking worker releases.
+    await runtime.close()
+
+    # Then: shutdown cancels the provider and its result cannot emit stale RTP.
+    assert transport.sent == []
+    _ = await asyncio.to_thread(asr.completed.wait)
+    assert asr.cancelled.is_set()
     assert transport.sent == []
 
 
@@ -171,7 +220,7 @@ def _codec() -> dict[str, JsonValue]:
 
 def _rtp_packet() -> bytes:
     return b"\x80\x60\x00\x01\x00\x00\x00\x01\x10\x20\x30\x40" + (
-        b"\x01\x02" * 320
+        b"\x7f\xff" * 320
     )
 
 
@@ -179,7 +228,7 @@ def _bridge(asr: _DelayedAsr) -> OnsiteExplainerBridge:
     return OnsiteExplainerBridge(
         asr=asr,
         tts=_Tts(),
-        pipeline=OrchestratorTurnPipeline(
+        pipeline_factory=lambda: OrchestratorTurnPipeline(
             adapters=PipelineAdapters(
                 mode_policy=ModePolicy.onsite_explainer(),
                 llm=MockLLMAdapter(("onsite answer",)),
@@ -191,6 +240,7 @@ def _bridge(asr: _DelayedAsr) -> OnsiteExplainerBridge:
         ref_audio="file:///voice.wav",
         ref_text="reference",
         frames_per_utterance=1,
+        legacy_keyed_frames_per_utterance=1,
     )
 
 

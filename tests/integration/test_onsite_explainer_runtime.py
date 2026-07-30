@@ -4,18 +4,20 @@ import asyncio
 import io
 import json
 import wave
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from orchestrator.json_boundary import JsonValue
+    from orchestrator.provider_streaming import ProviderCancellationHandle
 
 from sound.receive import ReceiveRuntime
 from sound.receive_config import SoundReceiveConfig
 from sound.rtp_playback import L16PlaybackFrame, StreamId
 
+from orchestrator.ids import SessionId
 from orchestrator.llm import MockLLMAdapter
 from orchestrator.media_adapters import SynthesizedAudio
 from orchestrator.modes import ModePolicy
@@ -23,7 +25,17 @@ from orchestrator.onsite_bridge import OnsiteExplainerBridge
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
 from orchestrator.pipeline_contracts import ASRAudienceEvent, PipelineConfig
 from orchestrator.retrieval import RetrievalFixtureProvider
+from orchestrator.scheduler_reflex import SchedulerOutputFence
+from orchestrator.sessions import SessionScheduler
+from orchestrator.streaming_contracts import (
+    FlushAcknowledgement,
+    FlushRequestId,
+    GeneratedSsrc,
+    SegmentId,
+    StreamKey,
+)
 from orchestrator.transport_hub import RtpHub
+from orchestrator.tts_rtp import Pcm16leChunk
 
 SESSION_ID: Final = "session-onsite-runtime-001"
 STREAM_ID: Final = "mic-onsite-runtime-001"
@@ -120,8 +132,9 @@ class _SoundSink:
 @dataclass(frozen=True, slots=True)
 class _Asr:
     text: str
+    expected_audio_bytes: int = 1_280
 
-    def transcribe(
+    def transcribe(  # noqa: PLR0913
         self,
         *,
         audio: bytes,
@@ -129,17 +142,42 @@ class _Asr:
         received_at_ms: int,
         segment_id: str,
         seq: int,
+        cancellation: ProviderCancellationHandle | None = None,
     ) -> ASRAudienceEvent | None:
+        _ = cancellation
         assert filename == "onsite-l16.wav"
-        assert len(_wav_payload(audio)) == 1_280
+        assert len(_wav_payload(audio)) == self.expected_audio_bytes
         return ASRAudienceEvent(self.text, received_at_ms, segment_id, seq)
 
 
 @dataclass(frozen=True, slots=True)
 class _Tts:
+    def stream_pcm16le(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> tuple[Pcm16leChunk, ...]:
+        _ = cancellation
+        assert text == "onsite answer"
+        assert voice == "raspberry"
+        assert ref_audio == "file:///voice.wav"
+        assert ref_text == "reference"
+        return (Pcm16leChunk(b"\x10\x20" * 319 + b"\x10"), Pcm16leChunk(b"\x20"))
+
     def synthesize(
-        self, *, text: str, voice: str, ref_audio: str, ref_text: str
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
     ) -> SynthesizedAudio:
+        _ = cancellation
         assert text == "onsite answer"
         assert voice == "raspberry"
         assert ref_audio == "file:///voice.wav"
@@ -151,30 +189,104 @@ def test_onsite_runtime_composes_asr_pipeline_tts_and_replaces_mic_rtp() -> None
     asyncio.run(_runtime_composition_proof())
 
 
-async def _runtime_composition_proof() -> None:
-    # Given: the real bridge with deterministic provider boundaries and pinned routes.
+def test_onsite_runtime_baseline_preserves_current_generated_output() -> None:
+    asyncio.run(_runtime_composition_proof())
+
+
+def test_onsite_runtime_scheduler_fences_barge_in_until_exact_flush_ack() -> None:
+    asyncio.run(_scheduler_barge_in_proof())
+
+
+async def _scheduler_barge_in_proof() -> None:
+    # Given: generated output for a scheduler-owned active turn on a live route.
     transport = _Datagrams()
-    hub = RtpHub(transport, onsite_bridge=_bridge("Explain BitNet"))
+    scheduler = SessionScheduler(
+        session_id=SessionId(SESSION_ID), turn_id_prefix="turn-onsite-reflex"
+    )
+    fence = SchedulerOutputFence(scheduler)
+    hub = RtpHub(transport)
+    hub.set_output_fence(fence)
     hub.register_control(
         _registration("media.rtp.source.register", "mic", _source()), MIC_PEER[0]
     )
     hub.register_control(
         _registration("media.rtp.sink.register", "sound", _sink()), SOUND_PEER[0]
     )
-    mic_packet = _rtp(MIC_SSRC, b"\x01\x02" * 320)
+    stream = StreamKey(SESSION_ID, STREAM_ID)
+    correlation = hub.correlation(stream)
+    assert correlation is not None
+    first = fence.activate(
+        stream=stream,
+        segment_id=SegmentId("segment-first"),
+        target_generated_ssrc=GeneratedSsrc(0x1111_1111),
+        correlation=correlation,
+    )
+    old_packet = _rtp(int(first.target_generated_ssrc), b"\x10\x20" * 320)
+    await hub.deliver_generated_rtp(stream, first.cancellation_epoch, old_packet)
 
-    # When: two registered Mic frames complete the deterministic utterance.
-    first_delivered = hub.route_datagram(mic_packet, MIC_PEER)
-    delivered = hub.route_datagram(mic_packet, MIC_PEER)
+    # When: a later meaningful utterance interrupts the active output.
+    replacement, flush = fence.interrupt(
+        stream=stream,
+        segment_id=SegmentId("segment-replacement"),
+        correlation=correlation,
+    )
+    replacement_packet = _rtp(
+        int(replacement.target_generated_ssrc), b"\x30\x40" * 320
+    )
+    await hub.deliver_generated_rtp(stream, first.cancellation_epoch, old_packet)
+    await hub.deliver_generated_rtp(
+        stream, replacement.cancellation_epoch, replacement_packet
+    )
+
+    # Then: old and pre-ack replacement RTP are fenced until Sound confirms this flush.
+    assert transport.sent == [(old_packet, (SOUND_PEER[0], 5006))]
+    acknowledgement = FlushAcknowledgement.from_flush(flush)
+    assert fence.acknowledge(
+        replace(acknowledgement, request_id=FlushRequestId("stale-flush"))
+    ) is False
+    assert fence.can_emit(stream, replacement.cancellation_epoch) is False
+    assert fence.acknowledge(FlushAcknowledgement.from_flush(flush)) is True
+    assert fence.acknowledge(FlushAcknowledgement.from_flush(flush)) is False
+    await hub.deliver_generated_rtp(
+        stream, replacement.cancellation_epoch, replacement_packet
+    )
+    assert transport.sent == [
+        (old_packet, (SOUND_PEER[0], 5006)),
+        (replacement_packet, (SOUND_PEER[0], 5006)),
+    ]
+
+
+async def _runtime_composition_proof() -> None:
+    # Given: the real bridge with deterministic provider boundaries and pinned routes.
+    transport = _Datagrams()
+    hub = RtpHub(transport, onsite_bridge=_bridge("Explain BitNet", 19_840))
+    hub.register_control(
+        _registration("media.rtp.source.register", "mic", _source()), MIC_PEER[0]
+    )
+    hub.register_control(
+        _registration("media.rtp.sink.register", "sound", _sink()), SOUND_PEER[0]
+    )
+    speech_packet = _rtp(MIC_SSRC, b"\x03\xe8" * 320, 1, 320)
+
+    # When: speech is followed by the 600 ms silence endpoint.
+    first_delivered = hub.route_datagram(speech_packet, MIC_PEER)
+    delivered = all(
+        hub.route_datagram(
+            _rtp(MIC_SSRC, b"\x00\x00" * 320, sequence, sequence * 320),
+            MIC_PEER,
+        )
+        is False
+        for sequence in range(2, 32)
+    )
     await hub.wait_for_onsite_jobs()
 
     # Then: Sound receives generated canonical RTP, never the microphone packet.
     assert first_delivered is False
-    assert delivered is False
+    assert delivered is True
     assert len(transport.sent) == 1
     generated, endpoint = transport.sent[0]
     assert endpoint == (SOUND_PEER[0], 5006)
-    assert generated != mic_packet
+    assert generated != speech_packet
     assert generated[:2] == b"\x80\x60"
     assert int.from_bytes(generated[8:12]) != MIC_SSRC
     assert generated[12:] == b"\x20\x10" * 320
@@ -249,11 +361,11 @@ async def _sound_runtime_playback_proof() -> None:
     ]
 
 
-def _bridge(text: str) -> OnsiteExplainerBridge:
+def _bridge(text: str, expected_audio_bytes: int = 1_280) -> OnsiteExplainerBridge:
     return OnsiteExplainerBridge(
-        asr=_Asr(text),
+        asr=_Asr(text, expected_audio_bytes),
         tts=_Tts(),
-        pipeline=OrchestratorTurnPipeline(
+        pipeline_factory=lambda: OrchestratorTurnPipeline(
             adapters=PipelineAdapters(
                 mode_policy=ModePolicy.onsite_explainer(),
                 llm=MockLLMAdapter(("onsite ", "answer")),
@@ -326,8 +438,14 @@ def _registration(event_type: str, source: str, data: dict[str, JsonValue]) -> s
     )
 
 
-def _rtp(ssrc: int, payload: bytes) -> bytes:
-    return b"\x80\x60\x00\x01\x00\x00\x00\x01" + ssrc.to_bytes(4, "big") + payload
+def _rtp(ssrc: int, payload: bytes, sequence: int = 1, timestamp: int = 1) -> bytes:
+    return (
+        b"\x80\x60"
+        + sequence.to_bytes(2, "big")
+        + timestamp.to_bytes(4, "big")
+        + ssrc.to_bytes(4, "big")
+        + payload
+    )
 
 
 def _wav(payload: bytes) -> bytes:

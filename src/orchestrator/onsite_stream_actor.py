@@ -1,0 +1,354 @@
+"""Per-stream staged onsite ASR, LLM, TTS, and RTP delivery actor."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections import deque
+from contextlib import suppress
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Protocol
+
+from orchestrator.llm import CancellationToken
+from orchestrator.observability import (
+    OnsiteObservability,
+    OnsiteStage,
+    StageCorrelation,
+    StageDetails,
+)
+from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
+from orchestrator.streaming_pipeline_actors import (
+    ANSWER_TURN_CAPACITY,
+    ENDPOINTED_UTTERANCE_CAPACITY,
+    TTS_CHUNK_CAPACITY,
+    PipelineDropCounts,
+)
+from orchestrator.tts_rtp import Pcm16leChunk, TtsPcmRtpPacketizer
+
+if TYPE_CHECKING:
+    from orchestrator.pipeline_contracts import ASRAudienceEvent, TurnResult
+    from orchestrator.streaming_endpoint import EndpointedUtterance
+
+
+class OnsiteStages(Protocol):
+    """Synchronous provider stages owned by one stream-local actor."""
+
+    def transcribe(
+        self, endpoint: EndpointedUtterance, cancellation: CancellationToken
+    ) -> ASRAudienceEvent | None:
+        """Convert one endpointed utterance to an ASR final."""
+        ...
+
+    def answer(
+        self, event: ASRAudienceEvent, cancellation: CancellationToken
+    ) -> TurnResult | None:
+        """Generate one turn result from an ASR final."""
+        ...
+
+    def synthesize(
+        self, turn: TurnResult, cancellation: CancellationToken
+    ) -> tuple[Pcm16leChunk, ...] | None:
+        """Generate fixed-format PCM chunks for one turn."""
+        ...
+
+    def complete(self, turn: TurnResult, chunks: tuple[Pcm16leChunk, ...]) -> None:
+        """Record synthesis completion in the stream-local pipeline."""
+        ...
+
+    async def output(
+        self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
+    ) -> None:
+        """Deliver one generated canonical RTP packet."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class _EndpointItem:
+    epoch: CancellationEpoch
+    endpoint: EndpointedUtterance
+
+
+@dataclass(frozen=True, slots=True)
+class _AnswerItem:
+    epoch: CancellationEpoch
+    event: ASRAudienceEvent
+    correlation: StageCorrelation
+
+
+@dataclass(frozen=True, slots=True)
+class _ChunkItem:
+    epoch: CancellationEpoch
+    chunk: Pcm16leChunk | None
+    correlation: StageCorrelation
+
+
+@dataclass(slots=True)
+class OnsiteStreamActor:
+    """Owns bounded staged work and cancellation for one authenticated stream."""
+
+    stream: StreamKey
+    epoch: CancellationEpoch
+    stages: OnsiteStages
+    observability: OnsiteObservability | None = None
+    _endpoints: deque[_EndpointItem] = field(default_factory=deque)
+    _answers: deque[_AnswerItem] = field(default_factory=deque)
+    _chunks: deque[_ChunkItem] = field(default_factory=deque)
+    _endpoint_wake: asyncio.Event = field(default_factory=asyncio.Event)
+    _answer_wake: asyncio.Event = field(default_factory=asyncio.Event)
+    _chunk_wake: asyncio.Event = field(default_factory=asyncio.Event)
+    _endpoint_task: asyncio.Task[None] | None = None
+    _answer_task: asyncio.Task[None] | None = None
+    _chunk_task: asyncio.Task[None] | None = None
+    _drops: PipelineDropCounts = field(default_factory=PipelineDropCounts)
+    _closed: bool = False
+    _packetizer: TtsPcmRtpPacketizer = field(init=False)
+    _latest_correlation: StageCorrelation | None = None
+    _active_cancellations: set[CancellationToken] = field(default_factory=set)
+
+    def __post_init__(self) -> None:
+        """Create one generated RTP packetizer for this stream epoch."""
+        self._packetizer = TtsPcmRtpPacketizer(self.stream, self.epoch)
+
+    @property
+    def drop_counts(self) -> PipelineDropCounts:
+        """Return oldest-unstarted displacement counts for this actor."""
+        return self._drops
+
+    def submit(self, endpoint: EndpointedUtterance, epoch: CancellationEpoch) -> None:
+        """Submit one endpointed utterance without waiting for downstream output."""
+        if self._closed or epoch != self.epoch:
+            return
+        self._record("endpoint", endpoint, epoch)
+        self._latest_correlation = self._correlation(endpoint, epoch)
+        self._append_endpoint(_EndpointItem(epoch, endpoint))
+
+    def invalidate(self, next_epoch: CancellationEpoch) -> None:
+        """Synchronously discard queued and active work for the retired epoch."""
+        self.epoch = next_epoch
+        self._closed = True
+        self._packetizer.cancel()
+        correlation = self._latest_correlation
+        if correlation is not None:
+            self._record_correlation("cancellation", correlation, None)
+        self._endpoints.clear()
+        self._answers.clear()
+        self._chunks.clear()
+        for cancellation in tuple(self._active_cancellations):
+            _ = cancellation.cancel(reason="stream_invalidated")
+        if self._chunk_task is not None:
+            _ = self._chunk_task.cancel()
+
+    async def aclose(self) -> None:
+        """Cancel the actor and wait for all owned tasks to settle."""
+        self.invalidate(CancellationEpoch(int(self.epoch) + 1))
+        await self.wait_quiescent()
+
+    async def wait_quiescent(self) -> None:
+        """Wait until every currently accepted stage item has settled."""
+        while True:
+            tasks = tuple(
+                task
+                for task in (self._endpoint_task, self._answer_task, self._chunk_task)
+                if task is not None and not task.done()
+            )
+            if not tasks:
+                return
+            for task in tasks:
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    def _append_endpoint(self, item: _EndpointItem) -> None:
+        correlation = self._correlation(item.endpoint, item.epoch)
+        if len(self._endpoints) == ENDPOINTED_UTTERANCE_CAPACITY:
+            _ = self._endpoints.popleft()
+            self._drops = PipelineDropCounts(
+                endpointed_utterances=self._drops.endpointed_utterances + 1,
+                answer_turns=self._drops.answer_turns,
+                tts_chunks=self._drops.tts_chunks,
+            )
+            self._record_details(
+                "drop",
+                correlation,
+                StageDetails(drop_count=self._drops.endpointed_utterances),
+            )
+        self._endpoints.append(item)
+        self._record_details(
+            "queue",
+            correlation,
+            StageDetails(
+                queue_name="endpointed_utterances", queue_depth=len(self._endpoints)
+            ),
+        )
+        self._endpoint_wake.set()
+        task = self._endpoint_task
+        if task is None or task.done():
+            self._endpoint_task = asyncio.create_task(self._run_endpoints())
+
+    def _append_answer(self, item: _AnswerItem) -> None:
+        if len(self._answers) == ANSWER_TURN_CAPACITY:
+            _ = self._answers.popleft()
+            self._drops = PipelineDropCounts(
+                endpointed_utterances=self._drops.endpointed_utterances,
+                answer_turns=self._drops.answer_turns + 1,
+                tts_chunks=self._drops.tts_chunks,
+            )
+            self._record_details(
+                "drop",
+                item.correlation,
+                StageDetails(drop_count=self._drops.answer_turns),
+            )
+        self._answers.append(item)
+        self._record_details(
+            "queue",
+            item.correlation,
+            StageDetails(queue_name="answer_turns", queue_depth=len(self._answers)),
+        )
+        self._answer_wake.set()
+        task = self._answer_task
+        if task is None or task.done():
+            self._answer_task = asyncio.create_task(self._run_answers())
+
+    def _append_chunk(self, item: _ChunkItem) -> None:
+        if len(self._chunks) == TTS_CHUNK_CAPACITY:
+            _ = self._chunks.popleft()
+            self._drops = PipelineDropCounts(
+                endpointed_utterances=self._drops.endpointed_utterances,
+                answer_turns=self._drops.answer_turns,
+                tts_chunks=self._drops.tts_chunks + 1,
+            )
+            self._record_details(
+                "drop",
+                item.correlation,
+                StageDetails(drop_count=self._drops.tts_chunks),
+            )
+        self._chunks.append(item)
+        self._record_details(
+            "queue",
+            item.correlation,
+            StageDetails(queue_name="tts_chunks", queue_depth=len(self._chunks)),
+        )
+        self._chunk_wake.set()
+        task = self._chunk_task
+        if task is None or task.done():
+            self._chunk_task = asyncio.create_task(self._run_chunks())
+
+    async def _run_endpoints(self) -> None:
+        while self._endpoints:
+            item = self._endpoints.popleft()
+            started_at = time.perf_counter()
+            cancellation = self._new_cancellation()
+            try:
+                event = await asyncio.to_thread(
+                    self.stages.transcribe, item.endpoint, cancellation
+                )
+            finally:
+                self._active_cancellations.discard(cancellation)
+            latency_ms = (time.perf_counter() - started_at) * 1_000
+            if item.epoch == self.epoch and event is not None:
+                correlation = self._correlation(item.endpoint, item.epoch)
+                self._record_correlation("asr_final", correlation, latency_ms)
+                self._append_answer(_AnswerItem(item.epoch, event, correlation))
+
+    async def _run_answers(self) -> None:
+        while self._answers:
+            item = self._answers.popleft()
+            cancellation = self._new_cancellation()
+            try:
+                chunks = await asyncio.to_thread(
+                    self._answer_and_synthesize,
+                    item.event,
+                    item.correlation,
+                    cancellation,
+                )
+            finally:
+                self._active_cancellations.discard(cancellation)
+            if item.epoch != self.epoch or chunks is None:
+                continue
+            for chunk in chunks:
+                self._append_chunk(_ChunkItem(item.epoch, chunk, item.correlation))
+            self._append_chunk(_ChunkItem(item.epoch, None, item.correlation))
+
+    def _answer_and_synthesize(
+        self,
+        event: ASRAudienceEvent,
+        correlation: StageCorrelation,
+        cancellation: CancellationToken,
+    ) -> tuple[Pcm16leChunk, ...] | None:
+        answer_started_at = time.perf_counter()
+        turn = self.stages.answer(event, cancellation)
+        self._record_correlation(
+            "answer", correlation, (time.perf_counter() - answer_started_at) * 1_000
+        )
+        if turn is None or turn.answer_text.strip() == "":
+            return None
+        tts_started_at = time.perf_counter()
+        chunks = self.stages.synthesize(turn, cancellation)
+        self._record_correlation(
+            "tts", correlation, (time.perf_counter() - tts_started_at) * 1_000
+        )
+        if chunks is None or not chunks:
+            return None
+        self.stages.complete(turn, chunks)
+        return chunks
+
+    def _new_cancellation(self) -> CancellationToken:
+        """Create and retain one provider cancellation handle for active stage work."""
+        cancellation = CancellationToken()
+        self._active_cancellations.add(cancellation)
+        return cancellation
+
+    async def _run_chunks(self) -> None:
+        while self._chunks:
+            item = self._chunks.popleft()
+            if item.epoch != self.epoch:
+                continue
+            packets = (
+                self._packetizer.finish()
+                if item.chunk is None
+                else self._packetizer.push(item.chunk)
+            )
+            for packet in packets:
+                if item.epoch == self.epoch:
+                    await self.stages.output(self.stream, item.epoch, packet)
+                    self._record_correlation("rtp_egress", item.correlation, None)
+
+    def _correlation(
+        self, endpoint: EndpointedUtterance, epoch: CancellationEpoch
+    ) -> StageCorrelation:
+        observability = self.observability
+        if observability is None:
+            return StageCorrelation("", "", 0)
+        correlation = observability.correlation(
+            endpoint.stream, str(endpoint.turn_id), str(endpoint.segment_id), epoch
+        )
+        if correlation is None:
+            message = "missing source envelope correlation"
+            raise RuntimeError(message)
+        return correlation
+
+    def _record(
+        self,
+        stage: OnsiteStage,
+        endpoint: EndpointedUtterance,
+        epoch: CancellationEpoch,
+    ) -> None:
+        self._record_correlation(stage, self._correlation(endpoint, epoch), None)
+
+    def _record_correlation(
+        self,
+        stage: OnsiteStage,
+        correlation: StageCorrelation,
+        latency_ms: float | None,
+    ) -> None:
+        observability = self.observability
+        if observability is not None:
+            observability.record(
+                stage, correlation, StageDetails(latency_ms=latency_ms)
+            )
+
+    def _record_details(
+        self, stage: OnsiteStage, correlation: StageCorrelation, details: StageDetails
+    ) -> None:
+        observability = self.observability
+        if observability is not None:
+            observability.record(stage, correlation, details)

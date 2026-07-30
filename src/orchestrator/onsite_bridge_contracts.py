@@ -12,6 +12,7 @@ from orchestrator.transport_hub import L16_FRAME_BYTES
 if TYPE_CHECKING:
     from orchestrator.media_adapters import SynthesizedAudio
     from orchestrator.pipeline_contracts import ASRAudienceEvent
+    from orchestrator.provider_streaming import ProviderCancellationHandle
 
 _SAMPLE_RATE: Final = 16_000
 _PCM16_BYTES: Final = 2
@@ -46,7 +47,7 @@ class OnsiteBridgeMediaError(ValueError):
 class AsrAdapter(Protocol):
     """Transcribes one deterministic L16 utterance."""
 
-    def transcribe(
+    def transcribe(  # noqa: PLR0913
         self,
         *,
         audio: bytes,
@@ -54,6 +55,7 @@ class AsrAdapter(Protocol):
         received_at_ms: int,
         segment_id: str,
         seq: int,
+        cancellation: ProviderCancellationHandle | None = None,
     ) -> ASRAudienceEvent | None:
         """Return a normalized ASR final event."""
         ...
@@ -63,7 +65,13 @@ class TtsAdapter(Protocol):
     """Synthesizes a completed onsite answer."""
 
     def synthesize(
-        self, *, text: str, voice: str, ref_audio: str, ref_text: str
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
     ) -> SynthesizedAudio:
         """Return a WAV response under the fixed onsite media contract."""
         ...
@@ -78,6 +86,11 @@ def wav_from_l16(payload: bytes) -> bytes:
         audio.setframerate(_SAMPLE_RATE)
         audio.writeframes(_swap_pcm16_byte_order(payload))
     return output.getvalue()
+
+
+def pcm16le_from_l16(payload: bytes) -> bytes:
+    """Convert canonical network-order L16 to native PCM16LE payload bytes."""
+    return _swap_pcm16_byte_order(payload)
 
 
 def l16_from_wav(response: SynthesizedAudio) -> bytes:

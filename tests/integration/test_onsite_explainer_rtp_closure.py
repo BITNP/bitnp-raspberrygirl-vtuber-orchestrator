@@ -18,6 +18,11 @@ from orchestrator.retrieval import RetrievalFixtureProvider
 from orchestrator.transport_hub import RtpHub
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
+
+if TYPE_CHECKING:
     from orchestrator.json_boundary import JsonValue
 
 SESSION_ID: Final = "session-onsite-001"
@@ -29,7 +34,7 @@ TTS_SSRC: Final = 0x0506_0708
 SYNTHESIZED_L16_PAYLOAD: Final = b"\x10\x20" * 320
 
 
-@dataclass(slots=True)  # noqa: MUTABLE_OK - records datagrams delivered to Sound.
+@dataclass(slots=True)
 class FakeDatagramTransport:
     sent: list[tuple[bytes, tuple[str, int]]] = field(default_factory=list)
 
@@ -40,16 +45,32 @@ class FakeDatagramTransport:
         return None
 
 
-@dataclass(slots=True)  # noqa: MUTABLE_OK - records the bridge's externally visible work.
+@dataclass(slots=True)
 class FakeOnsiteExplainerBridge:
     asr_final: str
     mic_packets: list[bytes] = field(default_factory=list)
     answers: list[str] = field(default_factory=list)
+    _output: (
+        Callable[[StreamKey, CancellationEpoch, bytes], Awaitable[None]] | None
+    ) = None
+    _tasks: set[asyncio.Task[None]] = field(default_factory=set)
 
-    async def ingest_mic_rtp(self, packet: bytes) -> bytes | None:
+    def set_output_callback(
+        self, callback: Callable[[StreamKey, CancellationEpoch, bytes], Awaitable[None]]
+    ) -> None:
+        self._output = callback
+
+    def submit_mic_rtp(
+        self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
+    ) -> None:
         self.mic_packets.append(packet)
+        task = asyncio.create_task(self._emit(stream, epoch))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _emit(self, stream: StreamKey, epoch: CancellationEpoch) -> None:
         if self.asr_final == "":
-            return None
+            return
         pipeline = OrchestratorTurnPipeline(
             adapters=PipelineAdapters(
                 mode_policy=ModePolicy.onsite_explainer(),
@@ -87,7 +108,24 @@ class FakeOnsiteExplainerBridge:
             stream_id="onsite-answer-001",
         )
         assert cues is not None
-        return _rtp_packet(ssrc=TTS_SSRC, payload=SYNTHESIZED_L16_PAYLOAD)
+        output = self._output
+        if output is not None:
+            await output(
+                stream,
+                epoch,
+                _rtp_packet(ssrc=TTS_SSRC, payload=SYNTHESIZED_L16_PAYLOAD),
+            )
+
+    def invalidate_stream(
+        self, stream: StreamKey, next_epoch: CancellationEpoch
+    ) -> None:
+        _ = (stream, next_epoch)
+        for task in tuple(self._tasks):
+            _ = task.cancel()
+
+    async def wait_quiescent(self) -> None:
+        if self._tasks:
+            _ = await asyncio.gather(*self._tasks, return_exceptions=True)
 
 
 def test_onsite_mic_rtp_is_ingested_and_replaced_with_synthesized_sound_rtp() -> None:
