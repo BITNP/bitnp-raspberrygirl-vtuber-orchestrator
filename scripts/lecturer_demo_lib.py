@@ -49,7 +49,7 @@ def run_demo(script_path: Path) -> JsonObject:
             event_type="session.created",
             source="orchestrator",
             seq=1,
-            data={"created_at": "2026-07-14T00:00:00Z", "mode": "lecturer"},
+            data={"created_at": "2026-07-14T00:00:00Z"},
         ),
     ]
 

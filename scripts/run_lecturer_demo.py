@@ -78,9 +78,7 @@ def parse_args(argv: list[str]) -> CliArgs:
     参数: argv: list[str]。 必填。
     契约: 同步调用。 返回 `CliArgs`。
     """
-    parser = argparse.ArgumentParser(
-        description="Run the local lecturer-mode protocol demo."
-    )
+    parser = argparse.ArgumentParser(description="Run the local lecture-script protocol demo.")
 
     parser.add_argument("--script", required=True, type=Path)
 

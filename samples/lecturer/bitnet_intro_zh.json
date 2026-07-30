@@ -1,10 +1,10 @@
 {
-  "title": "BitNet 讲解模式演示",
+  "title": "BitNet 讲稿演示",
   "voice": "raspberry-default",
   "steps": [
     {
       "id": "intro",
-      "narration": "大家好，欢迎来到 BitNet 讲解模式演示。第一张幻灯片说明它为什么适合低功耗设备。",
+      "narration": "大家好，欢迎来到 BitNet 讲稿演示。第一张幻灯片说明它为什么适合低功耗设备。",
       "slide": {
         "id": "slide-01",
         "title": "为什么需要 BitNet",

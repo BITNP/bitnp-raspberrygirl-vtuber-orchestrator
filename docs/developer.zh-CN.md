@@ -20,11 +20,11 @@ Mic      -- WSS source control --> Orchestrator <-- WSS sink control ---- Sound
 Mic      -- UDP L16 RTP -------> Orchestrator -- UDP generated L16 RTP -> Sound
 ```
 
-Orchestrator 拥有 session state、revisioned event history、active turn、task registry、cancellation epoch、mode state 和 provider 边界。Mic、Comments、Sound 不感知模式，不持有跨服务状态。Frontend 只消费 Orchestrator 命令并返回受限结果。
+Orchestrator 拥有 session state、revisioned event history、active turn、task registry、cancellation epoch、交互策略和 provider 边界。Mic、Comments、Sound 不感知业务策略，不持有跨服务状态。Frontend 只消费 Orchestrator 命令并返回受限结果。
 
 ## 数据流动关系
 
-语音输入从 Mic 进入 Orchestrator 的 RTP ingress。现场讲解模式下，Orchestrator 对 20 ms L16 RTP 帧做端点检测，封装 16 kHz mono PCM WAV 给 ASR，再经 turn pipeline、LLM 和 TTS 生成新的 WAV，校验后重新 packetize 为 L16 RTP 发给 Sound。原始 Mic RTP 不直接转发给 Sound。
+语音输入从 Mic 进入 Orchestrator 的 RTP ingress。现场语音交互链路启用时，Orchestrator 对 20 ms L16 RTP 帧做端点检测，封装 16 kHz mono PCM WAV 给 ASR，再经 turn pipeline、LLM 和 TTS 生成新的 WAV，校验后重新 packetize 为 L16 RTP 发给 Sound。原始 Mic RTP 不直接转发给 Sound。
 
 评论输入由 Comments 以规范 envelope 提交为 `audience.input`。Frontend 只接收 Orchestrator 源的 caption、action、scene、presentation 等命令，演示命令完成后返回 `presentation.result`。所有迟到、超时、取消或被 supersede 的任务即使物理完成，也不能提交状态或产生副作用。
 

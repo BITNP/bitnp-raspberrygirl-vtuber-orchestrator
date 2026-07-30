@@ -1,4 +1,4 @@
-# Onsite Explainer Deployment
+# Onsite Spoken-Dialogue Deployment
 
 These templates run the real onsite loop:
 
@@ -6,14 +6,14 @@ These templates run the real onsite loop:
 Mic -> Orchestrator ASR -> Orchestrator LLM -> vLLM-Omni TTS -> Sound
 ```
 
-The Orchestrator is the only hub. Mic and Sound each connect only to its `/control` WSS endpoint and its RTP listener. They remain mode-agnostic. Frontend and Comments are not part of this deployment.
+The Orchestrator is the only hub. Mic and Sound each connect only to its `/control` WSS endpoint and its RTP listener. They remain strategy-agnostic. Frontend and Comments are not part of this deployment.
 
 ## Prepare Hosts
 
 1. Install each repository and run `uv sync --locked` on its host. The unit templates assume `/opt/bitnp/bitnp-raspberrygirl-vtuber-{orchestrator,mic,sound}` and the `bitnp` user and group. Replace paths, user, group, and Python virtual-environment executable paths for the target system.
 2. Copy each service's `.env.example` to the matching `/etc/bitnp/*.env` file. `EnvironmentFile` injects values directly. There is no dotenv loader.
 3. Keep secrets outside the repositories. Inject `TRUSTED_LAN_TOKEN` and provider API keys through the protected environment files or the site's secret mechanism. Mount the Orchestrator TLS certificate, TLS private key, and voice-reference WAV read-only at the paths named in its environment file. Protect these files so only the service account can read them. Install the issuing CA or certificate chain in the Mic and Sound hosts' system trust stores so both WSS clients trust the `/control` certificate.
-4. Set `ORCHESTRATOR_MODE=onsite_explainer`, `ORCHESTRATOR_LLM_PROVIDER=openai_compatible`, `ORCHESTRATOR_ASR_PROVIDER=openai_compatible`, and `ORCHESTRATOR_TTS_PROVIDER=vllm_omni`. Supply every endpoint and model variable in the Orchestrator example, the LLM API key, and nonempty `ORCHESTRATOR_TTS_VOICE`, `ORCHESTRATOR_TTS_REF_AUDIO`, and `ORCHESTRATOR_TTS_REF_TEXT`.
+4. Set `ORCHESTRATOR_LLM_PROVIDER=openai_compatible`, `ORCHESTRATOR_ASR_PROVIDER=openai_compatible`, and `ORCHESTRATOR_TTS_PROVIDER=vllm_omni`. Supply every endpoint and model variable in the Orchestrator example, the LLM API key, and nonempty `ORCHESTRATOR_TTS_VOICE`, `ORCHESTRATOR_TTS_REF_AUDIO`, and `ORCHESTRATOR_TTS_REF_TEXT`.
 5. Configure Mic and Sound with the same `BITNP_SESSION_ID` or `SOUND_SESSION_ID` and the same `BITNP_MIC_RTP_STREAM_ID` or `SOUND_RTP_STREAM_ID`. Both must use `wss://<orchestrator-host>/control`, the same trusted-LAN token, and the Orchestrator RTP host and port. No Mic-to-Sound address belongs in either file.
 6. On the private LAN, allow TCP to the Orchestrator control port and UDP to the Orchestrator RTP port from Mic and Sound. Allow UDP to the Sound RTP port from Orchestrator. Keep all of these listeners off public networks. If advertised and bound ports differ, create the matching forwarding rules.
 7. Install PortAudio on Mic and Sound hosts. Grant the service account access to the selected recording and playback devices under the host's audio policy. Select devices with `BITNP_CAPTURE_DEVICE` and `BITNP_PLAYBACK_DEVICE` when the defaults are unsuitable.

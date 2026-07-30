@@ -47,13 +47,13 @@ bash scripts/verify_workspace.sh --sibling-root ..
 
 The loopback integration check verifies the WS and UDP test path only. It does not replace a private LAN WSS deployment with externally provisioned TLS files and firewall rules.
 
-## Onsite Explainer Loop
+## Onsite Spoken-Dialogue Loop
 
-Set `ORCHESTRATOR_MODE=onsite_explainer` only for the real onsite loop. It requires `ORCHESTRATOR_ASR_PROVIDER=openai_compatible`, `ORCHESTRATOR_LLM_PROVIDER=openai_compatible`, and `ORCHESTRATOR_TTS_PROVIDER=vllm_omni`, plus every matching endpoint and model variable in `.env.example`. Supply the provider API keys through secret injection. The LLM API key is required. Set nonempty `ORCHESTRATOR_TTS_VOICE`, `ORCHESTRATOR_TTS_REF_AUDIO`, and `ORCHESTRATOR_TTS_REF_TEXT`; the voice-reference WAV path must be mounted read-only outside source control.
+The real onsite loop is enabled by the provider combination `ORCHESTRATOR_ASR_PROVIDER=openai_compatible`, `ORCHESTRATOR_LLM_PROVIDER=openai_compatible`, and `ORCHESTRATOR_TTS_PROVIDER=vllm_omni`, plus every matching endpoint and model variable in `.env.example`. Supply the provider API keys through secret injection. The LLM API key is required. Set nonempty `ORCHESTRATOR_TTS_VOICE`, `ORCHESTRATOR_TTS_REF_AUDIO`, and `ORCHESTRATOR_TTS_REF_TEXT`; the voice-reference WAV path must be mounted read-only outside source control.
 
-For each accepted Mic utterance, the bridge applies the documented deterministic VAD endpoint before sending fixed 16 kHz mono PCM WAV to ASR: threshold 400, ten-frame pre-roll, 600 ms silence close, and 15 s forced close. It then obtains an LLM answer, sends it to the vLLM-Omni TTS extension, validates its fixed 16 kHz mono PCM WAV response, and emits generated L16 RTP to Sound. It does not forward raw Mic RTP in this mode.
+For each accepted Mic utterance, the bridge applies the documented deterministic VAD endpoint before sending fixed 16 kHz mono PCM WAV to ASR: threshold 400, ten-frame pre-roll, 600 ms silence close, and 15 s forced close. It then obtains an LLM answer, sends it to the vLLM-Omni TTS extension, validates its fixed 16 kHz mono PCM WAV response, and emits generated L16 RTP to Sound. It does not forward raw Mic RTP in this path.
 
-Mic and Sound must use the same session ID and stream ID, the deployed `wss://<host>/control` endpoint, and the shared trusted-LAN token. They remain mode-agnostic and have no direct peer endpoint. Frontend is excluded from this onsite audio deployment. See [the systemd deployment bundle](../deploy/README.md) for secret mounts, private-LAN firewall rules, PortAudio access, startup and rollback ordering, and the live generated-TTS acceptance test.
+Mic and Sound must use the same session ID and stream ID, the deployed `wss://<host>/control` endpoint, and the shared trusted-LAN token. They remain strategy-agnostic and have no direct peer endpoint. Frontend is excluded from this onsite audio deployment. See [the systemd deployment bundle](../deploy/README.md) for secret mounts, private-LAN firewall rules, PortAudio access, startup and rollback ordering, and the live generated-TTS acceptance test.
 
 Validate the checked-in systemd and sanitized Mic/Sound environment manifests before
 deployment:

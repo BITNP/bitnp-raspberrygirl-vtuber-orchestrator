@@ -47,13 +47,13 @@ bash scripts/verify_workspace.sh --sibling-root ..
 
 loopback 集成检查只验证 WS 和 UDP 测试路径。它不能替代具有外部预配 TLS 文件和防火墙规则的私有 LAN WSS 部署。
 
-## 现场讲解链路
+## 现场语音交互链路
 
-只有真实现场链路才设置 `ORCHESTRATOR_MODE=onsite_explainer`。它要求 `ORCHESTRATOR_ASR_PROVIDER=openai_compatible`、`ORCHESTRATOR_LLM_PROVIDER=openai_compatible` 和 `ORCHESTRATOR_TTS_PROVIDER=vllm_omni`，以及 `.env.example` 中全部对应的 endpoint 和 model 变量。通过密钥注入提供各 provider 的 API key，其中 LLM API key 必填。还必须设置非空的 `ORCHESTRATOR_TTS_VOICE`、`ORCHESTRATOR_TTS_REF_AUDIO` 和 `ORCHESTRATOR_TTS_REF_TEXT`，声音参考 WAV 路径必须以只读方式挂载在源代码仓库之外。
+真实现场链路由 provider 组合启用：`ORCHESTRATOR_ASR_PROVIDER=openai_compatible`、`ORCHESTRATOR_LLM_PROVIDER=openai_compatible` 和 `ORCHESTRATOR_TTS_PROVIDER=vllm_omni`，以及 `.env.example` 中全部对应的 endpoint 和 model 变量。通过密钥注入提供各 provider 的 API key，其中 LLM API key 必填。还必须设置非空的 `ORCHESTRATOR_TTS_VOICE`、`ORCHESTRATOR_TTS_REF_AUDIO` 和 `ORCHESTRATOR_TTS_REF_TEXT`，声音参考 WAV 路径必须以只读方式挂载在源代码仓库之外。
 
-每个已接受的 Mic 话语会先累积五十个 20 ms 规范 L16 帧，再将固定的 16 kHz 单声道 PCM WAV 发送给 ASR，取得 LLM 回答后发送给 vLLM-Omni TTS 扩展，验证其返回的固定 16 kHz 单声道 PCM WAV，最后向 Sound 发出生成的 L16 RTP。该模式不会转发原始 Mic RTP。
+每个已接受的 Mic 话语会先累积五十个 20 ms 规范 L16 帧，再将固定的 16 kHz 单声道 PCM WAV 发送给 ASR，取得 LLM 回答后发送给 vLLM-Omni TTS 扩展，验证其返回的固定 16 kHz 单声道 PCM WAV，最后向 Sound 发出生成的 L16 RTP。该链路不会转发原始 Mic RTP。
 
-Mic 与 Sound 必须使用相同的 session ID 和 stream ID、已部署的 `wss://<host>/control` 端点及共享 trusted-LAN token。两者保持 mode-agnostic，且没有直接 peer 端点。Frontend 不属于此现场音频部署。有关密钥挂载、私有 LAN 防火墙规则、PortAudio 访问、启动与回滚顺序和实时生成 TTS 验收测试，请参阅 [systemd 部署包](../deploy/README.md)。
+Mic 与 Sound 必须使用相同的 session ID 和 stream ID、已部署的 `wss://<host>/control` 端点及共享 trusted-LAN token。两者保持不感知业务策略，且没有直接 peer 端点。Frontend 不属于此现场音频部署。有关密钥挂载、私有 LAN 防火墙规则、PortAudio 访问、启动与回滚顺序和实时生成 TTS 验收测试，请参阅 [systemd 部署包](../deploy/README.md)。
 
 ## 流式能力按指标发布
 
