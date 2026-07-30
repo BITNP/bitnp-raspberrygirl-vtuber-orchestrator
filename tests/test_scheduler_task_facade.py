@@ -1,383 +1,121 @@
-"""模块契约说明.
-
-职责: 为测试场景提供断言、夹具和回归用例。
-契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
-"""
-
 from dataclasses import replace
 
-import pytest
-
 from orchestrator.ids import SessionId, TraceId, TurnId
-from orchestrator.scheduler_tasks import SchedulerTaskFacade
-from orchestrator.sessions import (
-    EventCorrelation,
-    EventSequence,
-    SchedulerEvent,
-    SessionScheduler,
-    SessionSnapshot,
-    StartTurn,
-    StateRevision,
-    TransitionAccepted,
-    TransitionRejected,
-)
-from orchestrator.state_snapshots import (
-    ConsentRevision,
-    ContextGeneration,
-    CorpusRevision,
-    IndexRevision,
-    MemoryRevision,
-    ProfileRevision,
-    TaskStateSnapshot,
-)
-from orchestrator.task_reducer import (
-    TaskEffect,
-    TaskResult,
-    TaskResultAccepted,
-    TaskResultRejected,
-    TaskResultRejection,
-)
+from orchestrator.interactions import CommentProposal
+from orchestrator.scheduler_runtime import SessionRuntime
+from orchestrator.sessions import EventCorrelation, EventSequence, StateRevision
+from orchestrator.state_snapshots import MemoryRevision
+from orchestrator.task_reducer import TaskEffect, TaskResult
 from orchestrator.task_registry import (
     IdempotencyKey,
     SchedulerTaskConfig,
     TaskDeadlineMs,
     TaskId,
     TaskKind,
-    TaskRegistrationAccepted,
-    TaskRegistrationDuplicate,
-    TaskRegistrationRejected,
-    TaskRegistrationRejection,
     TaskRequest,
 )
 
 
-def test_scheduler_facade_admits_only_current_turn_result_through_reducer() -> None:
-    # Given: scheduler-owned work registered against its accepted turn snapshot.
+def test_runtime_rejects_stale_snapshot_before_registry_or_lane_mutation() -> None:
+    # Given: a live runtime and a request captured before its active revision.
+    runtime = _runtime()
+    request = replace(_request(runtime), snapshot_revision=StateRevision(0))
 
-    """函数契约说明.
+    # When: stale work reaches the only runtime admission surface.
+    outcome = runtime.schedule_task(request, _correlation("task", 2))
 
-    功能: 验证 scheduler facade admits only
-    current turn result through reducer
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
+    # Then: it is neither retained nor available to a worker.
+    assert outcome.accepted is False
+    assert runtime.task_registry.records == ()
+    assert runtime.next_task(now_ms=0) is None
 
-    scheduler = SessionScheduler(
+
+def test_runtime_rejects_inactive_turn_before_registry_or_lane_mutation() -> None:
+    # Given: a live runtime and a request for another turn.
+    runtime = _runtime()
+    request = replace(_request(runtime), turn_id=TurnId("inactive-turn"))
+
+    # When: inactive work reaches runtime admission.
+    outcome = runtime.schedule_task(request, _correlation("task", 2))
+
+    # Then: it is neither retained nor available to a worker.
+    assert outcome.accepted is False
+    assert runtime.task_registry.records == ()
+    assert runtime.next_task(now_ms=0) is None
+
+
+def test_runtime_rejects_explicitly_stale_data_snapshot_before_enqueue() -> None:
+    # Given: a live runtime and a caller-supplied stale data revision.
+    runtime = _runtime()
+    stale_snapshot = replace(
+        runtime.interaction_ingress.data.task_snapshot,
+        memory_revision=MemoryRevision(1),
+    )
+    request = replace(_request(runtime), data_snapshot=stale_snapshot)
+
+    # When: the stale data request reaches runtime admission.
+    outcome = runtime.schedule_task(request, _correlation("task", 2))
+
+    # Then: it cannot create registry or lane state.
+    assert outcome.accepted is False
+    assert runtime.task_registry.records == ()
+    assert runtime.next_task(now_ms=0) is None
+
+
+def test_runtime_rejects_stale_result_after_newer_turn_without_commit() -> None:
+    # Given: admitted work for a current runtime turn.
+    runtime = _runtime()
+    request = _request(runtime)
+    correlation = _correlation("task", 2)
+    assert runtime.schedule_task(request, correlation).accepted
+
+    # When: a newer turn invalidates the original result.
+    _ = runtime.receive_comment(CommentProposal("newer", _correlation("newer", 3)))
+    outcome = runtime.reduce_task(_result(request), correlation)
+
+    # Then: no effect is committed.
+    assert outcome.accepted is False
+    assert runtime.observables.task_commits == ()
+
+
+def _runtime() -> SessionRuntime:
+    runtime = SessionRuntime.create(
         session_id=SessionId("session-1"),
         turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        clock=lambda: 0,
     )
+    opened = runtime.receive_comment(CommentProposal("start", _correlation("turn", 1)))
+    assert opened.accepted
+    return runtime
 
-    first_turn = _start_turn(scheduler, StateRevision(0), _event("trace-1", 1))
 
-    facade = SchedulerTaskFacade.create(
-        scheduler,
-        SchedulerTaskConfig(
-            allowed_kinds=frozenset({TaskKind.INTERACTIVE}),
-            max_children_per_task=1,
-        ),
-    )
-
-    request = TaskRequest(
+def _request(runtime: SessionRuntime) -> TaskRequest:
+    turn_id = runtime.scheduler.snapshot.active_turn_id
+    assert turn_id is not None
+    return TaskRequest(
         task_id=TaskId("task-1"),
         session_id=SessionId("session-1"),
-        turn_id=first_turn,
+        turn_id=turn_id,
         parent_task_id=None,
-        deadline_ms=TaskDeadlineMs(200),
-        snapshot_revision=scheduler.snapshot.revision,
+        deadline_ms=TaskDeadlineMs(100),
+        snapshot_revision=runtime.scheduler.snapshot.revision,
         idempotency_key=IdempotencyKey("answer-1"),
         kind=TaskKind.INTERACTIVE,
     )
 
-    match facade.schedule(request):
-        case TaskRegistrationAccepted():
-            pass
 
-        case TaskRegistrationDuplicate() | TaskRegistrationRejected():
-            pytest.fail("current scheduler task was not registered")
-
-    # When: a newer scheduler turn supersedes the task's captured snapshot.
-
-    _ = _start_turn(scheduler, scheduler.snapshot.revision, _event("trace-2", 2))
-
-    outcome = facade.reduce(_result(first_turn), now_ms=100)
-
-    # Then: only the facade's reducer path rejects the stale effect proposal.
-
-    match outcome:
-        case TaskResultRejected(reason=TaskResultRejection.STALE_REVISION):
-            pass
-
-        case TaskResultAccepted():
-            pytest.fail("stale scheduler task result was admitted")
-
-        case TaskResultRejected():
-            pytest.fail("stale scheduler task result had the wrong rejection")
-
-
-def test_scheduler_facade_rejects_stale_snapshot_before_registry_mutation() -> None:
-    # Given: an active scheduler turn at revision one.
-
-    """函数契约说明.
-
-    功能: 验证 scheduler facade rejects
-    stale snapshot before registry
-    mutation 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
-
-    scheduler = SessionScheduler(
-        session_id=SessionId("session-1"),
-        turn_id_prefix="turn",
-    )
-
-    turn_id = _start_turn(scheduler, StateRevision(0), _event("trace-1", 1))
-
-    facade = SchedulerTaskFacade.create(
-        scheduler,
-        SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
-    )
-
-    stale = _request(
-        task_id="task-1",
-        key="answer-1",
-        snapshot=replace(scheduler.snapshot, revision=StateRevision(0)),
-    )
-
-    # When: scheduler-facing registration receives stale snapshot work.
-
-    scheduled = facade.schedule(stale)
-
-    later_result = facade.reduce(_result(turn_id), now_ms=100)
-
-    # Then: rejection occurs before retaining work or admitting a later effect.
-
-    match scheduled:
-        case TaskRegistrationRejected(TaskRegistrationRejection.STALE_SNAPSHOT):
-            pass
-
-        case TaskRegistrationAccepted() | TaskRegistrationDuplicate():
-            pytest.fail("stale snapshot task was registered")
-
-        case TaskRegistrationRejected():
-            pytest.fail("stale snapshot task had the wrong rejection")
-
-    assert facade.registry.records == ()
-
-    match later_result:
-        case TaskResultRejected(TaskResultRejection.TASK_NOT_FOUND):
-            pass
-
-        case TaskResultAccepted():
-            pytest.fail("unregistered stale task admitted an effect")
-
-        case TaskResultRejected():
-            pytest.fail("unregistered stale task had the wrong reduction")
-
-
-def test_scheduler_facade_rejects_inactive_turn_before_registry_mutation() -> None:
-    # Given: an active scheduler turn and a request targeting another turn.
-
-    """函数契约说明.
-
-    功能: 验证 scheduler facade rejects
-    inactive turn before registry
-    mutation 的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
-
-    scheduler = SessionScheduler(
-        session_id=SessionId("session-1"),
-        turn_id_prefix="turn",
-    )
-
-    _ = _start_turn(scheduler, StateRevision(0), _event("trace-1", 1))
-
-    facade = SchedulerTaskFacade.create(
-        scheduler,
-        SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
-    )
-
-    inactive = replace(
-        _request(task_id="task-2", key="answer-2", snapshot=scheduler.snapshot),
-        turn_id=TurnId("turn-inactive"),
-    )
-
-    # When: scheduler-facing registration receives an inactive-turn task.
-
-    scheduled = facade.schedule(inactive)
-
-    # Then: the live turn guard rejects it before task storage changes.
-
-    match scheduled:
-        case TaskRegistrationRejected(TaskRegistrationRejection.ACTIVE_TURN_MISMATCH):
-            pass
-
-        case TaskRegistrationAccepted() | TaskRegistrationDuplicate():
-            pytest.fail("inactive turn task was registered")
-
-        case TaskRegistrationRejected():
-            pytest.fail("inactive turn task had the wrong rejection")
-
-    assert facade.registry.records == ()
-
-
-def test_scheduler_facade_rejects_task_with_stale_data_snapshot() -> None:
-    """函数契约说明.
-
-    功能: 验证 scheduler facade rejects task
-    with stale data snapshot
-    的回归场景和可观察结果。
-    参数: 无显式业务参数。
-    契约: 同步调用。 返回 `None`。
-    """
-
-    scheduler = SessionScheduler(
-        session_id=SessionId("session-1"),
-        turn_id_prefix="turn",
-    )
-
-    _ = _start_turn(scheduler, StateRevision(0), _event("trace-1", 1))
-
-    facade = SchedulerTaskFacade.create(
-        scheduler,
-        SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
-        _data_snapshot(memory=2),
-    )
-
-    request = _request(task_id="task-3", key="answer-3", snapshot=scheduler.snapshot)
-
-    match facade.schedule(request):
-        case TaskRegistrationRejected(TaskRegistrationRejection.STALE_SNAPSHOT):
-            pass
-
-        case TaskRegistrationAccepted() | TaskRegistrationDuplicate():
-            pytest.fail("task with stale data snapshot was registered")
-
-        case TaskRegistrationRejected():
-            pytest.fail("stale data snapshot had the wrong rejection")
-
-    assert facade.registry.records == ()
-
-
-def _start_turn(
-    scheduler: SessionScheduler,
-    revision: StateRevision,
-    event: SchedulerEvent,
-) -> TurnId:
-    """函数契约说明.
-
-    功能: 执行 _start_turn 的同步逻辑,并协调 apply,
-    StartTurn, fail。
-    参数: scheduler: SessionScheduler。 必填。
-    revision: StateRevision。 必填。 event:
-    SchedulerEvent。 必填。
-    契约: 同步调用。 返回 `TurnId`。
-    """
-
-    transition = scheduler.apply(
-        StartTurn(
-            expected_revision=revision,
-            event=event,
-        )
-    )
-
-    match transition:
-        case TransitionAccepted(snapshot=snapshot):
-            assert snapshot.active_turn_id is not None
-
-            return snapshot.active_turn_id
-
-        case TransitionRejected():
-            pytest.fail("scheduler turn setup was rejected")
-
-
-def _event(trace_id: str, sequence: int) -> SchedulerEvent:
-    """函数契约说明.
-
-    功能: 执行 _event 的同步逻辑,并协调
-    SchedulerEvent, EventCorrelation,
-    TraceId, SessionId。
-    参数: trace_id: str。 必填。 sequence:
-    int。 必填。
-    契约: 同步调用。 返回 `SchedulerEvent`。
-    """
-
-    return SchedulerEvent(
-        event_type="audience.input",
-        correlation=EventCorrelation(
-            trace_id=TraceId(trace_id),
-            session_id=SessionId("session-1"),
-            sequence=EventSequence(sequence),
-        ),
-    )
-
-
-def _result(turn_id: TurnId) -> TaskResult:
-    """函数契约说明.
-
-    功能: 执行 _result 的同步逻辑,并协调 TaskResult,
-    TaskId, SessionId, StateRevision。
-    参数: turn_id: TurnId。 必填。
-    契约: 同步调用。 返回 `TaskResult`。
-    """
-
+def _result(request: TaskRequest) -> TaskResult:
     return TaskResult(
-        task_id=TaskId("task-1"),
-        session_id=SessionId("session-1"),
-        turn_id=turn_id,
-        snapshot_revision=StateRevision(1),
-        effect=TaskEffect(effect_type="answer", payload="accepted"),
+        task_id=request.task_id,
+        session_id=request.session_id,
+        turn_id=request.turn_id,
+        snapshot_revision=request.snapshot_revision,
+        effect=TaskEffect("answer", "accepted"),
     )
 
 
-def _request(
-    *,
-    task_id: str,
-    key: str,
-    snapshot: SessionSnapshot,
-) -> TaskRequest:
-    """函数契约说明.
-
-    功能: 执行 _request 的同步逻辑,并协调
-    TaskRequest, TaskId, SessionId,
-    TaskDeadlineMs。
-    参数: task_id: str。 必填。 key: str。 必填。
-    snapshot: SessionSnapshot。 必填。
-    契约: 同步调用。 返回 `TaskRequest`。
-    """
-
-    assert snapshot.active_turn_id is not None
-
-    return TaskRequest(
-        task_id=TaskId(task_id),
-        session_id=SessionId("session-1"),
-        turn_id=snapshot.active_turn_id,
-        parent_task_id=None,
-        deadline_ms=TaskDeadlineMs(200),
-        snapshot_revision=snapshot.revision,
-        idempotency_key=IdempotencyKey(key),
-        kind=TaskKind.INTERACTIVE,
-    )
-
-
-def _data_snapshot(*, memory: int) -> TaskStateSnapshot:
-    """函数契约说明.
-
-    功能: 执行 _data_snapshot 的同步逻辑,并协调
-    TaskStateSnapshot, MemoryRevision,
-    ContextGeneration, ProfileRevision。
-    参数: memory: int。 必填。
-    契约: 同步调用。 返回 `TaskStateSnapshot`。
-    """
-
-    return TaskStateSnapshot(
-        memory_revision=MemoryRevision(memory),
-        context_generation=ContextGeneration(0),
-        profile_revision=ProfileRevision(0),
-        consent_revision=ConsentRevision(0),
-        corpus_revision=CorpusRevision(0),
-        index_revision=IndexRevision(0),
+def _correlation(trace_id: str, sequence: int) -> EventCorrelation:
+    return EventCorrelation(
+        TraceId(trace_id), SessionId("session-1"), EventSequence(sequence)
     )

@@ -283,7 +283,7 @@ def test_runtime_rejects_stale_task_before_lane_enqueue() -> None:
 
     outcome = runtime.schedule_task(request, correlation)
 
-    # Then: facade admission rejects it before lane ownership or effects change.
+    # Then: runtime admission rejects it before lane ownership or effects change.
 
     assert outcome.accepted is False
 
@@ -321,7 +321,7 @@ def test_runtime_rejects_overdue_and_cancelled_task_completions() -> None:
     assert runtime.schedule_task(cancelled, correlation).accepted is True
 
     assert (
-        runtime.tasks.registry.cancel(cancelled.task_id, reason="interrupted")
+        runtime.task_registry.cancel(cancelled.task_id, reason="interrupted")
         is not None
     )
 
@@ -365,7 +365,7 @@ def test_runtime_skips_cancelled_task_queued_before_worker_selection() -> None:
     assert runtime.schedule_task(request, correlation).accepted is True
 
     assert (
-        runtime.tasks.registry.cancel(request.task_id, reason="newer_turn") is not None
+        runtime.task_registry.cancel(request.task_id, reason="newer_turn") is not None
     )
 
     baseline = runtime.observables
@@ -409,7 +409,7 @@ def test_profile_revoke_cancels_pending_task_before_worker_selection() -> None:
 
     # Then: pending work is terminally cancelled before a worker can select it.
 
-    assert runtime.tasks.registry.task(request.task_id) is not None
+    assert runtime.task_registry.task(request.task_id) is not None
 
     assert runtime.next_task(now_ms=0) is None
 
@@ -821,7 +821,7 @@ def test_mcp_deadline_before_worker_times_out_without_adapter_call() -> None:
 
     # Then: the task times out without adapter work or acknowledged deck state.
 
-    record = runtime.tasks.registry.task(request.task_id)
+    record = runtime.task_registry.task(request.task_id)
 
     assert not outcome.accepted
 
@@ -862,7 +862,7 @@ def test_ambiguous_reconcile_after_deadline_times_out_without_commit() -> None:
 
     # Then: scheduler terminalizes work without a retry or deck commit.
 
-    record = runtime.tasks.registry.task(request.task_id)
+    record = runtime.task_registry.task(request.task_id)
 
     assert not outcome.accepted
 

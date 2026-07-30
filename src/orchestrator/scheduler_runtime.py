@@ -48,7 +48,6 @@ from orchestrator.runtime_contracts import (
     RuntimeRejection,
 )
 from orchestrator.scheduler_reflex import SchedulerOutputFence
-from orchestrator.scheduler_tasks import SchedulerTaskFacade
 from orchestrator.sessions import (
     EventCorrelation,
     EventSequence,
@@ -61,7 +60,12 @@ from orchestrator.sessions import (
 from orchestrator.state_snapshots import TaskStateSnapshot
 from orchestrator.streaming_contracts import CancellationEpoch
 from orchestrator.task_executor import TaskLaneExecutor
-from orchestrator.task_reducer import TaskEffect, TaskResult, TaskResultAccepted
+from orchestrator.task_reducer import (
+    TaskEffect,
+    TaskResult,
+    TaskResultAccepted,
+    TaskResultReducer,
+)
 from orchestrator.task_registry import (
     IdempotencyKey,
     SchedulerTaskConfig,
@@ -69,6 +73,10 @@ from orchestrator.task_registry import (
     TaskId,
     TaskKind,
     TaskRegistrationAccepted,
+    TaskRegistrationRejected,
+    TaskRegistrationRejection,
+    TaskRegistrationResult,
+    TaskRegistry,
     TaskRequest,
     TaskState,
 )
@@ -118,7 +126,9 @@ class SessionRuntime:
 
     scheduler: SessionScheduler
 
-    tasks: SchedulerTaskFacade
+    task_registry: TaskRegistry
+
+    task_reducer: TaskResultReducer
 
     executor: TaskLaneExecutor
 
@@ -178,11 +188,12 @@ class SessionRuntime:
 
         interaction_ingress = SessionInteractionIngress.create(scheduler)
 
-        tasks = SchedulerTaskFacade.create(
-            scheduler,
-            task_config,
-            data_snapshot_provider=lambda: interaction_ingress.data.task_snapshot,
+        task_registry = TaskRegistry(
+            session_id=session_id,
+            config=task_config,
         )
+
+        task_reducer = TaskResultReducer(task_registry)
 
         def invalidate_pending(reason: str) -> None:
             """函数契约说明.
@@ -192,14 +203,15 @@ class SessionRuntime:
             参数: reason: str。 必填。
             契约: 同步调用。 返回 `None`。
             """
-            _ = tasks.registry.cancel_pending(reason=reason)
+            _ = task_registry.cancel_pending(reason=reason)
 
         interaction_ingress.data.invalidate_pending = invalidate_pending
 
         return cls(
             scheduler=scheduler,
-            tasks=tasks,
-            executor=TaskLaneExecutor(tasks.registry, max_pending_per_lane=4),
+            task_registry=task_registry,
+            task_reducer=task_reducer,
+            executor=TaskLaneExecutor(task_registry, max_pending_per_lane=4),
             output_fence=SchedulerOutputFence(scheduler),
             interaction_ingress=interaction_ingress,
             mcp_dispatcher=ScopedMcpAdapterDispatcher(
@@ -417,7 +429,7 @@ class SessionRuntime:
             snapshot_revision=self.scheduler.snapshot.revision,
             idempotency_key=IdempotencyKey(f"mcp-{proposal.command_id}"),
             kind=TaskKind.INTERACTIVE,
-            data_snapshot=self.tasks.data_snapshot,
+            data_snapshot=self._task_data_snapshot,
         )
 
         intent = McpIntent(
@@ -772,7 +784,7 @@ class SessionRuntime:
             return McpDispatchOutcome(accepted=False)
 
         if now_ms > intent.deadline_ms:
-            _ = self.tasks.registry.timeout(task_id)
+            _ = self.task_registry.timeout(task_id)
 
             _ = self._mcp_intents.pop(task_id)
 
@@ -787,7 +799,7 @@ class SessionRuntime:
         if not outcome.accepted:
             return outcome
 
-        request = self.tasks.registry.task(task_id)
+        request = self.task_registry.task(task_id)
 
         if request is None:
             return McpDispatchOutcome(accepted=False)
@@ -820,7 +832,7 @@ class SessionRuntime:
         EventCorrelation。 必填。
         契约: 同步调用。 返回 `RuntimeOutcome`。
         """
-        cancelled = self.tasks.registry.cancel(task_id, reason="cancelled")
+        cancelled = self.task_registry.cancel(task_id, reason="cancelled")
 
         if cancelled is not None:
             intent = self._mcp_intents.pop(task_id, None)
@@ -856,10 +868,25 @@ class SessionRuntime:
         契约: 同步调用。 返回 `None`。
         """
         for task_id in tuple(self._mcp_intents):
-            record = self.tasks.registry.task(task_id)
+            record = self.task_registry.task(task_id)
 
             if record is None or record.state is not TaskState.PENDING:
                 _ = self._mcp_intents.pop(task_id)
+
+    @property
+    def _task_data_snapshot(self) -> TaskStateSnapshot:
+        return self.interaction_ingress.data.task_snapshot
+
+    def _admit_task(self, request: TaskRequest) -> TaskRegistrationResult:
+        rejection = _scheduling_rejection(request, self.scheduler.snapshot)
+
+        if rejection is not None:
+            return TaskRegistrationRejected(rejection)
+
+        if request.data_snapshot != self._task_data_snapshot:
+            return TaskRegistrationRejected(TaskRegistrationRejection.STALE_SNAPSHOT)
+
+        return self.task_registry.register(request)
 
     def schedule_task(
         self, request: TaskRequest, correlation: EventCorrelation
@@ -874,9 +901,9 @@ class SessionRuntime:
         EventCorrelation。 必填。
         契约: 同步调用。 返回 `RuntimeOutcome`。
         """
-        task_request = _with_current_data_snapshot(request, self.tasks.data_snapshot)
+        task_request = _with_current_data_snapshot(request, self._task_data_snapshot)
 
-        admission = self.tasks.schedule(task_request)
+        admission = self._admit_task(task_request)
 
         match admission:
             case TaskRegistrationAccepted() if self.executor.enqueue(task_request):
@@ -895,7 +922,7 @@ class SessionRuntime:
                 return RuntimeOutcome(accepted=True, correlation=correlation)
 
             case TaskRegistrationAccepted():
-                _ = self.tasks.registry.withdraw(task_request.task_id)
+                _ = self.task_registry.withdraw(task_request.task_id)
 
                 return self._reject(correlation, "task_queue_full")
 
@@ -938,7 +965,12 @@ class SessionRuntime:
         EventCorrelation。 必填。
         契约: 同步调用。 返回 `RuntimeOutcome`。
         """
-        outcome = self.tasks.reduce(result, now_ms=self.clock())
+        outcome = self.task_reducer.reduce(
+            result,
+            snapshot=self.scheduler.snapshot,
+            data_snapshot=self._task_data_snapshot,
+            now_ms=self.clock(),
+        )
 
         match outcome:
             case TaskResultAccepted():
@@ -1085,3 +1117,18 @@ def _with_current_data_snapshot(
         return replace(request, data_snapshot=data_snapshot)
 
     return request
+
+
+def _scheduling_rejection(
+    request: TaskRequest, snapshot: SessionSnapshot
+) -> TaskRegistrationRejection | None:
+    if request.session_id != snapshot.session_id:
+        return TaskRegistrationRejection.SESSION_MISMATCH
+
+    if request.turn_id != snapshot.active_turn_id:
+        return TaskRegistrationRejection.ACTIVE_TURN_MISMATCH
+
+    if request.snapshot_revision != snapshot.revision:
+        return TaskRegistrationRejection.STALE_SNAPSHOT
+
+    return None

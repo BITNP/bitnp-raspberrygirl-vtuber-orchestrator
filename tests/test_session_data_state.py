@@ -27,7 +27,6 @@ from orchestrator.memory import (
 )
 from orchestrator.memory_store import JsonMemoryStore
 from orchestrator.retrieval import KnowledgeRef, RetrievalFixtureProvider
-from orchestrator.scheduler_tasks import SchedulerTaskFacade
 from orchestrator.session_data import SessionDataState
 from orchestrator.sessions import (
     EventCorrelation,
@@ -46,6 +45,7 @@ from orchestrator.state_snapshots import (
 from orchestrator.task_reducer import (
     TaskEffect,
     TaskResult,
+    TaskResultReducer,
     TaskResultRejected,
     TaskResultRejection,
 )
@@ -56,6 +56,7 @@ from orchestrator.task_registry import (
     TaskId,
     TaskKind,
     TaskRegistrationAccepted,
+    TaskRegistry,
     TaskRequest,
 )
 from orchestrator.transient_context import (
@@ -184,21 +185,25 @@ def test_memory_delete_rejects_previously_admitted_task_without_effect() -> None
 
     task_snapshot = state.task_snapshot
 
-    facade = SchedulerTaskFacade.create(
-        scheduler,
-        SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
-        data_snapshot_provider=lambda: state.task_snapshot,
+    registry = TaskRegistry(
+        session_id=SessionId("session-1"),
+        config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
     )
 
     request = _task_request(scheduler, task_snapshot)
 
-    assert isinstance(facade.schedule(request), TaskRegistrationAccepted)
+    assert isinstance(registry.register(request), TaskRegistrationAccepted)
 
     # When: deletion advances the persisted memory revision before task completion.
 
     state.delete_memory(MemoryKey("preferred_name"))
 
-    result = facade.reduce(_task_result(request), now_ms=0)
+    result = TaskResultReducer(registry).reduce(
+        _task_result(request),
+        snapshot=scheduler.snapshot,
+        data_snapshot=state.task_snapshot,
+        now_ms=0,
+    )
 
     # Then: the stale worker result cannot complete or emit its proposed effect.
 
