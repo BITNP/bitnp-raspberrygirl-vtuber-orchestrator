@@ -88,9 +88,6 @@ ignore = [
 "tests/test_protocol_schema_validator.py" = ["S603"]
 "tests/test_topology_verifier.py" = ["S603"]
 "tests/test_vtuber_contract_fallback.py" = ["S603"]
-"tests/test_multimodal_release_gates.py" = ["S603"]
-"tests/test_core_stability_certificate.py" = ["S603", "S607"]
-"src/orchestrator/release_certificate.py" = ["E501", "PLR0911"]
 
 [tool.ruff.format]
 quote-style = "double"
