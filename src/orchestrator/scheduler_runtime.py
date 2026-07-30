@@ -38,16 +38,7 @@ from orchestrator.mcp_adapters import (
     McpIntent,
     ScopedMcpAdapterDispatcher,
 )
-from orchestrator.modes import (
-    LecturerModePolicy,
-    LecturerState,
-    ModePolicy,
-    OnsiteExplainerModePolicy,
-    OrchestratorMode,
-    ScriptStep,
-    SlideStep,
-    VirtualStreamerModePolicy,
-)
+from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.operational_journal import OperationalJournal, OperationalRecord
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.runtime_contracts import (
@@ -137,9 +128,7 @@ class SessionRuntime:
 
     mcp_dispatcher: ScopedMcpAdapterDispatcher
 
-    mode_policy: (
-        LecturerModePolicy | VirtualStreamerModePolicy | OnsiteExplainerModePolicy
-    )
+    mode_policy: AdaptiveAgentPolicy
 
     clock: Callable[[], int] = _monotonic_ms
 
@@ -168,7 +157,6 @@ class SessionRuntime:
         session_id: SessionId,
         turn_id_prefix: str,
         task_config: SchedulerTaskConfig,
-        mode: OrchestratorMode,
         clock: Callable[[], int] = _monotonic_ms,
     ) -> "SessionRuntime":
         """函数契约说明.
@@ -179,8 +167,7 @@ class SessionRuntime:
         参数: cls 表示当前类。 session_id:
         SessionId。 必填。 turn_id_prefix:
         str。 必填。 task_config:
-        SchedulerTaskConfig。 必填。 mode:
-        OrchestratorMode。 必填。 clock:
+        SchedulerTaskConfig。 必填。 clock:
         Callable[[], int]。 可省略。
         契约: 同步调用。 返回 `'SessionRuntime'`。
         """
@@ -219,7 +206,7 @@ class SessionRuntime:
                 interaction_ingress.reducer,
                 {McpCapability.PRESENTATION_DECK: LocalDeckAdapter()},
             ),
-            mode_policy=_mode_policy(mode),
+            mode_policy=AdaptiveAgentPolicy(),
             clock=clock,
         )
 
@@ -1079,37 +1066,6 @@ def _active_turn_id(snapshot: SessionSnapshot) -> str | None:
         return None
 
     return str(active_turn_id)
-
-
-def _mode_policy(
-    mode: OrchestratorMode,
-) -> LecturerModePolicy | VirtualStreamerModePolicy | OnsiteExplainerModePolicy:
-    """函数契约说明.
-
-    功能: 执行 _mode_policy 的同步逻辑,并协调
-    lecturer, virtual_streamer,
-    onsite_explainer, LecturerState。
-    参数: mode: OrchestratorMode。 必填。
-    契约: 同步调用。 返回 `LecturerModePolicy |
-    VirtualStreamerModePolicy |
-    OnsiteExplainerModePolicy`。
-    """
-    match mode:
-        case OrchestratorMode.LECTURER:
-            return ModePolicy.lecturer(
-                LecturerState(
-                    script_step=ScriptStep(0),
-                    slide_step=SlideStep(1),
-                    immediate_interruption_enabled=True,
-                    qa_window=None,
-                )
-            )
-
-        case OrchestratorMode.VIRTUAL_STREAMER:
-            return ModePolicy.virtual_streamer(topic="")
-
-        case OrchestratorMode.ONSITE_EXPLAINER:
-            return ModePolicy.onsite_explainer()
 
 
 def _with_current_data_snapshot(

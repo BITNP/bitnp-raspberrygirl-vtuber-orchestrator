@@ -10,9 +10,8 @@ from __future__ import annotations
 import asyncio
 import os
 
-from orchestrator.config import load_config_from_env
+from orchestrator.config import OrchestratorConfig, load_config_from_env
 from orchestrator.ids import SessionId
-from orchestrator.modes import OrchestratorMode, parse_orchestrator_mode
 from orchestrator.observability import OnsiteObservability
 from orchestrator.onsite_bridge import build_onsite_bridge
 from orchestrator.scheduler_runtime import SessionRuntime
@@ -28,17 +27,13 @@ async def run_transport() -> None:
     参数: 无显式业务参数。
     契约: 异步调用。 可能等待 I/O 或协程结果。 返回 `None`。
     """
-    mode = parse_orchestrator_mode(
-        os.environ.get("ORCHESTRATOR_MODE", OrchestratorMode.VIRTUAL_STREAMER.value)
-    )
-
     config = load_config_from_env(os.environ)
 
     bridge = None
 
     observability = None
 
-    if mode is OrchestratorMode.ONSITE_EXPLAINER:
+    if _onsite_bridge_enabled(config):
         observability = OnsiteObservability(config)
 
         bridge = build_onsite_bridge(
@@ -54,7 +49,6 @@ async def run_transport() -> None:
         session_id=SessionId(f"{config.session_id_prefix}-control"),
         turn_id_prefix="turn-control",
         task_config=SchedulerTaskConfig(frozenset(TaskKind), 1),
-        mode=mode,
     )
 
     runtime = TransportRuntime(transport_config, onsite_bridge=bridge)
@@ -71,6 +65,20 @@ async def run_transport() -> None:
 
     finally:
         await runtime.close()
+
+
+def _onsite_bridge_enabled(config: OrchestratorConfig) -> bool:
+    """函数契约说明.
+
+    功能: 根据已解析 provider 组合判断是否启用现场语音桥接。
+    参数: config: OrchestratorConfig。 必填。
+    契约: 同步调用。 返回 `bool`。
+    """
+    return (
+        config.asr_provider == "openai_compatible"
+        and config.llm_provider == "openai_compatible"
+        and config.tts_provider == "vllm_omni"
+    )
 
 
 def main() -> None:

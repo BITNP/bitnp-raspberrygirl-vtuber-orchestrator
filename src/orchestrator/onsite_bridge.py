@@ -20,7 +20,7 @@ from orchestrator.media_adapters import (
     OpenAICompatibleASRAdapter,
     VllmOmniTTSAdapter,
 )
-from orchestrator.modes import ModePolicy
+from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.onsite_bridge_contracts import (
     AsrAdapter,
     OnsiteBridgeConfigError,
@@ -855,7 +855,7 @@ def build_onsite_bridge(
         raise OnsiteBridgeConfigError(field_name="voice_reference")
 
     adapters = PipelineAdapters(
-        mode_policy=ModePolicy.onsite_explainer(),
+        mode_policy=AdaptiveAgentPolicy(),
         llm=OpenAICompatibleLLMRuntimeAdapter(
             config.llm_endpoint,
             config.llm_model,
