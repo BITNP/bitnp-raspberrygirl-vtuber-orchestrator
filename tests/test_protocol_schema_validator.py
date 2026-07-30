@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 from typing import Final
+
+from orchestrator.json_boundary import JsonValue, parse_json_value
 
 ROOT: Final = Path(__file__).resolve().parents[1]
 SCRIPT: Final = ROOT / "scripts" / "verify_protocol_schema.py"
@@ -66,4 +69,127 @@ def test_protocol_validator_rejects_noncanonical_rtp_codec() -> None:
     )
     # Then: rejection identifies the fixed RTP codec invariant.
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "$.data.codec.payload_type: expected 96" in result.stdout
+    assert '"path": "$[0].data.codec.payload_type"' in result.stdout
+
+
+def test_protocol_validator_rejects_closed_envelope_semantic_and_version_violations(
+    tmp_path: Path,
+) -> None:
+    # Given: canonical events with one closed-envelope or stream semantic violation.
+    valid_events = parse_json_value(
+        (ROOT / "schemas/fixtures/valid/protocol-events.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert isinstance(valid_events, list)
+    cases = {
+        "unknown_envelope_field": _with_unknown_envelope_field(valid_events),
+        "duplicate_event_id": _with_duplicate_event_id(valid_events),
+        "sequence_regression": _with_sequence_regression(valid_events),
+        "unsupported_minor_version": _with_unsupported_minor_version(valid_events),
+        "missing_turn_correlation": _without_turn_correlation(valid_events),
+    }
+
+    # When: each fixture is supplied to the actual protocol verification surface.
+    results = {
+        name: _expect_invalid_fixture(tmp_path, name, payload)
+        for name, payload in cases.items()
+    }
+
+    # Then: each rejection is machine-readable and names the violated invariant.
+    assert results["unknown_envelope_field"].returncode == 0
+    assert '"code": "schema_validation"' in results["unknown_envelope_field"].stdout
+    assert results["duplicate_event_id"].returncode == 0
+    assert '"code": "duplicate_event_id"' in results["duplicate_event_id"].stdout
+    assert results["sequence_regression"].returncode == 0
+    assert '"code": "sequence_regression"' in results["sequence_regression"].stdout
+    assert results["unsupported_minor_version"].returncode == 0
+    assert (
+        '"code": "unsupported_schema_version"'
+        in results["unsupported_minor_version"].stdout
+    )
+    assert results["missing_turn_correlation"].returncode == 0
+    assert '"code": "missing_correlation"' in results["missing_turn_correlation"].stdout
+
+
+def test_protocol_validator_reports_each_missing_segment_correlation_once(
+    tmp_path: Path,
+) -> None:
+    # Given: a segment-correlated flush event missing both required correlation IDs.
+    events = _valid_events()
+    event = _event_copy(events, 15)
+    _ = event.pop("turn_id")
+    _ = event.pop("segment_id")
+
+    # When: the collection is validated through the real CLI.
+    result = _expect_invalid_fixture(tmp_path, "missing_segment_correlation", [event])
+    output = parse_json_value(result.stdout)
+
+    # Then: each absent correlation emits exactly one deterministic rejection.
+    assert result.returncode == 0
+    assert isinstance(output, dict)
+    errors = output["errors"]
+    assert isinstance(errors, list)
+    paths = [error["path"] for error in errors if isinstance(error, dict)]
+    assert paths == ["$[0].turn_id", "$[0].segment_id"]
+
+
+def _valid_events() -> list[JsonValue]:
+    events = parse_json_value(
+        (ROOT / "schemas/fixtures/valid/protocol-events.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert isinstance(events, list)
+    return events
+
+
+def _expect_invalid_fixture(
+    tmp_path: Path, name: str, payload: list[JsonValue]
+) -> subprocess.CompletedProcess[str]:
+    fixture = tmp_path / f"{name}.json"
+    _ = fixture.write_text(json.dumps(payload), encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "--expect-invalid", str(fixture)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def _with_unknown_envelope_field(events: list[JsonValue]) -> list[JsonValue]:
+    event = _event_copy(events, 0)
+    event["unexpected"] = "closed"
+    return [event]
+
+
+def _with_duplicate_event_id(events: list[JsonValue]) -> list[JsonValue]:
+    first = _event_copy(events, 0)
+    second = _event_copy(events, 1)
+    second["event_id"] = first["event_id"]
+    return [first, second]
+
+
+def _with_sequence_regression(events: list[JsonValue]) -> list[JsonValue]:
+    first = _event_copy(events, 0)
+    second = _event_copy(events, 1)
+    second["seq"] = first["seq"]
+    return [first, second]
+
+
+def _with_unsupported_minor_version(events: list[JsonValue]) -> list[JsonValue]:
+    event = _event_copy(events, 0)
+    event["schema_version"] = "1.2.0"
+    return [event]
+
+
+def _without_turn_correlation(events: list[JsonValue]) -> list[JsonValue]:
+    event = _event_copy(events, 2)
+    _ = event.pop("turn_id")
+    return [event]
+
+
+def _event_copy(events: list[JsonValue], index: int) -> dict[str, JsonValue]:
+    value = events[index]
+    assert isinstance(value, dict)
+    return dict(value)
