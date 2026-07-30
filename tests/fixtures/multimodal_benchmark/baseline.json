@@ -1,0 +1,8 @@
+{
+  "provider": "funasr",
+  "model": "paraformer-zh-final-only",
+  "config_version": "final-only-v1",
+  "corpus_version": "zh-synthetic-v1",
+  "quality": {"cer_percent": 2.0},
+  "latency": {"p95_final_latency_ms": 200}
+}
