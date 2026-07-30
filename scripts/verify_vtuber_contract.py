@@ -18,6 +18,9 @@ class State:
     scene: str = "stage_default"
     mode: str = "virtual_streamer"
     segments: frozenset[str] = frozenset()
+    presentation_deck: str = ""
+    presentation_page: int = 0
+    presentation_playing: bool = False
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,7 +46,14 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
     match event_type:
         case "session.created":
             mode = data.get("mode")
-            return (State(state.caption, state.action, state.scene, mode, state.segments), True) if isinstance(mode, str) and mode else (state, False)
+            return (
+                State(
+                    state.caption, state.action, state.scene, mode, state.segments,
+                    state.presentation_deck, state.presentation_page,
+                    state.presentation_playing,
+                ),
+                True,
+            ) if isinstance(mode, str) and mode else (state, False)
         case "vtuber.caption.command":
             text, segment = data.get("text"), event.get("segment_id")
             return (State(text, state.action, state.scene, state.mode, state.segments | {segment}), True) if isinstance(text, str) and text and isinstance(segment, str) and segment else (state, False)
@@ -52,7 +62,16 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
             return (State(state.caption, action, state.scene, state.mode, state.segments), True) if isinstance(action, str) and action in {"idle", "breathe", "dance", "explain_point", "speak"} and segment in state.segments else (state, False)
         case "vtuber.scene.command":
             scene = data.get("scene")
-            return (State(state.caption, state.action, scene, state.mode, state.segments), True) if isinstance(scene, str) and scene else (state, False)
+            return (State(state.caption, state.action, scene, state.mode, state.segments, state.presentation_deck, state.presentation_page, state.presentation_playing), True) if isinstance(scene, str) and scene else (state, False)
+        case "presentation.load.command":
+            deck_id, page = data.get("deck_id"), data.get("page")
+            return (State(state.caption, state.action, state.scene, state.mode, state.segments, deck_id, page, False), True) if isinstance(deck_id, str) and deck_id and isinstance(page, int) and page > 0 else (state, False)
+        case "presentation.play.command":
+            deck_id, page = data.get("deck_id"), data.get("page")
+            return (State(state.caption, state.action, state.scene, state.mode, state.segments, state.presentation_deck, page, True), True) if deck_id == state.presentation_deck and isinstance(page, int) and page > 0 else (state, False)
+        case "presentation.navigate.command":
+            deck_id, page = data.get("deck_id"), data.get("page")
+            return (State(state.caption, state.action, state.scene, state.mode, state.segments, state.presentation_deck, page, state.presentation_playing), True) if deck_id == state.presentation_deck and isinstance(page, int) and page > 0 else (state, False)
         case _:
             return state, False
 
