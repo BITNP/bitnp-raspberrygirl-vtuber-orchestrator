@@ -185,6 +185,24 @@ def test_metadata_write_failure_removes_newly_written_template(tmp_path: Path) -
     )
 
 
+def test_profile_deletion_invalidates_tasks_and_erases_the_separate_template(
+    tmp_path: Path,
+) -> None:
+    # Given: a durable session with an enrolled, confirmed profile.
+    profile_id = VoiceProfileId("profile")
+    state = _state(tmp_path, SessionId("one"))
+    _ = state.enroll_profile(_enrollment(profile_id, expires_at_ms=None))
+    captured = state.task_snapshot
+
+    # When: the user deletes the opt-in voice profile.
+    state.delete_profile(profile_id)
+
+    # Then: pending work is stale and only the vault material is erased.
+    assert state.is_current(captured) is False
+    assert list((tmp_path / "one" / "voice-templates").glob("*.template")) == []
+    assert state.memory.snapshot.entries == ()
+
+
 def test_confirmation_save_failure_does_not_publish_live_state() -> None:
     # Given: an unconfirmed profile and a store that fails its next save.
 

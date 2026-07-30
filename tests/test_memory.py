@@ -4,6 +4,8 @@
 契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
 """
 
+from pathlib import Path
+
 import pytest
 
 from orchestrator.ids import SessionId, TraceId, TurnId
@@ -21,6 +23,7 @@ from orchestrator.memory import (
     MutableMemory,
     ProposalRevision,
 )
+from orchestrator.memory_store import JsonMemoryStore, MemoryStoreBoundaryError
 from orchestrator.state_snapshots import ConsentRevision, ProfileRevision
 
 
@@ -120,7 +123,6 @@ def test_memory_policy_rejects_stale_restricted_and_unsupported_proposals(
     outcome = memory.reduce(
         _proposal(value=value, confidence=confidence, category=category)
     )
-
     # Then: no untrusted proposal changes durable memory.
 
     match outcome:
@@ -209,6 +211,79 @@ def test_memory_rejects_conflicts_and_prohibited_biometric_categories() -> None:
     assert biometric == MemoryCommitRejected(MemoryCommitRejection.RESTRICTED_CATEGORY)
 
     assert memory.snapshot.entries[0].value == "小莓"
+
+
+def test_memory_store_rejects_an_empty_snapshot_for_another_session(
+    tmp_path: Path,
+) -> None:
+    # Given: a persisted empty memory document explicitly owned by another session.
+    path = tmp_path / "memory.json"
+    _ = path.write_text(
+        '{"session_id":"session-2","revision":0,"preferences":[]}',
+        encoding="utf-8",
+    )
+
+    store = JsonMemoryStore(path)
+
+    # When: the session-1 state hydrates its mutable memory.
+    snapshot = store.load(SessionId("session-1"))
+
+    # Then: no cross-session memory snapshot is accepted, even when it has no entries.
+    assert snapshot is None
+
+
+def test_memory_store_normalizes_malformed_provenance_source_at_its_boundary(
+    tmp_path: Path,
+) -> None:
+    # Given: a persisted memory entry with an unknown source variant.
+    path = tmp_path / "memory.json"
+    _ = path.write_text(
+        """{
+  "session_id": "session-1",
+  "revision": 1,
+  "preferences": [{
+    "key": "preferred_name",
+    "value": "小莓",
+    "source": "untrusted",
+    "trace_id": "trace-1",
+    "session_id": "session-1",
+    "turn_id": "turn-1",
+    "evidence_id": "finalized-input-1"
+  }]
+}
+""",
+        encoding="utf-8",
+    )
+
+    store = JsonMemoryStore(path)
+
+    # When: the durable document crosses the memory-store boundary.
+    with pytest.raises(MemoryStoreBoundaryError) as error:
+        _ = store.load(SessionId("session-1"))
+
+    # Then: malformed provenance cannot enter mutable memory as an untyped error.
+    assert error.value.field == "preferences[0].source"
+
+
+def test_memory_store_rejects_a_second_session_before_saving_the_owner_memory(
+    tmp_path: Path,
+) -> None:
+    # Given: a store already bound to session A with an approved A preference.
+    path = tmp_path / "memory.json"
+    store = JsonMemoryStore(path)
+    memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
+    _ = memory.reduce(_proposal(value="小莓", confidence=95))
+    _ = store.load(SessionId("session-1"))
+
+    # When: another session attempts to reuse the store before A saves.
+    with pytest.raises(MemoryStoreBoundaryError) as error:
+        _ = store.load(SessionId("session-2"))
+
+    store.save(memory.snapshot)
+
+    # Then: the rejected reuse cannot redirect A's root session ownership.
+    assert error.value.field == "session_id"
+    assert '"session_id": "session-1"' in path.read_text(encoding="utf-8")
 
 
 def _proposal(

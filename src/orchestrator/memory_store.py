@@ -8,10 +8,10 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, final, override
+from typing import Final, Protocol, final, override
 
 from orchestrator.ids import SessionId, TraceId, TurnId
-from orchestrator.json_boundary import JsonValue, parse_json_value
+from orchestrator.json_boundary import JsonBoundaryError, JsonValue, parse_json_value
 from orchestrator.memory import (
     MemoryEntry,
     MemoryKey,
@@ -24,6 +24,8 @@ from orchestrator.state_snapshots import (
     MemoryRevision,
     ProfileRevision,
 )
+
+_SESSION_ID_FIELD: Final = "session_id"
 
 
 class MemoryStore(Protocol):
@@ -97,6 +99,8 @@ class JsonMemoryStore:
         """
         self._path: Path = path
 
+        self._session_id: SessionId | None = None
+
     def save(self, snapshot: MutableMemorySnapshot) -> None:
         """函数契约说明.
 
@@ -107,7 +111,11 @@ class JsonMemoryStore:
         MutableMemorySnapshot。 必填。
         契约: 同步调用。 返回 `None`。
         """
+        if self._session_id is None:
+            raise MemoryStoreBoundaryError(_SESSION_ID_FIELD)
+
         document = {
+            "session_id": str(self._session_id),
             "revision": int(snapshot.revision),
             "preferences": [
                 {
@@ -144,26 +152,42 @@ class JsonMemoryStore:
         契约: 同步调用。 返回
         `MutableMemorySnapshot | None`。
         """
+        if self._session_id is None:
+            self._session_id = session_id
+
+        elif self._session_id != session_id:
+            raise MemoryStoreBoundaryError(_SESSION_ID_FIELD)
+
         if not self._path.exists():
             return None
 
-        document = _object(parse_json_value(self._path.read_text(encoding="utf-8")))
+        try:
+            document = _object(parse_json_value(self._path.read_text(encoding="utf-8")))
+
+        except JsonBoundaryError as error:
+            raise MemoryStoreBoundaryError(error.field_name) from error
+
+        stored_session_id = SessionId(_text(document, _SESSION_ID_FIELD))
+
+        if stored_session_id != session_id:
+            return None
 
         preferences = _array(document, "preferences")
 
         entries = tuple(
             MemoryEntry(
-                key=MemoryKey(_text(_object(item), "key")),
-                value=_text(_object(item), "value"),
+                key=MemoryKey(_text(entry, "key")),
+                value=_text(entry, "value"),
                 provenance=MemoryProvenance(
-                    source=MemorySource(_text(_object(item), "source")),
-                    trace_id=TraceId(_text(_object(item), "trace_id")),
-                    session_id=SessionId(_text(_object(item), "session_id")),
-                    turn_id=TurnId(_text(_object(item), "turn_id")),
-                    evidence_id=_text(_object(item), "evidence_id"),
+                    source=_source(_text(entry, "source"), index),
+                    trace_id=TraceId(_text(entry, "trace_id")),
+                    session_id=SessionId(_text(entry, "session_id")),
+                    turn_id=TurnId(_text(entry, "turn_id")),
+                    evidence_id=_text(entry, "evidence_id"),
                 ),
             )
-            for item in preferences
+            for index, item in enumerate(preferences)
+            for entry in (_object(item),)
         )
 
         if any(entry.provenance.session_id != session_id for entry in entries):
@@ -248,3 +272,13 @@ def _integer(document: dict[str, JsonValue], field: str) -> int:
         raise MemoryStoreBoundaryError(field)
 
     return value
+
+
+def _source(value: str, index: int) -> MemorySource:
+    try:
+        return MemorySource(value)
+
+    except ValueError as error:
+        field = f"preferences[{index}].source"
+
+        raise MemoryStoreBoundaryError(field) from error
