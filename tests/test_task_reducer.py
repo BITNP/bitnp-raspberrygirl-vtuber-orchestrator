@@ -241,6 +241,50 @@ def test_reducer_marks_hung_task_timed_out_before_late_result_can_commit() -> No
     assert record.state is TaskState.TIMED_OUT
 
 
+@pytest.mark.parametrize(
+    ("scenario", "expected_reason"),
+    [
+        ("unknown", TaskResultRejection.TASK_NOT_FOUND),
+        ("session", TaskResultRejection.SESSION_MISMATCH),
+        ("turn", TaskResultRejection.TURN_MISMATCH),
+    ],
+)
+def test_reducer_rejects_unknown_or_mismatched_result_identity(
+    scenario: Literal["unknown", "session", "turn"],
+    expected_reason: TaskResultRejection,
+) -> None:
+    # Given: a reducer with no matching task or result identity.
+
+    registry = _registry()
+
+    result = _result(snapshot_revision=StateRevision(7))
+
+    if scenario != "unknown":
+        _register(registry, _request(task_id="task-1", key="answer-1"))
+
+    match scenario:
+        case "unknown":
+            result = replace(result, task_id=TaskId("missing"))
+
+        case "session":
+            result = replace(result, session_id=SessionId("other"))
+
+        case "turn":
+            result = replace(result, turn_id=TurnId("other"))
+
+    # When: the physical result reaches the reducer.
+
+    outcome = TaskResultReducer(registry).reduce(
+        result,
+        snapshot=_snapshot(),
+        now_ms=100,
+    )
+
+    # Then: it is refused by its explicit correlation boundary.
+
+    assert outcome == TaskResultRejected(expected_reason)
+
+
 def test_registry_enforces_scheduler_configured_task_kind_and_child_fanout() -> None:
     # Given: a registry that permits one interactive child per parent task.
 

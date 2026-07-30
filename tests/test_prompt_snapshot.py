@@ -4,6 +4,8 @@
 契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
 """
 
+import re
+
 import pytest
 
 from orchestrator.llm import build_llm_request
@@ -164,6 +166,8 @@ def test_owned_instruction_inventory_is_chinese_and_payloads_are_delimited() -> 
         "system.untrusted_payload",
     )
 
+    assert set(inventory) == {"system.base", "system.untrusted_payload"}
+
     assert all(
         any("\u4e00" <= character <= "\u9fff" for character in template)
         for template in inventory.values()
@@ -171,4 +175,21 @@ def test_owned_instruction_inventory_is_chinese_and_payloads_are_delimited() -> 
 
     assert "<untrusted-payload>" not in request.prompt.system
 
-    assert request.prompt.user.count("<untrusted-payload>") == 2
+    payloads = tuple(
+        match.group(1)
+        for match in re.finditer(
+            r"<untrusted-payload>(.*?)</untrusted-payload>",
+            request.prompt.user,
+            flags=re.DOTALL,
+        )
+    )
+
+    assert len(payloads) == 2
+
+    assert request.prompt.user.count("<untrusted-payload>") == len(payloads)
+
+    assert request.prompt.user.count("</untrusted-payload>") == len(payloads)
+
+    assert any(candidate.input.text in payload for payload in payloads)
+
+    assert any(retrieval.refs[0].text in payload for payload in payloads)

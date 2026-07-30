@@ -114,7 +114,7 @@ def test_interrupt_cancels_active_turn_and_waits_for_matching_flush_ack() -> Non
 
     gate = SemanticBargeInGate(classifier=classifier, clock=_Clock(), sender=sender)
 
-    active = _active_answer()
+    active = _active_answer(epoch=40)
 
     gate.activate(active)
 
@@ -146,7 +146,7 @@ def test_interrupt_cancels_active_turn_and_waits_for_matching_flush_ack() -> Non
 
     flush = sender.flushes[0]
 
-    assert gate.cancellation_epoch == CancellationEpoch(8)
+    assert gate.cancellation_epoch == CancellationEpoch(41)
 
     assert gate.pop_admitted_replacement() is None
 

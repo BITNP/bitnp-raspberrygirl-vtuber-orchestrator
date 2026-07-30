@@ -35,7 +35,11 @@ def test_unknown_or_low_confidence_voice_never_binds_profile_memory() -> None:
     契约: 同步调用。 返回 `None`。
     """
 
-    service = _service()
+    vault = InMemoryVoiceProfileVault()
+
+    service = VoiceProfileService(
+        session_id=SessionId("session-1"), vault=vault, minimum_confidence=90
+    )
 
     profile_id = _enroll(service)
 
@@ -66,7 +70,11 @@ def test_revocation_deletion_and_correction_control_personalization() -> None:
     契约: 同步调用。 返回 `None`。
     """
 
-    service = _service()
+    vault = InMemoryVoiceProfileVault()
+
+    service = VoiceProfileService(
+        session_id=SessionId("session-1"), vault=vault, minimum_confidence=90
+    )
 
     profile_id = _enroll(service)
 
@@ -93,6 +101,8 @@ def test_revocation_deletion_and_correction_control_personalization() -> None:
     assert revoked == ProfileRecognitionUnknown()
 
     assert deleted == ProfileRecognitionUnknown()
+
+    assert vault.template(profile_id) is None
 
 
 def test_profile_lifecycle_binds_only_revisions_into_mutable_memory() -> None:

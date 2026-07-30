@@ -14,6 +14,7 @@ from orchestrator.interactions import (
     InteractionRejection,
     InteractionRejectionReason,
     McpCapability,
+    McpDispatchAccepted,
     McpDispatchProposal,
     McpDispatchRejected,
     McpDispatchRejection,
@@ -46,6 +47,10 @@ def test_comment_ingress_and_action_rejection_enter_reducer() -> None:
         ActionProposal("inject_external_call", CommandId("action-1"))
     )
 
+    allowed = reducer.reduce_action(ActionProposal("wave", CommandId("action-2")))
+
+    replayed = reducer.reduce_action(ActionProposal("wave", CommandId("action-2")))
+
     # Then: the comment opens a correlated turn but the action emits no effect.
 
     assert isinstance(comment, InteractionAccepted)
@@ -53,6 +58,10 @@ def test_comment_ingress_and_action_rejection_enter_reducer() -> None:
     assert comment.turn_id is not None
 
     assert action == InteractionRejection(InteractionRejectionReason.UNSUPPORTED_ACTION)
+
+    assert allowed == InteractionAccepted(command_id=CommandId("action-2"))
+
+    assert replayed == InteractionRejection(InteractionRejectionReason.DUPLICATE)
 
 
 def test_failed_presentation_result_and_duplicate_command_are_rejected() -> None:
@@ -227,7 +236,7 @@ def test_mcp_requires_allowlist_and_cancellation_blocks_dispatch() -> None:
     契约: 同步调用。 返回 `None`。
     """
 
-    reducer = _reducer()
+    reducer = _reducer(mcp_capabilities=frozenset({McpCapability.PRESENTATION_DECK}))
 
     blocked = McpDispatchProposal(
         McpCapability.KNOWLEDGE_LOOKUP,
@@ -241,11 +250,21 @@ def test_mcp_requires_allowlist_and_cancellation_blocks_dispatch() -> None:
         cancelled=True,
     )
 
+    allowed = McpDispatchProposal(
+        McpCapability.PRESENTATION_DECK,
+        CommandId("mcp-3"),
+        cancelled=False,
+    )
+
     # When: dispatch is attempted with a missing capability or cancellation.
 
     unsupported = reducer.reduce_mcp(blocked)
 
     cancelled_result = reducer.reduce_mcp(cancelled)
+
+    accepted = reducer.reduce_mcp(allowed)
+
+    duplicate = reducer.reduce_mcp(allowed)
 
     # Then: no direct external call is admitted for either proposal.
 
@@ -255,8 +274,16 @@ def test_mcp_requires_allowlist_and_cancellation_blocks_dispatch() -> None:
 
     assert cancelled_result == McpDispatchRejected(McpDispatchRejection.CANCELLED)
 
+    assert accepted == McpDispatchAccepted(
+        command_id=CommandId("mcp-3"), capability=McpCapability.PRESENTATION_DECK
+    )
 
-def _reducer() -> SessionInteractionReducer:
+    assert duplicate == McpDispatchRejected(McpDispatchRejection.DUPLICATE)
+
+
+def _reducer(
+    *, mcp_capabilities: frozenset[McpCapability] | None = None
+) -> SessionInteractionReducer:
     """函数契约说明.
 
     功能: 执行 _reducer 的同步逻辑,并协调
@@ -274,7 +301,7 @@ def _reducer() -> SessionInteractionReducer:
             turn_id_prefix="turn",
         ),
         actions=ActionCapabilityRegistry(frozenset({"wave"})),
-        mcp_capabilities=frozenset(),
+        mcp_capabilities=frozenset() if mcp_capabilities is None else mcp_capabilities,
     )
 
 
