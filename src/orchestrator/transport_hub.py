@@ -2,20 +2,33 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, final, override
 
+from orchestrator.streaming_contracts import (
+    CancellationEpoch,
+    FlushAcknowledgement,
+    StreamFlush,
+    StreamKey,
+)
+from orchestrator.streaming_pipeline_actors import StreamPipelineActors
 from orchestrator.transport_control import (
+    ControlEvent,
+    EnvelopeCorrelation,
     SinkRegistration,
     SourceRegistration,
     StreamReady,
     StreamState,
     parse_control_event,
 )
+from orchestrator.tts_rtp import generated_ssrc
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from orchestrator.ids import ConnectionId
+    from orchestrator.observability import OnsiteObservability, OnsiteStage
+    from orchestrator.scheduler_reflex import SchedulerOutputFence
 
 type PeerAddress = tuple[str, int]
 
@@ -36,10 +49,26 @@ class DatagramSender(Protocol):
 
 
 class OnsiteBridge(Protocol):
-    """Produces replacement Sound RTP from authenticated Mic RTP."""
+    """Accepts Mic RTP and asynchronously emits generated replacement RTP."""
 
-    async def ingest_mic_rtp(self, packet: bytes) -> bytes | tuple[bytes, ...] | None:
-        """Return generated canonical RTP, or no output for an incomplete turn."""
+    def set_output_callback(
+        self,
+        callback: Callable[[StreamKey, CancellationEpoch, bytes], Awaitable[None]],
+    ) -> None:
+        """Install the hub-owned generated RTP callback."""
+
+    def submit_mic_rtp(
+        self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
+    ) -> None:
+        """Submit one authenticated Mic RTP packet without awaiting output."""
+
+    def invalidate_stream(
+        self, stream: StreamKey, next_epoch: CancellationEpoch
+    ) -> None:
+        """Synchronously discard a route's retired actor state."""
+
+    async def wait_quiescent(self) -> None:
+        """Wait until active and invalidated stream work has settled."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,14 +80,6 @@ class RouteKey:
     ssrc: int
     peer_ip: str
     udp_port: int
-
-
-@dataclass(frozen=True, slots=True)
-class StreamKey:
-    """Stable control-plane identity for one media stream."""
-
-    session_id: str
-    stream_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,33 +115,61 @@ class RtpHub:
         """Create an empty hub, optionally with an injected UDP sender."""
         self._transport: DatagramSender | None = transport
         self._onsite_bridge: OnsiteBridge | None = onsite_bridge
+        self._output_fence: SchedulerOutputFence | None = None
+        self._observability: OnsiteObservability | None = None
+        self._correlations: dict[StreamKey, EnvelopeCorrelation] = {}
         self._pending_sources: dict[StreamKey, PendingSource] = {}
         self._pinned_sources: dict[RouteKey, StreamKey] = {}
         self._sinks: dict[StreamKey, PeerAddress] = {}
         self._source_owners: dict[StreamKey, ConnectionId] = {}
         self._sink_owners: dict[StreamKey, ConnectionId] = {}
-        self._onsite_jobs: dict[StreamKey, set[asyncio.Task[None]]] = {}
+        self._onsite_actors: StreamPipelineActors | None = None
         self._route_generations: dict[StreamKey, int] = {}
+        if onsite_bridge is not None:
+            onsite_bridge.set_output_callback(self._deliver_onsite_packet)
 
     def attach_transport(self, transport: DatagramSender) -> None:
         """Attach the UDP sender created by the runtime listener."""
         self._transport = transport
 
+    def set_observability(self, observability: OnsiteObservability) -> None:
+        """Attach the shared recorder without widening route construction inputs."""
+        self._observability = observability
+
+    def set_output_fence(self, output_fence: SchedulerOutputFence) -> None:
+        """Bind generated RTP delivery to the session scheduler's reflex fence."""
+        self._output_fence = output_fence
+
+    @property
+    def route_ready(self) -> bool:
+        """Return whether at least one Mic source has a paired Sound route."""
+        source_streams = {*self._pending_sources.values()}
+        return any(source.stream in self._sinks for source in source_streams) or any(
+            stream in self._sinks for stream in self._pinned_sources.values()
+        )
+
     def register_control(
         self,
-        raw_message: str,
+        raw_message: ControlEvent | str,
         peer_ip: str,
         owner: ConnectionId | None = None,
     ) -> None:
         """Parse and apply one control envelope from an authenticated WSS peer."""
-        event = parse_control_event(raw_message)
-        match event:
+        parsed_event = (
+            parse_control_event(raw_message)
+            if isinstance(raw_message, str)
+            else raw_message
+        )
+        match parsed_event:
             case SourceRegistration(
                 session_id=session_id, stream_id=stream_id, ssrc=ssrc
             ):
-                self._register_source(
-                    StreamKey(session_id, stream_id), ssrc, peer_ip, owner
-                )
+                stream = StreamKey(session_id, stream_id)
+                self._register_source(stream, ssrc, peer_ip, owner)
+                self._correlations[stream] = parsed_event.correlation
+                observability = self._observability
+                if observability is not None:
+                    observability.bind_correlation(stream, parsed_event.correlation)
             case SinkRegistration(
                 session_id=session_id, stream_id=stream_id, udp_port=udp_port
             ):
@@ -133,7 +182,7 @@ class RtpHub:
                 state="cancelled" | "finished" | "error",
             ):
                 self._remove_stream(StreamKey(session_id, stream_id))
-            case StreamReady() | StreamState():
+            case StreamReady() | StreamState() | StreamFlush() | FlushAcknowledgement():
                 return
 
     def route_datagram(self, data: bytes, peer: PeerAddress) -> bool:
@@ -143,6 +192,7 @@ class RtpHub:
         stream = self._find_route(_rtp_ssrc(data), peer)
         if stream is None:
             return False
+        self._record_rtp("rtp_ingress", stream)
         sink = self._sinks.get(stream)
         if sink is None or self._transport is None:
             return False
@@ -152,49 +202,60 @@ class RtpHub:
         return True
 
     def _route_onsite(self, data: bytes, stream: StreamKey) -> bool:
-        generation = self._route_generations.get(stream, 0)
-        task = asyncio.create_task(self._process_onsite(stream, data, generation))
-        jobs = self._onsite_jobs.setdefault(stream, set())
-        jobs.add(task)
-        task.add_done_callback(
-            lambda completed: self._discard_onsite_job(stream, completed)
-        )
+        actors = self._onsite_actors
+        if actors is None:
+            actors = StreamPipelineActors(self._process_onsite_frame)
+            self._onsite_actors = actors
+        actors.submit(stream, data)
         return False
 
-    async def _process_onsite(
-        self, stream: StreamKey, data: bytes, generation: int
-    ) -> None:
+    async def _process_onsite_frame(self, stream: StreamKey, frame: bytes) -> None:
         bridge = self._onsite_bridge
-        if bridge is None:
+        if bridge is not None:
+            bridge.submit_mic_rtp(
+                stream,
+                frame,
+                CancellationEpoch(self._route_generations.get(stream, 0)),
+            )
+
+    async def _deliver_onsite_packet(
+        self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
+    ) -> None:
+        output_fence = self._output_fence
+        if output_fence is None and epoch != CancellationEpoch(
+            self._route_generations.get(stream, 0)
+        ):
             return
-        generated = await bridge.ingest_mic_rtp(data)
-        if generation != self._route_generations.get(stream, 0) or generated is None:
+        if output_fence is not None and not output_fence.can_emit(stream, epoch):
             return
-        packets = (generated,) if isinstance(generated, bytes) else generated
-        if any(not _is_canonical_rtp(packet) for packet in packets):
+        if not _is_canonical_rtp(packet):
             return
         sink = self._sinks.get(stream)
         transport = self._transport
         if sink is None or transport is None:
             return
-        for packet in packets:
-            transport.sendto(packet, sink)
+        transport.sendto(packet, sink)
+        self._record_rtp("rtp_egress", stream)
 
-    def _discard_onsite_job(self, stream: StreamKey, task: asyncio.Task[None]) -> None:
-        jobs = self._onsite_jobs.get(stream)
-        if jobs is None:
-            return
-        jobs.discard(task)
-        if len(jobs) == 0:
-            del self._onsite_jobs[stream]
+    async def deliver_generated_rtp(
+        self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
+    ) -> None:
+        """Deliver generated RTP through every route and scheduler output fence."""
+        await self._deliver_onsite_packet(stream, epoch, packet)
+
+    def _record_rtp(self, stage: OnsiteStage, stream: StreamKey) -> None:
+        observability = self._observability
+        if observability is not None:
+            observability.record_stream(stage, stream)
 
     async def wait_for_onsite_jobs(self) -> None:
         """Wait for all accepted onsite provider jobs to settle."""
-        while self._onsite_jobs:
-            jobs = tuple(
-                job for stream_jobs in self._onsite_jobs.values() for job in stream_jobs
-            )
-            _ = await asyncio.gather(*jobs, return_exceptions=True)
+        actors = self._onsite_actors
+        if actors is not None:
+            await actors.wait_quiescent()
+        bridge = self._onsite_bridge
+        if bridge is not None:
+            await bridge.wait_quiescent()
 
     def remove_connection(self, owner: ConnectionId) -> None:
         """Remove exactly the source and sink components owned by one WSS session."""
@@ -207,9 +268,12 @@ class RtpHub:
 
     def clear(self) -> None:
         """Remove all routes when the runtime relinquishes its listeners."""
-        for stream in tuple(self._onsite_jobs):
-            self._invalidate_stream(stream)
+        actors = self._onsite_actors
+        if actors is not None:
+            for stream in actors.streams:
+                self._invalidate_stream(stream)
         self._pending_sources.clear()
+        self._correlations.clear()
         self._pinned_sources.clear()
         self._sinks.clear()
         self._source_owners.clear()
@@ -219,12 +283,28 @@ class RtpHub:
         """Remove one stream route before its cancellation reaches the sink."""
         self._remove_stream(StreamKey(session_id, stream_id))
 
-    def output_ssrc(self, mic_ssrc: int) -> int:
+    def output_ssrc(self, stream: StreamKey, cancellation_epoch: int = 0) -> int:
         """Return the SSRC Sound must accept for this transport mode."""
         if self._onsite_bridge is None:
-            return mic_ssrc
-        generated = mic_ssrc ^ 0xA5A5_A5A5
-        return 1 if generated == 0 else generated
+            source = next(
+                (
+                    pending.ssrc
+                    for pending in self._pending_sources.values()
+                    if pending.stream == stream
+                ),
+                None,
+            )
+            if source is not None:
+                return source
+            for route, route_stream in self._pinned_sources.items():
+                if route_stream == stream:
+                    return route.ssrc
+            return 0
+        return generated_ssrc(stream, CancellationEpoch(cancellation_epoch))
+
+    def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None:
+        """Return the authenticated source-envelope correlation for one live route."""
+        return self._correlations.get(stream)
 
     def _register_source(
         self,
@@ -263,6 +343,7 @@ class RtpHub:
     def _remove_source(self, stream: StreamKey) -> None:
         self._invalidate_stream(stream)
         _ = self._pending_sources.pop(stream, None)
+        _ = self._correlations.pop(stream, None)
         _ = self._source_owners.pop(stream, None)
         for route, route_stream in tuple(self._pinned_sources.items()):
             if route_stream == stream:
@@ -274,9 +355,15 @@ class RtpHub:
         _ = self._sink_owners.pop(stream, None)
 
     def _invalidate_stream(self, stream: StreamKey) -> None:
-        self._route_generations[stream] = self._route_generations.get(stream, 0) + 1
-        for job in self._onsite_jobs.get(stream, ()):
-            _ = job.cancel()
+        next_generation = self._route_generations.get(stream, 0) + 1
+        self._route_generations[stream] = next_generation
+        if self._onsite_bridge is not None:
+            self._onsite_bridge.invalidate_stream(
+                stream, CancellationEpoch(next_generation)
+            )
+        actors = self._onsite_actors
+        if actors is not None:
+            _ = actors.discard(stream)
 
     def _find_route(self, ssrc: int, peer: PeerAddress) -> StreamKey | None:
         for route, stream in self._pinned_sources.items():

@@ -7,6 +7,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, override
 
 from orchestrator.json_boundary import JsonValue, parse_json_value
+from orchestrator.streaming_contracts import (
+    CancellationEpoch,
+    FlushAcknowledgement,
+    FlushRequestId,
+    GeneratedSsrc,
+    SegmentId,
+    StreamFlush,
+    StreamKey,
+    TurnId,
+)
 
 if TYPE_CHECKING:
     from orchestrator.config import TrustedLanToken
@@ -14,7 +24,14 @@ if TYPE_CHECKING:
 MAX_SSRC = 4_294_967_295
 MAX_UDP_PORT = 65_535
 
-type ControlEvent = SourceRegistration | SinkRegistration | StreamReady | StreamState
+type ControlEvent = (
+    SourceRegistration
+    | SinkRegistration
+    | StreamReady
+    | StreamState
+    | StreamFlush
+    | FlushAcknowledgement
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,12 +46,22 @@ class ControlEnvelopeError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class EnvelopeCorrelation:
+    """Authenticated envelope identity retained across control and media stages."""
+
+    trace_id: str
+    session_id: str
+    seq: int
+
+
+@dataclass(frozen=True, slots=True)
 class SourceRegistration:
     """Canonical Mic source registration parsed at the WSS boundary."""
 
     session_id: str
     stream_id: str
     ssrc: int
+    correlation: EnvelopeCorrelation
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +71,7 @@ class SinkRegistration:
     session_id: str
     stream_id: str
     udp_port: int
+    correlation: EnvelopeCorrelation
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +80,7 @@ class StreamReady:
 
     session_id: str
     stream_id: str
+    correlation: EnvelopeCorrelation
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +90,10 @@ class StreamState:
     session_id: str
     stream_id: str
     state: str
+    correlation: EnvelopeCorrelation
+    turn_id: TurnId | None = None
+    segment_id: SegmentId | None = None
+    cancellation_epoch: CancellationEpoch | None = None
 
 
 class ControlReceiver(Protocol):
@@ -107,36 +140,82 @@ def parse_control_event(raw_message: str) -> ControlEvent:
     _validate_envelope(value)
     event_type = _text(value, "event_type")
     data = _mapping(value, "data")
+    correlation = EnvelopeCorrelation(
+        trace_id=_text(value, "trace_id"),
+        session_id=_text(value, "session_id"),
+        seq=_nonnegative_int(value, "seq"),
+    )
     match event_type:
         case "media.rtp.source.register":
             _validate_source_registration(data, _text(value, "source"))
-            return SourceRegistration(
+            parsed: ControlEvent = SourceRegistration(
                 session_id=_text(value, "session_id"),
                 stream_id=_text(data, "stream_id"),
                 ssrc=_ssrc(data),
+                correlation=correlation,
             )
         case "media.rtp.sink.register":
             _validate_sink_registration(data, _text(value, "source"))
-            return SinkRegistration(
+            parsed = SinkRegistration(
                 session_id=_text(value, "session_id"),
                 stream_id=_text(data, "stream_id"),
                 udp_port=_endpoint_port(data),
+                correlation=correlation,
             )
         case "media.rtp.source.ready":
             _validate_source_ready(data, _text(value, "source"))
-            return StreamReady(_text(value, "session_id"), _text(data, "stream_id"))
+            parsed = StreamReady(
+                _text(value, "session_id"), _text(data, "stream_id"), correlation
+            )
         case "media.rtp.sink.ready":
             _validate_sink_ready(data, _text(value, "source"))
-            return StreamReady(_text(value, "session_id"), _text(data, "stream_id"))
+            parsed = StreamReady(
+                _text(value, "session_id"), _text(data, "stream_id"), correlation
+            )
         case "media.stream.state":
             _validate_stream_state(data, _text(value, "source"))
-            return StreamState(
+            parsed = StreamState(
                 session_id=_text(value, "session_id"),
                 stream_id=_text(data, "stream_id"),
                 state=_stream_state(data),
+                correlation=correlation,
+                turn_id=_optional_turn_id(value),
+                segment_id=_optional_segment_id(value),
+                cancellation_epoch=_optional_cancellation_epoch(data),
+            )
+        case "media.stream.flush":
+            _validate_flush(data, _text(value, "source"), "orchestrator")
+            parsed = StreamFlush(
+                stream=StreamKey(_text(value, "session_id"), _text(data, "stream_id")),
+                turn_id=TurnId(_text(value, "turn_id")),
+                segment_id=SegmentId(_text(value, "segment_id")),
+                cancellation_epoch=CancellationEpoch(
+                    _nonnegative_int(data, "cancellation_epoch")
+                ),
+                request_id=FlushRequestId(_text(data, "request_id")),
+                target_generated_ssrc=GeneratedSsrc(
+                    _ssrc_field(data, "target_generated_ssrc")
+                ),
+                correlation=correlation,
+            )
+        case "media.stream.flush.ack":
+            _validate_flush(data, _text(value, "source"), "sound")
+            parsed = FlushAcknowledgement(
+                stream=StreamKey(_text(value, "session_id"), _text(data, "stream_id")),
+                turn_id=TurnId(_text(value, "turn_id")),
+                segment_id=SegmentId(_text(value, "segment_id")),
+                cancellation_epoch=CancellationEpoch(
+                    _nonnegative_int(data, "cancellation_epoch")
+                ),
+                request_id=FlushRequestId(_text(data, "request_id")),
+                target_generated_ssrc=GeneratedSsrc(
+                    _ssrc_field(data, "target_generated_ssrc")
+                ),
+                correlation=correlation,
             )
         case _:
             raise ControlEnvelopeError(field_name="event_type")
+    return parsed
 
 
 def _validate_envelope(value: dict[str, JsonValue]) -> None:
@@ -206,12 +285,75 @@ def _validate_stream_state(data: dict[str, JsonValue], source: str) -> None:
     if source != "sound":
         raise ControlEnvelopeError(field_name="source")
     _ = _text(data, "stream_id")
+    _ = _stream_state(data)
+    if set(data).difference({"stream_id", "state", "cancellation_epoch"}):
+        raise ControlEnvelopeError(field_name="data")
+    _ = _optional_cancellation_epoch(data)
+
+
+def _optional_turn_id(value: dict[str, JsonValue]) -> TurnId | None:
+    turn_id = value.get("turn_id")
+    if turn_id is None:
+        return None
+    if not isinstance(turn_id, str) or turn_id == "":
+        raise ControlEnvelopeError(field_name="turn_id")
+    return TurnId(turn_id)
+
+
+def _optional_segment_id(value: dict[str, JsonValue]) -> SegmentId | None:
+    segment_id = value.get("segment_id")
+    if segment_id is None:
+        return None
+    if not isinstance(segment_id, str) or segment_id == "":
+        raise ControlEnvelopeError(field_name="segment_id")
+    return SegmentId(segment_id)
+
+
+def _optional_cancellation_epoch(
+    data: dict[str, JsonValue],
+) -> CancellationEpoch | None:
+    if "cancellation_epoch" not in data:
+        return None
+    return CancellationEpoch(_nonnegative_int(data, "cancellation_epoch"))
+
+
+def _validate_flush(
+    data: dict[str, JsonValue], source: str, expected_source: str
+) -> None:
+    if source != expected_source:
+        raise ControlEnvelopeError(field_name="source")
+    required = {
+        "stream_id",
+        "cancellation_epoch",
+        "request_id",
+        "target_generated_ssrc",
+    }
+    for field_name in required:
+        if field_name not in data:
+            raise ControlEnvelopeError(field_name=f"data.{field_name}")
+    if set(data) != required:
+        raise ControlEnvelopeError(field_name="data")
+    _ = _text(data, "stream_id")
+    _ = _nonnegative_int(data, "cancellation_epoch")
+    _ = _text(data, "request_id")
+    _ = _ssrc_field(data, "target_generated_ssrc")
 
 
 def _ssrc(data: dict[str, JsonValue]) -> int:
-    value = data.get("ssrc")
+    return _ssrc_field(data, "ssrc")
+
+
+def _ssrc_field(data: dict[str, JsonValue], field_name: str) -> int:
+    value = data.get(field_name)
     if type(value) is not int or not 0 <= value <= MAX_SSRC:
-        raise ControlEnvelopeError(field_name="data.ssrc")
+        raise ControlEnvelopeError(field_name=f"data.{field_name}")
+    return value
+
+
+def _nonnegative_int(data: dict[str, JsonValue], field_name: str) -> int:
+    value = data.get(field_name)
+    if type(value) is not int or value < 0:
+        raise ControlEnvelopeError(field_name=f"data.{field_name}")
     return value
 
 
