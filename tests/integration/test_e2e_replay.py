@@ -12,25 +12,25 @@ from .e2e_replay_harness import (
     is_peer_edge,
 )
 from .e2e_replay_scenarios import (
-    all_mode_scenarios,
+    all_adaptive_scenarios,
     negative_peer_harness,
     negative_stale_harness,
 )
 
 
-def test_replay_harness_runs_all_modes_without_peer_communication() -> None:
+def test_replay_harness_runs_adaptive_surfaces_without_peer_communication() -> None:
     # Given: deterministic in-process scenarios for every Task 17 input surface.
 
     """函数契约说明.
 
-    功能: 验证 replay harness runs all modes
+    功能: 验证 replay harness runs adaptive surfaces
     without peer communication
     的回归场景和可观察结果。
     参数: 无显式业务参数。
     契约: 同步调用。 返回 `None`。
     """
 
-    scenarios = all_mode_scenarios()
+    scenarios = all_adaptive_scenarios()
 
     # When / Then: every replay emits media, sound, and frontend controls with IDs.
 

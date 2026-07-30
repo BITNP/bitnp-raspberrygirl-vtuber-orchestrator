@@ -5,7 +5,7 @@
 """
 
 from orchestrator.llm import FallbackLLMAdapter, MockLLMAdapter, TimeoutLLMAdapter
-from orchestrator.modes import ModePolicy
+from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
 from orchestrator.pipeline_contracts import ASRAudienceEvent, PipelineConfig
 from orchestrator.retrieval import RetrievalFixtureProvider
@@ -25,7 +25,7 @@ def test_bounded_queue_rejects_overflow_without_sleeping() -> None:
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
-            mode_policy=ModePolicy.onsite_explainer(),
+            mode_policy=AdaptiveAgentPolicy(),
             llm=MockLLMAdapter(answer_chunks=("ok",)),
             retrieval=RetrievalFixtureProvider(refs=()),
         ),
@@ -69,7 +69,7 @@ def test_llm_timeout_emits_fallback_answer_without_wall_clock() -> None:
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
-            mode_policy=ModePolicy.onsite_explainer(),
+            mode_policy=AdaptiveAgentPolicy(),
             llm=FallbackLLMAdapter(
                 primary=TimeoutLLMAdapter(timeout_reason="deadline"),
                 fallback_text="Fallback answer.",

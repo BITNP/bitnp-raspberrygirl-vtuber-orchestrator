@@ -5,7 +5,7 @@
 """
 
 from orchestrator.llm import MockLLMAdapter
-from orchestrator.modes import ModePolicy
+from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
 from orchestrator.pipeline_contracts import (
     ASRAudienceEvent,
@@ -30,7 +30,7 @@ def test_interruption_cancels_previous_segment_and_rejects_stale_synthesis() -> 
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
-            mode_policy=ModePolicy.onsite_explainer(),
+            mode_policy=AdaptiveAgentPolicy(),
             llm=MockLLMAdapter(answer_chunks=("First answer",)),
             retrieval=RetrievalFixtureProvider(refs=()),
         ),
@@ -104,7 +104,7 @@ def test_cancelled_segment_emits_no_stale_media_or_frontend_cues() -> None:
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
-            mode_policy=ModePolicy.onsite_explainer(),
+            mode_policy=AdaptiveAgentPolicy(),
             llm=MockLLMAdapter(answer_chunks=("First answer",)),
             retrieval=RetrievalFixtureProvider(refs=()),
         ),
@@ -157,7 +157,7 @@ def test_interruption_preserves_monotonic_turn_identifiers() -> None:
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
-            mode_policy=ModePolicy.onsite_explainer(),
+            mode_policy=AdaptiveAgentPolicy(),
             llm=MockLLMAdapter(answer_chunks=("First answer",)),
             retrieval=RetrievalFixtureProvider(refs=()),
         ),

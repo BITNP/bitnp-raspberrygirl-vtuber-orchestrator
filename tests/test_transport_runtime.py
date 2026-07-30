@@ -16,7 +16,6 @@ import pytest
 from orchestrator.config import TrustedLanToken
 from orchestrator.ids import SessionId
 from orchestrator.mcp_adapters import McpJournalKind
-from orchestrator.modes import OrchestratorMode
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 from orchestrator.transport_config import TransportConfig
@@ -570,7 +569,6 @@ def test_control_connection_routes_comments_through_scheduler_runtime() -> None:
         session_id=SessionId(SESSION_ID),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
-        mode=OrchestratorMode.VIRTUAL_STREAMER,
     )
 
     runtime.set_session_runtime(session_runtime)
@@ -628,7 +626,6 @@ def test_control_connection_refuses_comments_without_valid_credential() -> None:
         session_id=SessionId(SESSION_ID),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
-        mode=OrchestratorMode.VIRTUAL_STREAMER,
     )
 
     runtime.set_session_runtime(session_runtime)
@@ -688,7 +685,6 @@ def test_control_connection_routes_authenticated_profile_action_and_presentation
         session_id=SessionId(SESSION_ID),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset(TaskKind), 1),
-        mode=OrchestratorMode.VIRTUAL_STREAMER,
     )
 
     runtime.set_session_runtime(session_runtime)
@@ -760,7 +756,6 @@ def test_control_connection_skips_expired_presentation_mcp() -> None:
         session_id=SessionId(SESSION_ID),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset(TaskKind), 1),
-        mode=OrchestratorMode.VIRTUAL_STREAMER,
         clock=clock.now,
     )
 

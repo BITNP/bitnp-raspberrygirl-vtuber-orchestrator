@@ -32,7 +32,7 @@ from orchestrator.mcp_adapters import (
     McpIntent,
     ScopedMcpAdapterDispatcher,
 )
-from orchestrator.modes import OrchestratorMode
+from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.runtime_contracts import RuntimeObservables
 from orchestrator.scheduler_runtime import SessionRuntime
@@ -65,7 +65,6 @@ def test_runtime_dispatches_valid_proposal_and_rejects_replay_without_effect() -
         session_id=SessionId("session-1"),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
-        mode=OrchestratorMode.VIRTUAL_STREAMER,
     )
 
     proposal = CommentProposal("解释量化", _correlation("session-1", "trace-1", 1))
@@ -120,7 +119,6 @@ def test_runtime_rejects_invalid_task_results_without_effect() -> None:
         session_id=SessionId("session-1"),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
-        mode=OrchestratorMode.VIRTUAL_STREAMER,
     )
 
     first = runtime.receive_comment(
@@ -177,44 +175,28 @@ def test_runtime_rejects_invalid_task_results_without_effect() -> None:
     assert len(runtime.observables.rejections) == len(baseline.rejections) + 3
 
 
-def test_runtime_selects_the_requested_mode_policy() -> None:
-    # Given: each valid production mode.
+def test_runtime_composes_the_adaptive_agent_policy() -> None:
+    # Given: one production-composed session runtime.
 
     """函数契约说明.
 
-    功能: 验证 runtime selects the requested
-    mode policy 的回归场景和可观察结果。
+    功能: 验证 runtime composes the adaptive
+    agent policy 的回归场景和可观察结果。
     参数: 无显式业务参数。
     契约: 同步调用。 返回 `None`。
     """
 
-    modes = (
-        OrchestratorMode.LECTURER,
-        OrchestratorMode.VIRTUAL_STREAMER,
-        OrchestratorMode.ONSITE_EXPLAINER,
+    # When: the runtime is created without a product-mode selector.
+
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-adaptive"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
     )
 
-    # When: each mode composes a live scheduler runtime.
+    # Then: the runtime owns the single adaptive policy.
 
-    policies = tuple(
-        type(
-            SessionRuntime.create(
-                session_id=SessionId(f"session-{mode}"),
-                turn_id_prefix="turn",
-                task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
-                mode=mode,
-            ).mode_policy
-        ).__name__
-        for mode in modes
-    )
-
-    # Then: each mode owns its distinct existing policy.
-
-    assert policies == (
-        "LecturerModePolicy",
-        "VirtualStreamerModePolicy",
-        "OnsiteExplainerModePolicy",
-    )
+    assert isinstance(runtime.mode_policy, AdaptiveAgentPolicy)
 
 
 def test_runtime_opens_one_turn_only_for_semantically_accepted_asr_final() -> None:
@@ -233,7 +215,6 @@ def test_runtime_opens_one_turn_only_for_semantically_accepted_asr_final() -> No
         session_id=SessionId("session-1"),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset(TaskKind), 3),
-        mode=OrchestratorMode.ONSITE_EXPLAINER,
     )
 
     event = ASRAudienceEvent("请介绍 BitNet", 20, "asr-1", 1)
@@ -1086,7 +1067,6 @@ def _runtime(clock: "_Clock | None" = None) -> SessionRuntime:
         session_id=SessionId("session-1"),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 3),
-        mode=OrchestratorMode.VIRTUAL_STREAMER,
         clock=_monotonic_clock if clock is None else clock.monotonic_ms,
     )
 

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
 from orchestrator.llm import MockLLMAdapter
-from orchestrator.modes import ModePolicy
+from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
 from orchestrator.pipeline_contracts import (
     ASRAudienceEvent,
@@ -163,7 +163,7 @@ class FakeOnsiteExplainerBridge:
 
         pipeline = OrchestratorTurnPipeline(
             adapters=PipelineAdapters(
-                mode_policy=ModePolicy.onsite_explainer(),
+                mode_policy=AdaptiveAgentPolicy(),
                 llm=MockLLMAdapter(answer_chunks=("onsite ", "answer")),
                 retrieval=RetrievalFixtureProvider(refs=()),
             ),

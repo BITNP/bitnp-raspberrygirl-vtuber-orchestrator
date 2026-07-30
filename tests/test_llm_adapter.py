@@ -15,13 +15,9 @@ from orchestrator.llm import (
     build_llm_request,
 )
 from orchestrator.modes import (
+    AdaptiveAgentPolicy,
     AudienceInput,
     AudienceSource,
-    LecturerState,
-    ModePolicy,
-    QaWindow,
-    ScriptStep,
-    SlideStep,
 )
 from orchestrator.retrieval import KnowledgeRef
 
@@ -38,14 +34,7 @@ def test_mock_llm_streams_deterministic_chunks_and_final_answer() -> None:
     契约: 同步调用。 返回 `None`。
     """
 
-    policy = ModePolicy.lecturer(
-        LecturerState(
-            script_step=ScriptStep(3),
-            slide_step=SlideStep(7),
-            immediate_interruption_enabled=False,
-            qa_window=QaWindow(start_ms=1_000, end_ms=3_000),
-        ),
-    )
+    policy = AdaptiveAgentPolicy()
 
     candidate = policy.select_answer_candidate(
         (
@@ -97,7 +86,7 @@ def test_openai_compatible_adapter_builds_request_payload_without_api_key() -> N
     契约: 同步调用。 返回 `None`。
     """
 
-    policy = ModePolicy.virtual_streamer(topic="retro hardware")
+    policy = AdaptiveAgentPolicy()
 
     candidate = policy.select_answer_candidate(
         (
@@ -147,7 +136,7 @@ def test_openai_adapter_rejects_malformed_model_boundary_input() -> None:
     契约: 同步调用。 返回 `None`。
     """
 
-    candidate = ModePolicy.onsite_explainer().select_answer_candidate(
+    candidate = AdaptiveAgentPolicy().select_answer_candidate(
         (
             AudienceInput(
                 source=AudienceSource.ASR,

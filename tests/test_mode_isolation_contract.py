@@ -30,6 +30,8 @@ SCHEMA_MODE_PATTERN: Final = re.compile(
     re.IGNORECASE,
 )
 
+SCHEMA_MODE_FIELD_PATTERN: Final = re.compile(r'"mode"')
+
 MODE_AGNOSTIC_EVENT_PREFIXES: Final = (
     '"audience.input"',
     '"asr.',
@@ -77,6 +79,9 @@ def schema_mode_violations() -> tuple[str, ...]:
 
         for line_number, line in enumerate(lines, start=1):
             if SCHEMA_MODE_PATTERN.search(line):
+                violations.append(f"{path.relative_to(ROOT).as_posix()}:{line_number}")
+
+            if SCHEMA_MODE_FIELD_PATTERN.search(line):
                 violations.append(f"{path.relative_to(ROOT).as_posix()}:{line_number}")
 
             line_is_mode_agnostic_event = line.strip().startswith(
@@ -171,5 +176,19 @@ def test_isolation_scanner_flags_mode_specific_schema_term() -> None:
     violation = SCHEMA_MODE_PATTERN.search(text)
 
     # Then: the contract would fail if an IO schema added this term.
+
+    assert violation is not None
+
+
+def test_isolation_scanner_flags_runtime_mode_schema_field() -> None:
+    # Given: a canonical session schema line with a runtime mode field.
+
+    text = '"session.created": {"required": ["created_at", "mode"]}'
+
+    # When: the same pattern used for schema scanning evaluates it.
+
+    violation = SCHEMA_MODE_FIELD_PATTERN.search(text)
+
+    # Then: the contract would fail if a canonical schema retained the field.
 
     assert violation is not None

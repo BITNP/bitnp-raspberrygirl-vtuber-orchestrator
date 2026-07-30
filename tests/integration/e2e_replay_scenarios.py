@@ -9,13 +9,7 @@ from pathlib import Path
 from typing import Final
 
 from orchestrator.llm import MockLLMAdapter
-from orchestrator.modes import (
-    LecturerState,
-    ModePolicy,
-    QaWindow,
-    ScriptStep,
-    SlideStep,
-)
+from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.pipeline import (
     AnswerPolicy,
     OrchestratorTurnPipeline,
@@ -40,24 +34,24 @@ COMMENT_FIELD_PATTERN: Final = re.compile(
 )
 
 
-def all_mode_scenarios() -> tuple[ScenarioSummary, ...]:
+def all_adaptive_scenarios() -> tuple[ScenarioSummary, ...]:
     """函数契约说明.
 
-    功能: 执行 all_mode_scenarios 的同步逻辑,并协调
-    _lecturer_scheduled_qa,
-    _lecturer_interruption,
-    _virtual_streamer_comment_qa,
-    _onsite_asr_qa。
+    功能: 执行 all_adaptive_scenarios 的同步逻辑,并协调
+    _presentation_question,
+    _interrupted_voice_question,
+    _comment_question,
+    _onsite_voice_question。
     参数: 无显式业务参数。
     契约: 同步调用。 返回 `tuple[ScenarioSummary,
     ...]`。
     """
 
     return (
-        _lecturer_scheduled_qa(),
-        _lecturer_interruption(),
-        _virtual_streamer_comment_qa(),
-        _onsite_asr_qa(),
+        _presentation_question(),
+        _interrupted_voice_question(),
+        _comment_question(),
+        _onsite_voice_question(),
     )
 
 
@@ -71,7 +65,7 @@ def negative_peer_harness() -> ReplayHarness:
     契约: 同步调用。 返回 `ReplayHarness`。
     """
 
-    harness = _harness("negative_peer", ModePolicy.onsite_explainer())
+    harness = _harness("negative_peer", AdaptiveAgentPolicy())
 
     harness.submit(ASRAudienceEvent("question", 1, "asr-neg", 1))
 
@@ -87,13 +81,13 @@ def negative_stale_harness() -> tuple[ReplayHarness, TurnResult]:
 
     功能: 执行 negative_stale_harness
     的同步逻辑,并协调 _harness, submit,
-    start_next_turn, onsite_explainer。
+    start_next_turn。
     参数: 无显式业务参数。
     契约: 同步调用。 返回 `tuple[ReplayHarness,
     TurnResult]`。
     """
 
-    harness = _harness("negative_stale", ModePolicy.onsite_explainer())
+    harness = _harness("negative_stale", AdaptiveAgentPolicy())
 
     harness.submit(ASRAudienceEvent("first", 1, "asr-1", 1))
 
@@ -104,27 +98,17 @@ def negative_stale_harness() -> tuple[ReplayHarness, TurnResult]:
     return harness, first
 
 
-def _lecturer_scheduled_qa() -> ScenarioSummary:
+def _presentation_question() -> ScenarioSummary:
     """函数契约说明.
 
-    功能: 执行 _lecturer_scheduled_qa
+    功能: 执行 _presentation_question
     的同步逻辑,并协调 _harness, submit,
     finish_turn, assert_no_peer_edges。
     参数: 无显式业务参数。
     契约: 同步调用。 返回 `ScenarioSummary`。
     """
 
-    harness = _harness(
-        "lecturer_scheduled_qa",
-        ModePolicy.lecturer(
-            LecturerState(
-                script_step=ScriptStep(6),
-                slide_step=SlideStep(12),
-                immediate_interruption_enabled=False,
-                qa_window=QaWindow(10_000, 20_000),
-            ),
-        ),
-    )
+    harness = _harness("presentation_question", AdaptiveAgentPolicy())
 
     harness.submit(ASRAudienceEvent("What is the takeaway?", 15_000, "asr-qa", 1))
 
@@ -135,10 +119,10 @@ def _lecturer_scheduled_qa() -> ScenarioSummary:
     return harness.summary()
 
 
-def _lecturer_interruption() -> ScenarioSummary:
+def _interrupted_voice_question() -> ScenarioSummary:
     """函数契约说明.
 
-    功能: 执行 _lecturer_interruption
+    功能: 执行 _interrupted_voice_question
     的同步逻辑,并协调 _harness, submit,
     start_next_turn,
     reject_stale_synthesis。
@@ -146,17 +130,7 @@ def _lecturer_interruption() -> ScenarioSummary:
     契约: 同步调用。 返回 `ScenarioSummary`。
     """
 
-    harness = _harness(
-        "lecturer_interruption",
-        ModePolicy.lecturer(
-            LecturerState(
-                script_step=ScriptStep(2),
-                slide_step=SlideStep(5),
-                immediate_interruption_enabled=True,
-                qa_window=None,
-            ),
-        ),
-    )
+    harness = _harness("interrupted_voice_question", AdaptiveAgentPolicy())
 
     harness.submit(ASRAudienceEvent("Please repeat", 1_000, "asr-int-1", 1))
 
@@ -173,20 +147,17 @@ def _lecturer_interruption() -> ScenarioSummary:
     return harness.summary()
 
 
-def _virtual_streamer_comment_qa() -> ScenarioSummary:
+def _comment_question() -> ScenarioSummary:
     """函数契约说明.
 
-    功能: 执行 _virtual_streamer_comment_qa
+    功能: 执行 _comment_question
     的同步逻辑,并协调 _harness, submit,
     finish_turn, assert_no_peer_edges。
     参数: 无显式业务参数。
     契约: 同步调用。 返回 `ScenarioSummary`。
     """
 
-    harness = _harness(
-        "virtual_streamer_comment_qa",
-        ModePolicy.virtual_streamer(topic="bitnet"),
-    )
+    harness = _harness("comment_question", AdaptiveAgentPolicy())
 
     harness.submit(_fixture_comment())
 
@@ -197,17 +168,17 @@ def _virtual_streamer_comment_qa() -> ScenarioSummary:
     return harness.summary()
 
 
-def _onsite_asr_qa() -> ScenarioSummary:
+def _onsite_voice_question() -> ScenarioSummary:
     """函数契约说明.
 
-    功能: 执行 _onsite_asr_qa 的同步逻辑,并协调
+    功能: 执行 _onsite_voice_question 的同步逻辑,并协调
     _harness, submit, finish_turn,
     assert_no_peer_edges。
     参数: 无显式业务参数。
     契约: 同步调用。 返回 `ScenarioSummary`。
     """
 
-    harness = _harness("onsite_asr_qa", ModePolicy.onsite_explainer())
+    harness = _harness("onsite_voice_question", AdaptiveAgentPolicy())
 
     harness.submit(ASRAudienceEvent("How does the demo work?", 2_000, "asr-onsite", 1))
 

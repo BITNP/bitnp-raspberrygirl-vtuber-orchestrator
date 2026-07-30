@@ -19,7 +19,7 @@ from sound.receive import ReceiveRuntime
 from sound.receive_config import SoundReceiveConfig
 
 from orchestrator.media_adapters import OpenAICompatibleASRAdapter, VllmOmniTTSAdapter
-from orchestrator.modes import ModePolicy
+from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
 from orchestrator.openai_llm_runtime import OpenAICompatibleLLMRuntimeAdapter
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
@@ -551,7 +551,7 @@ def _bridge(endpoint: str) -> OnsiteExplainerBridge:
     功能: 执行 _bridge 的同步逻辑,并协调
     PipelineAdapters,
     OnsiteExplainerBridge,
-    onsite_explainer,
+    AdaptiveAgentPolicy,
     OpenAICompatibleLLMRuntimeAdapter。
     参数: endpoint: str。 必填。
     契约: 同步调用。 返回
@@ -559,7 +559,7 @@ def _bridge(endpoint: str) -> OnsiteExplainerBridge:
     """
 
     adapters = PipelineAdapters(
-        mode_policy=ModePolicy.onsite_explainer(),
+        mode_policy=AdaptiveAgentPolicy(),
         llm=OpenAICompatibleLLMRuntimeAdapter(
             endpoint=endpoint,
             model="local-llm",

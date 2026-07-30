@@ -125,7 +125,15 @@ def test_demo_runner_writes_protocol_evidence(
 
     assert data["status"] == "passed"
 
-    assert data["script_title"] == "BitNet 讲解模式演示"
+    assert data["script_title"] == "BitNet 讲稿演示"
+
+    events = data["events"]
+    assert isinstance(events, list)
+    session_created = events[0]
+    assert isinstance(session_created, dict)
+    session_data = session_created["data"]
+    assert isinstance(session_data, dict)
+    assert "mode" not in session_data
 
 
 def _event_types(data: dict[str, JsonValue]) -> tuple[str, ...]:

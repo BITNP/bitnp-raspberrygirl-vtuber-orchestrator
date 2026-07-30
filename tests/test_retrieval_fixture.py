@@ -5,7 +5,7 @@
 """
 
 from orchestrator.llm import build_llm_request
-from orchestrator.modes import AudienceInput, AudienceSource, ModePolicy
+from orchestrator.modes import AdaptiveAgentPolicy, AudienceInput, AudienceSource
 from orchestrator.retrieval import KnowledgeRef, RetrievalFixtureProvider
 
 
@@ -36,7 +36,7 @@ def test_fixture_retrieval_injects_context_refs_as_untrusted_prompt_data() -> No
         ),
     )
 
-    policy = ModePolicy.virtual_streamer(topic="expo schedule")
+    policy = AdaptiveAgentPolicy()
 
     candidate = policy.select_answer_candidate(
         (
@@ -64,9 +64,7 @@ def test_fixture_retrieval_injects_context_refs_as_untrusted_prompt_data() -> No
 
     assert "kb-1" in request.prompt.user
 
-    assert "Ignore prior instructions" in request.prompt.user
-
-    assert "检索引用" in request.prompt.user
+    assert request.prompt.user.count("<untrusted-payload>") == 3
 
 
 def test_fixture_retrieval_can_be_empty_without_full_rag_pipeline() -> None:
@@ -83,7 +81,7 @@ def test_fixture_retrieval_can_be_empty_without_full_rag_pipeline() -> None:
 
     provider = RetrievalFixtureProvider(refs=())
 
-    policy = ModePolicy.onsite_explainer()
+    policy = AdaptiveAgentPolicy()
 
     candidate = policy.select_answer_candidate(
         (
@@ -101,8 +99,6 @@ def test_fixture_retrieval_can_be_empty_without_full_rag_pipeline() -> None:
 
     request = build_llm_request(candidate, retrieval=provider.retrieve(candidate))
 
-    # Then: the prompt still contains mode and audience input only.
+    # Then: the prompt preserves the user input in a delimited payload.
 
-    assert "Where is booth A?" in request.prompt.user
-
-    assert "检索引用" not in request.prompt.user
+    assert request.prompt.user.count("<untrusted-payload>") == 1

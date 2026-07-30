@@ -44,7 +44,7 @@ def test_chinese_demo_docs_cover_user_and_developer_surfaces() -> None:
     docs = DOC.read_text(encoding="utf-8")
 
     required_terms = (
-        "讲解模式 Demo",
+        "讲稿演示 Demo",
         "快速开始",
         "讲稿格式",
         "通信协议",

@@ -5,7 +5,7 @@
 """
 
 from orchestrator.llm import MockLLMAdapter
-from orchestrator.modes import ModePolicy
+from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
 from orchestrator.pipeline_contracts import (
     ASRAudienceEvent,
@@ -31,7 +31,7 @@ def test_comment_turn_emits_media_stream_and_frontend_cues_after_synthesis() -> 
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
-            mode_policy=ModePolicy.virtual_streamer(topic="bitnet"),
+            mode_policy=AdaptiveAgentPolicy(),
             llm=MockLLMAdapter(answer_chunks=("Hello ", "Alice")),
             retrieval=RetrievalFixtureProvider(refs=()),
         ),
@@ -118,7 +118,7 @@ def test_mock_synthesis_emits_rtp_relative_frontend_cues() -> None:
 
     pipeline = OrchestratorTurnPipeline(
         adapters=PipelineAdapters(
-            mode_policy=ModePolicy.onsite_explainer(),
+            mode_policy=AdaptiveAgentPolicy(),
             llm=MockLLMAdapter(answer_chunks=("Hello Alice",)),
             retrieval=RetrievalFixtureProvider(refs=()),
         ),

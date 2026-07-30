@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from orchestrator.llm import MockLLMAdapter
 from orchestrator.media_adapters import SynthesizedAudio
-from orchestrator.modes import ModePolicy
+from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
 from orchestrator.pipeline_contracts import ASRAudienceEvent, PipelineConfig
@@ -473,7 +473,7 @@ def _bridge(asr: _DelayedAsr) -> OnsiteExplainerBridge:
         tts=_Tts(),
         pipeline_factory=lambda: OrchestratorTurnPipeline(
             adapters=PipelineAdapters(
-                mode_policy=ModePolicy.onsite_explainer(),
+                mode_policy=AdaptiveAgentPolicy(),
                 llm=MockLLMAdapter(("onsite answer",)),
                 retrieval=RetrievalFixtureProvider(()),
             ),

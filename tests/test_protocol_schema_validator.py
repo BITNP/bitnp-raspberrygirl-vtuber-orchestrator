@@ -58,6 +58,37 @@ def test_protocol_validator_uses_orchestrator_owned_schema_paths(
     assert "protocol schema fixtures passed" in result.stdout
 
 
+def test_canonical_protocol_mode_fields_are_not_required_or_fixture_data() -> None:
+    # Given: the canonical event schema and valid protocol fixture.
+
+    schema = parse_json_value(
+        (ROOT / "schemas/protocol/event-data.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    events = _valid_events()
+
+    # When: the mode-bearing event definitions and fixture records are inspected.
+
+    # Then: runtime mode is absent from canonical protocol data.
+
+    assert isinstance(schema, dict)
+    event_types = schema["event_types"]
+    assert isinstance(event_types, dict)
+    for event_type in ("llm.request", "session.created"):
+        definition = event_types[event_type]
+        assert isinstance(definition, dict)
+        required = definition["required"]
+        assert isinstance(required, list)
+        assert "mode" not in required
+
+    for event in events:
+        assert isinstance(event, dict)
+        data = event["data"]
+        assert isinstance(data, dict)
+        assert "mode" not in data
+
+
 def test_protocol_validator_rejects_invalid_local_cue_and_legacy_event(
     tmp_path: Path,
 ) -> None:

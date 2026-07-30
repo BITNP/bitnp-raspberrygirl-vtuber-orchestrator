@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
-from orchestrator.modes import AudienceInput, AudienceSource, ModePolicy
+from orchestrator.modes import AdaptiveAgentPolicy, AudienceInput, AudienceSource
 
 COMMENT_FIXTURE = (
     Path(__file__).resolve().parent / "fixtures" / "bilibili_comments.jsonl"
@@ -64,7 +64,7 @@ def test_orchestrator_contract_accepts_replay_comment_as_turn_candidate() -> Non
         received_at_ms=_timestamp_ms(fixture_comment.timestamp),
     )
 
-    candidate = ModePolicy.virtual_streamer(topic="bitnet").select_answer_candidate(
+    candidate = AdaptiveAgentPolicy().select_answer_candidate(
         (audience_input,),
     )
 
@@ -84,7 +84,6 @@ def test_orchestrator_contract_accepts_replay_comment_as_turn_candidate() -> Non
 
     assert candidate.input == audience_input
 
-    assert candidate.reason == "virtual_streamer_comment_priority"
 
 
 def _timestamp_ms(raw_timestamp: str) -> int:
