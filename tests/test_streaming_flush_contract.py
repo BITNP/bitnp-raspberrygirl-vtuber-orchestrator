@@ -1,3 +1,9 @@
+"""模块契约说明.
+
+职责: 为测试场景提供断言、夹具和回归用例。
+契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
+"""
+
 from __future__ import annotations
 
 import json
@@ -25,6 +31,15 @@ from orchestrator.transport_control import (
 
 
 def _flush_envelope(*, session_id: str = "session-001", epoch: int = 3) -> str:
+    """函数契约说明.
+
+    功能: 执行 _flush_envelope 的同步逻辑,并协调
+    dumps。
+    参数: session_id: str。 可省略。 epoch:
+    int。 可省略。
+    契约: 同步调用。 返回 `str`。
+    """
+
     return json.dumps(
         {
             "schema_version": "1.0.0",
@@ -49,10 +64,22 @@ def _flush_envelope(*, session_id: str = "session-001", epoch: int = 3) -> str:
 
 def test_flush_envelope_parses_every_epoch_correlated_identity() -> None:
     # Given: a canonical generated-media flush envelope.
+
     # When: the WSS boundary parses it.
+
+    """函数契约说明.
+
+    功能: 验证 flush envelope parses every
+    epoch correlated identity
+    的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
     flush = parse_control_event(_flush_envelope())
 
     # Then: all replacement-admission correlation identities survive parsing.
+
     assert flush == StreamFlush(
         stream=StreamKey(session_id="session-001", stream_id="stream-001"),
         turn_id=TurnId("turn-001"),
@@ -64,8 +91,11 @@ def test_flush_envelope_parses_every_epoch_correlated_identity() -> None:
             trace_id="trace-001", session_id="session-001", seq=1
         ),
     )
+
     correlation = flush.correlation
+
     assert correlation is not None
+
     assert (
         correlation.trace_id,
         correlation.session_id,
@@ -75,14 +105,28 @@ def test_flush_envelope_parses_every_epoch_correlated_identity() -> None:
 
 def test_flush_acknowledgement_parses_every_envelope_and_command_correlation() -> None:
     # Given: a Sound acknowledgement preserving a generated-media flush identity.
-    acknowledgement_envelope = _flush_envelope().replace(
-        '"media.stream.flush"', '"media.stream.flush.ack"'
-    ).replace('"orchestrator"', '"sound"')
+
+    """函数契约说明.
+
+    功能: 验证 flush acknowledgement parses
+    every envelope and command
+    correlation 的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
+    acknowledgement_envelope = (
+        _flush_envelope()
+        .replace('"media.stream.flush"', '"media.stream.flush.ack"')
+        .replace('"orchestrator"', '"sound"')
+    )
 
     # When: the WSS boundary parses the acknowledgement.
+
     acknowledgement = parse_control_event(acknowledgement_envelope)
 
     # Then: envelope and replacement identities remain exactly joinable.
+
     assert acknowledgement == FlushAcknowledgement(
         stream=StreamKey(session_id="session-001", stream_id="stream-001"),
         turn_id=TurnId("turn-001"),
@@ -94,8 +138,11 @@ def test_flush_acknowledgement_parses_every_envelope_and_command_correlation() -
             trace_id="trace-001", session_id="session-001", seq=1
         ),
     )
+
     correlation = acknowledgement.correlation
+
     assert correlation is not None
+
     assert (
         correlation.trace_id,
         correlation.session_id,
@@ -105,33 +152,82 @@ def test_flush_acknowledgement_parses_every_envelope_and_command_correlation() -
 
 def test_flush_envelope_rejects_missing_epoch() -> None:
     # Given: a flush missing its cancellation epoch.
+
+    """函数契约说明.
+
+    功能: 验证 flush envelope rejects
+    missing epoch 的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
     envelope = _flush_envelope().replace('"cancellation_epoch": 3, ', "")
 
     # When: the boundary parses the malformed event.
+
     with pytest.raises(ControlEnvelopeError) as error:
         _ = parse_control_event(envelope)
 
     # Then: uncorrelated flush cannot reach Sound.
+
     assert error.value.field_name == "data.cancellation_epoch"
 
 
 @dataclass
 class _FakeClock:
+    """类契约说明.
+
+    职责: 保存 _FakeClock
+    不可变数据结构,用类型标注表达字段契约。
+    契约: 字段: now_ms。 方法: advance。
+    """
+
     now_ms: int = 0
 
     def advance(self, milliseconds: int) -> None:
+        """函数契约说明.
+
+        功能: 执行 advance 的同步逻辑,并维持签名契约。
+        参数: self 表示当前实例。 milliseconds:
+        int。 必填。
+        契约: 同步调用。 返回 `None`。
+        """
+
         self.now_ms += milliseconds
 
 
 @dataclass
 class _RecordingFlushSender:
+    """类契约说明.
+
+    职责: 保存 _RecordingFlushSender
+    不可变数据结构,用类型标注表达字段契约。
+    契约: 字段: sent。 方法: send_flush。
+    """
+
     sent: list[StreamFlush] = field(default_factory=list)
 
     def send_flush(self, flush: StreamFlush) -> None:
+        """函数契约说明.
+
+        功能: 发送协议消息或媒体数据。
+        参数: self 表示当前实例。 flush:
+        StreamFlush。 必填。
+        契约: 同步调用。 返回 `None`。
+        """
+
         self.sent.append(flush)
 
 
 def _flush() -> StreamFlush:
+    """函数契约说明.
+
+    功能: 执行 _flush 的同步逻辑,并协调 StreamFlush,
+    StreamKey, TurnId, SegmentId。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `StreamFlush`。
+    """
+
     return StreamFlush(
         stream=StreamKey(session_id="session-001", stream_id="stream-001"),
         turn_id=TurnId("turn-001"),
@@ -144,32 +240,67 @@ def _flush() -> StreamFlush:
 
 def test_replacement_admission_retries_once_then_accepts_matching_ack() -> None:
     # Given: a flush request whose Sound acknowledgement is delayed past its retry.
+
+    """函数契约说明.
+
+    功能: 验证 replacement admission retries
+    once then accepts matching ack
+    的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
     clock = _FakeClock()
+
     sender = _RecordingFlushSender()
+
     admission = FlushAdmission(clock=clock, sender=sender)
+
     flush = _flush()
 
     # When: the fake clock reaches 250ms and Sound returns the matching acknowledgement.
+
     admission.begin(flush)
+
     clock.advance(250)
+
     admission.advance()
+
     _ = admission.acknowledge(FlushAcknowledgement.from_flush(flush))
 
     # Then: exactly one retry precedes replacement admission.
+
     assert sender.sent == [flush, flush]
+
     assert admission.admitted(flush) is True
+
     assert admission.failures == []
 
 
 def test_replacement_admission_rejects_invalid_ack_and_fake_clock_timeout() -> None:
     # Given: a pending flush and an acknowledgement for a different session.
+
+    """函数契约说明.
+
+    功能: 验证 replacement admission rejects
+    invalid ack and fake clock timeout
+    的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
     clock = _FakeClock()
+
     sender = _RecordingFlushSender()
+
     admission = FlushAdmission(clock=clock, sender=sender)
+
     flush = _flush()
+
     admission.begin(flush)
 
     # When: the invalid acknowledgement arrives and the fake clock reaches 750ms.
+
     _ = admission.acknowledge(
         FlushAcknowledgement.from_flush(
             StreamFlush(
@@ -182,11 +313,15 @@ def test_replacement_admission_rejects_invalid_ack_and_fake_clock_timeout() -> N
             )
         )
     )
+
     clock.advance(750)
+
     admission.advance()
 
     # Then: replacement remains blocked and reports the typed invalid-ack failure.
+
     assert admission.admitted(flush) is False
+
     assert admission.failures == [
         FlushFailure(flush=flush, reason="invalid_ack"),
         FlushFailure(flush=flush, reason="timeout"),
@@ -194,10 +329,23 @@ def test_replacement_admission_rejects_invalid_ack_and_fake_clock_timeout() -> N
 
 
 def test_replacement_admission_requires_the_exact_acknowledged_flush_identity() -> None:
+    """函数契约说明.
+
+    功能: 验证 replacement admission
+    requires the exact acknowledged
+    flush identity 的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
     clock = _FakeClock()
+
     sender = _RecordingFlushSender()
+
     admission = FlushAdmission(clock=clock, sender=sender)
+
     acknowledged = _flush()
+
     replacement = StreamFlush(
         stream=acknowledged.stream,
         turn_id=acknowledged.turn_id,
@@ -208,7 +356,9 @@ def test_replacement_admission_requires_the_exact_acknowledged_flush_identity() 
     )
 
     admission.begin(acknowledged)
+
     assert admission.acknowledge(FlushAcknowledgement.from_flush(acknowledged)) is True
 
     assert admission.admitted(acknowledged) is True
+
     assert admission.admitted(replacement) is False

@@ -1,4 +1,9 @@
-"""Production composition for one scheduler-owned live session."""
+"""模块契约说明.
+
+职责: 提供 orchestrator.scheduler_runtime
+模块的领域模型、边界函数和运行时协作逻辑。
+契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
+"""
 
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -79,42 +84,81 @@ from orchestrator.task_registry import (
 
 
 def _monotonic_ms() -> int:
+    """函数契约说明.
+
+    功能: 执行 _monotonic_ms 的同步逻辑,并协调
+    monotonic_ns。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `int`。
+    """
     return monotonic_ns() // 1_000_000
 
 
 @dataclass(slots=True)
 class _RuntimeJournal:
-    """Mutable append-only records owned exclusively by the session runtime."""
+    """类契约说明.
+
+    职责: 保存 _RuntimeJournal
+    不可变数据结构,用类型标注表达字段契约。
+    契约: 字段:
+    dispatches、task_commits、rejections。
+    """
 
     dispatches: list[RuntimeDispatch] = field(default_factory=list)
+
     task_commits: list[TaskResult] = field(default_factory=list)
+
     rejections: list[RuntimeRejection] = field(default_factory=list)
 
 
 @dataclass(slots=True)
 class SessionRuntime:
-    """Compose canonical session state, task reduction, and effect admission."""
+    """类契约说明.
+
+    职责: 保存 SessionRuntime
+    不可变数据结构,用类型标注表达字段契约。
+    契约: 字段: scheduler、tasks、executor、out
+    put_fence、interaction_ingress、mcp_di
+    spatcher。 方法: create、observables、rec
+    eive_comment、receive_control、receive
+    _session_control、receive_session_con
+    trol_async。
+    """
 
     scheduler: SessionScheduler
+
     tasks: SchedulerTaskFacade
+
     executor: TaskLaneExecutor
+
     output_fence: SchedulerOutputFence
+
     interaction_ingress: SessionInteractionIngress
+
     mcp_dispatcher: ScopedMcpAdapterDispatcher
+
     mode_policy: (
         LecturerModePolicy | VirtualStreamerModePolicy | OnsiteExplainerModePolicy
     )
+
     clock: Callable[[], int] = _monotonic_ms
+
     cancellation_epoch: CancellationEpoch = field(
         default_factory=lambda: CancellationEpoch(0)
     )
+
     _correlations: set[EventCorrelation] = field(default_factory=set)
+
     _mcp_intents: dict[TaskId, McpIntent] = field(default_factory=dict)
+
     _active_mcp_tasks: dict[TaskId, CommandId] = field(default_factory=dict)
+
     _presentation_correlations: dict[CommandId, EventCorrelation] = field(
         default_factory=dict
     )
+
     _journal: _RuntimeJournal = field(default_factory=_RuntimeJournal)
+
     operational_journal: OperationalJournal = field(default_factory=OperationalJournal)
 
     @classmethod
@@ -127,12 +171,26 @@ class SessionRuntime:
         mode: OrchestratorMode,
         clock: Callable[[], int] = _monotonic_ms,
     ) -> "SessionRuntime":
-        """Create every scheduler-owned control component for one live session."""
+        """函数契约说明.
+
+        功能: 执行 create 的同步逻辑,并协调
+        SessionScheduler, create, cls,
+        cancel_pending。
+        参数: cls 表示当前类。 session_id:
+        SessionId。 必填。 turn_id_prefix:
+        str。 必填。 task_config:
+        SchedulerTaskConfig。 必填。 mode:
+        OrchestratorMode。 必填。 clock:
+        Callable[[], int]。 可省略。
+        契约: 同步调用。 返回 `'SessionRuntime'`。
+        """
         scheduler = SessionScheduler(
             session_id=session_id,
             turn_id_prefix=turn_id_prefix,
         )
+
         interaction_ingress = SessionInteractionIngress.create(scheduler)
+
         tasks = SchedulerTaskFacade.create(
             scheduler,
             task_config,
@@ -140,9 +198,17 @@ class SessionRuntime:
         )
 
         def invalidate_pending(reason: str) -> None:
+            """函数契约说明.
+
+            功能: 执行 invalidate_pending
+            的同步逻辑,并协调 cancel_pending。
+            参数: reason: str。 必填。
+            契约: 同步调用。 返回 `None`。
+            """
             _ = tasks.registry.cancel_pending(reason=reason)
 
         interaction_ingress.data.invalidate_pending = invalidate_pending
+
         return cls(
             scheduler=scheduler,
             tasks=tasks,
@@ -159,7 +225,14 @@ class SessionRuntime:
 
     @property
     def observables(self) -> RuntimeObservables:
-        """Expose immutable records without exposing mutable scheduler internals."""
+        """函数契约说明.
+
+        功能: 执行 observables 的同步逻辑,并协调
+        RuntimeObservables, tuple。
+        参数: self 表示当前实例。
+        契约: 同步调用。 返回
+        `RuntimeObservables`。
+        """
         return RuntimeObservables(
             snapshot=self.scheduler.snapshot,
             dispatches=tuple(self._journal.dispatches),
@@ -170,48 +243,82 @@ class SessionRuntime:
         )
 
     def receive_comment(self, proposal: CommentProposal) -> RuntimeOutcome:
-        """Reduce one already-parsed external comment through the live scheduler."""
+        """函数契约说明.
+
+        功能: 执行 receive_comment 的同步逻辑,并协调
+        receive_comment, _reject, add,
+        TurnId。
+        参数: self 表示当前实例。 proposal:
+        CommentProposal。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         correlation = proposal.correlation
+
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
+
         outcome = self.interaction_ingress.receive_comment(
             text=proposal.text,
             correlation=correlation,
         )
+
         match outcome:
             case InteractionAccepted(turn_id=turn_id) if turn_id is not None:
                 self._correlations.add(correlation)
+
                 accepted_turn = TurnId(turn_id)
+
                 self._journal.dispatches.append(
                     RuntimeDispatch(correlation, accepted_turn)
                 )
+
                 return RuntimeOutcome(
                     accepted=True,
                     correlation=correlation,
                     turn_id=accepted_turn,
                 )
+
             case InteractionAccepted():
                 return self._reject(correlation, "missing_turn")
+
             case _:
                 return self._reject(correlation, "scheduler_rejected")
 
     def receive_control(self, raw_message: str) -> bool:
-        """Reduce a correlated canonical presentation acknowledgement from control."""
+        """函数契约说明.
+
+        功能: 执行 receive_control 的同步逻辑,并协调
+        get,
+        receive_presentation_result,
+        parse_json_value, isinstance。
+        参数: self 表示当前实例。 raw_message:
+        str。 必填。
+        契约: 同步调用。 返回 `bool`。
+        """
         try:
             value = parse_json_value(raw_message)
+
         except JsonBoundaryError:
             return False
+
         if (
             not isinstance(value, dict)
             or value.get("event_type") != "presentation.result"
         ):
             return False
+
         data = value.get("data")
+
         trace_id = value.get("trace_id")
+
         session_id = value.get("session_id")
+
         sequence = value.get("seq")
+
         command_id = data.get("command_id") if isinstance(data, dict) else None
+
         succeeded = data.get("succeeded") if isinstance(data, dict) else None
+
         if (
             value.get("source") != "frontend"
             or not isinstance(trace_id, str)
@@ -222,6 +329,7 @@ class SessionRuntime:
             or type(succeeded) is not bool
         ):
             return False
+
         _ = self.receive_presentation_result(
             PresentationResult(CommandId(command_id), succeeded),
             EventCorrelation(
@@ -230,44 +338,89 @@ class SessionRuntime:
                 EventSequence(sequence),
             ),
         )
+
         return True
 
     def receive_session_control(self, control: SessionControl) -> RuntimeOutcome:
-        """Route a typed, authenticated control fact through scheduler authorities."""
+        """函数契约说明.
+
+        功能: 执行 receive_session_control
+        的同步逻辑,并协调 enroll_profile,
+        revoke_profile_consent,
+        receive_action,
+        receive_presentation。
+        参数: self 表示当前实例。 control:
+        SessionControl。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         match control:
             case ProfileEnrollmentControl(
                 enrollment=enrollment, correlation=correlation
             ):
                 return self.enroll_profile(enrollment, correlation)
+
             case ProfileRevocationControl(
                 profile_id=profile_id, correlation=correlation
             ):
                 return self.revoke_profile_consent(profile_id, correlation)
+
             case ActionControl(proposal=proposal, correlation=correlation):
                 return self.receive_action(proposal, correlation)
+
             case PresentationControl(proposal=proposal, correlation=correlation):
                 return self.receive_presentation(proposal, correlation)
+
             case PresentationResultControl(result=result, correlation=correlation):
                 return self.receive_presentation_result(result, correlation)
 
     async def receive_session_control_async(
         self, control: SessionControl
     ) -> RuntimeOutcome:
-        """Route an authenticated presentation command through admitted MCP work."""
+        """函数契约说明.
+
+        功能: 执行
+        receive_session_control_async
+        的异步逻辑,并协调
+        receive_session_control,
+        _schedule_presentation_mcp。
+        参数: self 表示当前实例。 control:
+        SessionControl。 必填。
+        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
+        `RuntimeOutcome`。
+        """
         match control:
             case PresentationControl(proposal=proposal, correlation=correlation):
                 return await self._schedule_presentation_mcp(proposal, correlation)
+
             case _:
                 return self.receive_session_control(control)
 
     async def _schedule_presentation_mcp(
         self, proposal: PresentationCommand, correlation: EventCorrelation
     ) -> RuntimeOutcome:
+        """函数契约说明.
+
+        功能: 执行
+        _schedule_presentation_mcp
+        的异步逻辑,并协调 receive_presentation,
+        TaskRequest, McpIntent,
+        schedule_mcp_task。
+        参数: self 表示当前实例。 proposal:
+        PresentationCommand。 必填。
+        correlation: EventCorrelation。
+        必填。
+        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
+        `RuntimeOutcome`。
+        """
         outcome = self.receive_presentation(proposal, correlation)
+
         turn_id = self.scheduler.snapshot.active_turn_id
+
         if not outcome.accepted or turn_id is None:
             return outcome
+
         deadline_ms = self.clock() + 5_000
+
         request = TaskRequest(
             task_id=TaskId(f"mcp-{proposal.command_id}"),
             session_id=self.scheduler.snapshot.session_id,
@@ -279,6 +432,7 @@ class SessionRuntime:
             kind=TaskKind.INTERACTIVE,
             data_snapshot=self.tasks.data_snapshot,
         )
+
         intent = McpIntent(
             McpDispatchProposal(
                 McpCapability.PRESENTATION_DECK,
@@ -288,13 +442,18 @@ class SessionRuntime:
             proposal,
             deadline_ms,
         )
+
         scheduled = self.schedule_mcp_task(intent, request, correlation)
+
         if not scheduled.accepted:
             self.interaction_ingress.reducer.cancel_presentation(proposal.command_id)
+
             return scheduled
+
         _ = await self.run_mcp_worker_async(
             now_ms=self.clock(), correlation=correlation
         )
+
         return scheduled
 
     def receive_asr_final(
@@ -303,36 +462,63 @@ class SessionRuntime:
         correlation: EventCorrelation,
         gate: AsrSemanticGate,
     ) -> RuntimeOutcome:
-        """Open a turn only after the interactive semantic gate accepts an ASR final."""
+        """函数契约说明.
+
+        功能: 执行 receive_asr_final
+        的同步逻辑,并协调 apply, _reject,
+        evaluate, StartTurn。
+        参数: self 表示当前实例。 event:
+        ASRAudienceEvent。 必填。
+        correlation: EventCorrelation。
+        必填。 gate: AsrSemanticGate。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
+
         if gate.evaluate(event.text) is AsrGateDecision.DISCARD:
             return self._reject(correlation, "asr_gate_discarded")
+
         transition = self.scheduler.apply(
             StartTurn(
                 expected_revision=self.scheduler.snapshot.revision,
                 event=SchedulerEvent(event_type="asr.final", correlation=correlation),
             )
         )
+
         match transition:
             case TransitionAccepted(accepted_event=accepted_event):
                 self._correlations.add(correlation)
+
                 self._journal.dispatches.append(
                     RuntimeDispatch(correlation, accepted_event.turn_id)
                 )
+
                 return RuntimeOutcome(
                     accepted=True,
                     correlation=correlation,
                     turn_id=accepted_event.turn_id,
                 )
+
             case _:
                 return self._reject(correlation, "scheduler_rejected")
 
     def enroll_profile(
         self, enrollment: ProfileEnrollment, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """Enroll an explicitly consented profile through session-owned data state."""
+        """函数契约说明.
+
+        功能: 执行 enroll_profile 的同步逻辑,并协调
+        enroll_profile,
+        _interaction_outcome。
+        参数: self 表示当前实例。 enrollment:
+        ProfileEnrollment。 必填。
+        correlation: EventCorrelation。
+        必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         _ = self.interaction_ingress.data.enroll_profile(enrollment)
+
         return self._interaction_outcome(
             correlation, "profile_enrolled", accepted=True, task_id=None
         )
@@ -340,8 +526,19 @@ class SessionRuntime:
     def revoke_profile_consent(
         self, profile_id: VoiceProfileId, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """Revoke consent and invalidate pending work through one authority."""
+        """函数契约说明.
+
+        功能: 执行 revoke_profile_consent
+        的同步逻辑,并协调
+        revoke_profile_consent,
+        _interaction_outcome。
+        参数: self 表示当前实例。 profile_id:
+        VoiceProfileId。 必填。 correlation:
+        EventCorrelation。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         self.interaction_ingress.data.revoke_profile_consent(profile_id)
+
         return self._interaction_outcome(
             correlation, "profile_revoked", accepted=True, task_id=None
         )
@@ -349,7 +546,16 @@ class SessionRuntime:
     def receive_action(
         self, proposal: ActionProposal, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """Journal the reducer-approved or rejected finite action outcome."""
+        """函数契约说明.
+
+        功能: 执行 receive_action 的同步逻辑,并协调
+        _interaction_outcome,
+        isinstance, receive_action。
+        参数: self 表示当前实例。 proposal:
+        ActionProposal。 必填。 correlation:
+        EventCorrelation。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         return self._interaction_outcome(
             correlation,
             "action",
@@ -362,7 +568,18 @@ class SessionRuntime:
     def receive_presentation(
         self, proposal: PresentationCommand, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """Journal the reducer-approved or rejected presentation intent."""
+        """函数契约说明.
+
+        功能: 执行 receive_presentation
+        的同步逻辑,并协调 _interaction_outcome,
+        isinstance,
+        receive_presentation。
+        参数: self 表示当前实例。 proposal:
+        PresentationCommand。 必填。
+        correlation: EventCorrelation。
+        必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         outcome = self._interaction_outcome(
             correlation,
             "presentation_command",
@@ -372,15 +589,31 @@ class SessionRuntime:
             ),
             None,
         )
+
         if outcome.accepted:
             self._presentation_correlations[proposal.command_id] = correlation
+
         return outcome
 
     def receive_presentation_result(
         self, result: PresentationResult, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """Journal a reducer-owned presentation acknowledgement outcome."""
+        """函数契约说明.
+
+        功能: 执行
+        receive_presentation_result
+        的同步逻辑,并协调 get,
+        _interaction_outcome,
+        isinstance,
+        receive_presentation_result。
+        参数: self 表示当前实例。 result:
+        PresentationResult。 必填。
+        correlation: EventCorrelation。
+        必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         expected = self._presentation_correlations.get(result.command_id)
+
         if (
             expected is None
             or expected.trace_id != correlation.trace_id
@@ -390,6 +623,7 @@ class SessionRuntime:
             return self._interaction_outcome(
                 correlation, "presentation_ack", accepted=False, task_id=None
             )
+
         return self._interaction_outcome(
             correlation,
             "presentation_ack",
@@ -406,30 +640,59 @@ class SessionRuntime:
         request: TaskRequest,
         correlation: EventCorrelation,
     ) -> RuntimeOutcome:
-        """Schedule only reducer-approved scoped MCP work through task admission."""
+        """函数契约说明.
+
+        功能: 执行 schedule_mcp_task
+        的同步逻辑,并协调 schedule_task,
+        _record_interaction。
+        参数: self 表示当前实例。 intent:
+        McpIntent。 必填。 request:
+        TaskRequest。 必填。 correlation:
+        EventCorrelation。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         outcome = self.schedule_task(request, correlation)
+
         if outcome.accepted:
             self._mcp_intents[request.task_id] = intent
+
         self._record_interaction(
             correlation, "mcp_task", outcome.accepted, request.task_id
         )
+
         return outcome
 
     def run_mcp_worker(
         self, *, now_ms: int, correlation: EventCorrelation
     ) -> McpDispatchOutcome:
-        """Execute one selected MCP intent without granting adapter state authority."""
+        """函数契约说明.
+
+        功能: 运行流程并协调其依赖步骤。
+        参数: self 表示当前实例。 now_ms: int。
+        必填。 correlation:
+        EventCorrelation。 必填。
+        契约: 同步调用。 返回
+        `McpDispatchOutcome`。
+        """
         request = self.next_task(now_ms=now_ms)
+
         if request is None:
             self._discard_terminal_mcp_intents()
+
             return McpDispatchOutcome(accepted=False)
+
         intent = self._mcp_intents.pop(request.task_id, None)
+
         if intent is None:
             return McpDispatchOutcome(accepted=False)
+
         outcome = self.mcp_dispatcher.dispatch(intent, now_ms=now_ms)
+
         if not outcome.accepted:
             self._mcp_intents[request.task_id] = intent
+
             return outcome
+
         _ = self.reduce_task(
             TaskResult(
                 request.task_id,
@@ -440,30 +703,50 @@ class SessionRuntime:
             ),
             correlation,
         )
+
         return outcome
 
     async def run_mcp_worker_async(
         self, *, now_ms: int, correlation: EventCorrelation
     ) -> McpDispatchOutcome:
-        """Run one admitted deck task with an active cancellation handle."""
+        """函数契约说明.
+
+        功能: 运行流程并协调其依赖步骤。
+        参数: self 表示当前实例。 now_ms: int。
+        必填。 correlation:
+        EventCorrelation。 必填。
+        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
+        `McpDispatchOutcome`。
+        """
         request = self.next_task(now_ms=now_ms)
+
         if request is None:
             self._discard_terminal_mcp_intents()
+
             return McpDispatchOutcome(accepted=False)
+
         intent = self._mcp_intents.pop(request.task_id, None)
+
         if intent is None:
             return McpDispatchOutcome(accepted=False)
+
         self._active_mcp_tasks[request.task_id] = intent.command.command_id
+
         try:
             outcome = await self.mcp_dispatcher.dispatch_async(intent, now_ms=now_ms)
+
         finally:
             _ = self._active_mcp_tasks.pop(request.task_id, None)
+
         self._record_interaction(
             correlation, "mcp_dispatch", outcome.accepted, request.task_id
         )
+
         if not outcome.accepted:
             self._mcp_intents[request.task_id] = intent
+
             return outcome
+
         _ = self.reduce_task(
             TaskResult(
                 request.task_id,
@@ -474,6 +757,7 @@ class SessionRuntime:
             ),
             correlation,
         )
+
         return outcome
 
     def reconcile_mcp_worker(
@@ -483,24 +767,46 @@ class SessionRuntime:
         now_ms: int,
         correlation: EventCorrelation,
     ) -> McpDispatchOutcome:
-        """Resolve one scheduler-retained ambiguous deck invocation."""
+        """函数契约说明.
+
+        功能: 执行 reconcile_mcp_worker
+        的同步逻辑,并协调 get, reconcile, task,
+        pop。
+        参数: self 表示当前实例。 task_id:
+        TaskId。 必填。 now_ms: int。 必填。
+        correlation: EventCorrelation。
+        必填。
+        契约: 同步调用。 返回
+        `McpDispatchOutcome`。
+        """
         intent = self._mcp_intents.get(task_id)
+
         if intent is None:
             return McpDispatchOutcome(accepted=False)
+
         if now_ms > intent.deadline_ms:
             _ = self.tasks.registry.timeout(task_id)
+
             _ = self._mcp_intents.pop(task_id)
+
             _ = self.mcp_dispatcher.reconcile(intent.command.command_id, now_ms=now_ms)
+
             return McpDispatchOutcome(accepted=False)
+
         outcome = self.mcp_dispatcher.reconcile(
             intent.command.command_id, now_ms=now_ms
         )
+
         if not outcome.accepted:
             return outcome
+
         request = self.tasks.registry.task(task_id)
+
         if request is None:
             return McpDispatchOutcome(accepted=False)
+
         _ = self._mcp_intents.pop(task_id)
+
         _ = self.reduce_task(
             TaskResult(
                 task_id,
@@ -511,24 +817,41 @@ class SessionRuntime:
             ),
             correlation,
         )
+
         return outcome
 
     def cancel_task(
         self, task_id: TaskId, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """Cancel scheduler-authorized work without exposing registry mutation."""
+        """函数契约说明.
+
+        功能: 执行 cancel_task 的同步逻辑,并协调
+        cancel, _interaction_outcome,
+        pop, get。
+        参数: self 表示当前实例。 task_id:
+        TaskId。 必填。 correlation:
+        EventCorrelation。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         cancelled = self.tasks.registry.cancel(task_id, reason="cancelled")
+
         if cancelled is not None:
             intent = self._mcp_intents.pop(task_id, None)
+
             if intent is not None:
                 _ = self.mcp_dispatcher.cancel(intent.command.command_id)
+
                 self.interaction_ingress.reducer.cancel_presentation(
                     intent.command.command_id
                 )
+
             active_command = self._active_mcp_tasks.get(task_id)
+
             if active_command is not None:
                 _ = self.mcp_dispatcher.cancel(active_command)
+
                 self.interaction_ingress.reducer.cancel_presentation(active_command)
+
         return self._interaction_outcome(
             correlation,
             "task_cancelled",
@@ -537,17 +860,37 @@ class SessionRuntime:
         )
 
     def _discard_terminal_mcp_intents(self) -> None:
+        """函数契约说明.
+
+        功能: 执行
+        _discard_terminal_mcp_intents
+        的同步逻辑,并协调 tuple, task, pop。
+        参数: self 表示当前实例。
+        契约: 同步调用。 返回 `None`。
+        """
         for task_id in tuple(self._mcp_intents):
             record = self.tasks.registry.task(task_id)
+
             if record is None or record.state is not TaskState.PENDING:
                 _ = self._mcp_intents.pop(task_id)
 
     def schedule_task(
         self, request: TaskRequest, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """Register typed work only through the scheduler-owned task facade."""
+        """函数契约说明.
+
+        功能: 执行 schedule_task 的同步逻辑,并协调
+        _with_current_data_snapshot,
+        schedule, enqueue, append。
+        参数: self 表示当前实例。 request:
+        TaskRequest。 必填。 correlation:
+        EventCorrelation。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         task_request = _with_current_data_snapshot(request, self.tasks.data_snapshot)
+
         admission = self.tasks.schedule(task_request)
+
         match admission:
             case TaskRegistrationAccepted() if self.executor.enqueue(task_request):
                 self.operational_journal.append(
@@ -561,10 +904,14 @@ class SessionRuntime:
                         outcome="accepted",
                     )
                 )
+
                 return RuntimeOutcome(accepted=True, correlation=correlation)
+
             case TaskRegistrationAccepted():
                 _ = self.tasks.registry.withdraw(task_request.task_id)
+
                 return self._reject(correlation, "task_queue_full")
+
             case _:
                 self.operational_journal.append(
                     OperationalRecord(
@@ -577,32 +924,65 @@ class SessionRuntime:
                         outcome="rejected",
                     )
                 )
+
                 return self._reject(correlation, "task_rejected")
 
     def next_task(self, *, now_ms: int) -> TaskRequest | None:
-        """Select one bounded task in lane priority order for a worker boundary."""
+        """函数契约说明.
+
+        功能: 执行 next_task 的同步逻辑,并协调 next。
+        参数: self 表示当前实例。 now_ms: int。
+        必填。
+        契约: 同步调用。 返回 `TaskRequest |
+        None`。
+        """
         return self.executor.next(now_ms=now_ms)
 
     def reduce_task(
         self, result: TaskResult, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        """Admit worker completion through the existing TaskResultReducer facade."""
+        """函数契约说明.
+
+        功能: 执行 reduce_task 的同步逻辑,并协调
+        reduce, clock, append,
+        RuntimeOutcome。
+        参数: self 表示当前实例。 result:
+        TaskResult。 必填。 correlation:
+        EventCorrelation。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         outcome = self.tasks.reduce(result, now_ms=self.clock())
+
         match outcome:
             case TaskResultAccepted():
                 self._journal.task_commits.append(result)
+
                 self.operational_journal.append(
                     _task_result_record(result, correlation, "accepted")
                 )
+
                 return RuntimeOutcome(accepted=True, correlation=correlation)
+
             case _:
                 self.operational_journal.append(
                     _task_result_record(result, correlation, "rejected")
                 )
+
                 return self._reject(correlation, "task_result_rejected")
 
     def _reject(self, correlation: EventCorrelation, reason: str) -> RuntimeOutcome:
+        """函数契约说明.
+
+        功能: 执行 _reject 的同步逻辑,并协调 append,
+        RuntimeOutcome,
+        RuntimeRejection。
+        参数: self 表示当前实例。 correlation:
+        EventCorrelation。 必填。 reason:
+        str。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         self._journal.rejections.append(RuntimeRejection(correlation, reason))
+
         return RuntimeOutcome(accepted=False, correlation=correlation)
 
     def _interaction_outcome(
@@ -612,9 +992,22 @@ class SessionRuntime:
         accepted: bool,
         task_id: TaskId | None,
     ) -> RuntimeOutcome:
+        """函数契约说明.
+
+        功能: 执行 _interaction_outcome
+        的同步逻辑,并协调 _record_interaction,
+        _reject, RuntimeOutcome。
+        参数: self 表示当前实例。 correlation:
+        EventCorrelation。 必填。 stage:
+        str。 必填。 accepted: bool。 必填。
+        task_id: TaskId | None。 必填。
+        契约: 同步调用。 返回 `RuntimeOutcome`。
+        """
         self._record_interaction(correlation, stage, accepted, task_id)
+
         if accepted:
             return RuntimeOutcome(accepted=True, correlation=correlation)
+
         return self._reject(correlation, stage)
 
     def _record_interaction(
@@ -624,6 +1017,18 @@ class SessionRuntime:
         accepted: bool,
         task_id: TaskId | None,
     ) -> None:
+        """函数契约说明.
+
+        功能: 执行 _record_interaction
+        的同步逻辑,并协调 append,
+        OperationalRecord, str,
+        _active_turn_id。
+        参数: self 表示当前实例。 correlation:
+        EventCorrelation。 必填。 stage:
+        str。 必填。 accepted: bool。 必填。
+        task_id: TaskId | None。 必填。
+        契约: 同步调用。 返回 `None`。
+        """
         self.operational_journal.append(
             OperationalRecord(
                 stage=stage,
@@ -640,6 +1045,15 @@ class SessionRuntime:
 def _task_result_record(
     result: TaskResult, correlation: EventCorrelation, outcome: str
 ) -> OperationalRecord:
+    """函数契约说明.
+
+    功能: 执行 _task_result_record 的同步逻辑,并协调
+    OperationalRecord, str。
+    参数: result: TaskResult。 必填。
+    correlation: EventCorrelation。 必填。
+    outcome: str。 必填。
+    契约: 同步调用。 返回 `OperationalRecord`。
+    """
     return OperationalRecord(
         stage="task_result",
         trace_id=str(correlation.trace_id),
@@ -652,16 +1066,34 @@ def _task_result_record(
 
 
 def _active_turn_id(snapshot: SessionSnapshot) -> str | None:
+    """函数契约说明.
+
+    功能: 执行 _active_turn_id 的同步逻辑,并协调
+    str。
+    参数: snapshot: SessionSnapshot。 必填。
+    契约: 同步调用。 返回 `str | None`。
+    """
     active_turn_id = snapshot.active_turn_id
+
     if active_turn_id is None:
         return None
+
     return str(active_turn_id)
 
 
 def _mode_policy(
     mode: OrchestratorMode,
 ) -> LecturerModePolicy | VirtualStreamerModePolicy | OnsiteExplainerModePolicy:
-    """Build the selected production mode policy without a second state machine."""
+    """函数契约说明.
+
+    功能: 执行 _mode_policy 的同步逻辑,并协调
+    lecturer, virtual_streamer,
+    onsite_explainer, LecturerState。
+    参数: mode: OrchestratorMode。 必填。
+    契约: 同步调用。 返回 `LecturerModePolicy |
+    VirtualStreamerModePolicy |
+    OnsiteExplainerModePolicy`。
+    """
     match mode:
         case OrchestratorMode.LECTURER:
             return ModePolicy.lecturer(
@@ -672,8 +1104,10 @@ def _mode_policy(
                     qa_window=None,
                 )
             )
+
         case OrchestratorMode.VIRTUAL_STREAMER:
             return ModePolicy.virtual_streamer(topic="")
+
         case OrchestratorMode.ONSITE_EXPLAINER:
             return ModePolicy.onsite_explainer()
 
@@ -682,6 +1116,16 @@ def _with_current_data_snapshot(
     request: TaskRequest,
     data_snapshot: TaskStateSnapshot,
 ) -> TaskRequest:
+    """函数契约说明.
+
+    功能: 执行 _with_current_data_snapshot
+    的同步逻辑,并协调 initial, replace。
+    参数: request: TaskRequest。 必填。
+    data_snapshot: TaskStateSnapshot。
+    必填。
+    契约: 同步调用。 返回 `TaskRequest`。
+    """
     if request.data_snapshot == TaskStateSnapshot.initial():
         return replace(request, data_snapshot=data_snapshot)
+
     return request

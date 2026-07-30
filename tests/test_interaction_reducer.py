@@ -1,3 +1,9 @@
+"""模块契约说明.
+
+职责: 为测试场景提供断言、夹具和回归用例。
+契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
+"""
+
 from orchestrator.ids import SessionId, TraceId
 from orchestrator.interactions import (
     ActionCapabilityRegistry,
@@ -21,46 +27,88 @@ from orchestrator.sessions import EventCorrelation, EventSequence, SessionSchedu
 
 def test_comment_ingress_and_action_rejection_enter_reducer() -> None:
     # Given: a session reducer with only its finite avatar action allowlist.
+
+    """函数契约说明.
+
+    功能: 验证 comment ingress and action
+    rejection enter reducer 的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
     reducer = _reducer()
 
     # When: a comment and unsupported LLM-proposed action arrive.
+
     comment = reducer.reduce_comment(_comment())
+
     action = reducer.reduce_action(
         ActionProposal("inject_external_call", CommandId("action-1"))
     )
 
     # Then: the comment opens a correlated turn but the action emits no effect.
+
     assert isinstance(comment, InteractionAccepted)
+
     assert comment.turn_id is not None
+
     assert action == InteractionRejection(InteractionRejectionReason.UNSUPPORTED_ACTION)
 
 
 def test_failed_presentation_result_and_duplicate_command_are_rejected() -> None:
     # Given: a load command accepted by the presentation capability.
+
+    """函数契约说明.
+
+    功能: 验证 failed presentation result
+    and duplicate command are rejected
+    的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
     reducer = _reducer()
+
     command = PresentationCommand(
         PresentationCommandKind.LOAD,
         "deck-1",
         1,
         CommandId("cmd-1"),
     )
+
     accepted = reducer.reduce_presentation(command)
 
     # When: Frontend rejects it and an idempotent replay is proposed.
+
     failed = reducer.reduce_presentation_result(
         PresentationResult(CommandId("cmd-1"), succeeded=False)
     )
+
     duplicate = reducer.reduce_presentation(command)
 
     # Then: failure is recorded without a deck state and replay has no side effect.
+
     assert accepted == InteractionAccepted(command_id=CommandId("cmd-1"))
+
     assert failed == InteractionRejection(InteractionRejectionReason.FRONTEND_REJECTED)
+
     assert duplicate == InteractionRejection(InteractionRejectionReason.DUPLICATE)
 
 
 def test_presentation_commits_matching_deck_version_and_page_only_after_ack() -> None:
     # Given: a reducer with no committed deck state.
+
+    """函数契约说明.
+
+    功能: 验证 presentation commits matching
+    deck version and page only after ack
+    的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
     reducer = _reducer()
+
     load = PresentationCommand(
         PresentationCommandKind.LOAD,
         "deck-1",
@@ -70,10 +118,13 @@ def test_presentation_commits_matching_deck_version_and_page_only_after_ack() ->
     )
 
     # When: an acknowledged load is followed by a same-version navigation.
+
     admitted_load = reducer.reduce_presentation(load)
+
     committed_load = reducer.reduce_presentation_result(
         PresentationResult(CommandId("load-1"), succeeded=True)
     )
+
     navigation = reducer.reduce_presentation(
         PresentationCommand(
             PresentationCommandKind.NAVIGATE,
@@ -83,23 +134,40 @@ def test_presentation_commits_matching_deck_version_and_page_only_after_ack() ->
             deck_version="v1",
         )
     )
+
     committed_navigation = reducer.reduce_presentation_result(
         PresentationResult(CommandId("navigate-2"), succeeded=True)
     )
 
     # Then: reducer state reflects only the correlated acknowledged deck state.
+
     assert admitted_load == InteractionAccepted(command_id=CommandId("load-1"))
+
     assert committed_load == InteractionAccepted(command_id=CommandId("load-1"))
+
     assert navigation == InteractionAccepted(command_id=CommandId("navigate-2"))
+
     assert committed_navigation == InteractionAccepted(
         command_id=CommandId("navigate-2")
     )
+
     assert reducer.presentation_state == ("deck-1", "v1", 2)
 
 
 def test_presentation_rejects_invalid_page_and_wrong_loaded_deck_version() -> None:
     # Given: an acknowledged version-one deck load.
+
+    """函数契约说明.
+
+    功能: 验证 presentation rejects invalid
+    page and wrong loaded deck version
+    的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
     reducer = _reducer()
+
     load = PresentationCommand(
         PresentationCommandKind.LOAD,
         "deck-1",
@@ -107,12 +175,15 @@ def test_presentation_rejects_invalid_page_and_wrong_loaded_deck_version() -> No
         CommandId("load-1"),
         deck_version="v1",
     )
+
     _ = reducer.reduce_presentation(load)
+
     _ = reducer.reduce_presentation_result(
         PresentationResult(load.command_id, succeeded=True)
     )
 
     # When: a zero page and a different deck version are proposed.
+
     invalid_page = reducer.reduce_presentation(
         PresentationCommand(
             PresentationCommandKind.NAVIGATE,
@@ -122,6 +193,7 @@ def test_presentation_rejects_invalid_page_and_wrong_loaded_deck_version() -> No
             deck_version="v1",
         )
     )
+
     wrong_version = reducer.reduce_presentation(
         PresentationCommand(
             PresentationCommandKind.PLAY,
@@ -133,21 +205,36 @@ def test_presentation_rejects_invalid_page_and_wrong_loaded_deck_version() -> No
     )
 
     # Then: neither proposal becomes a pending external intent.
+
     expected = InteractionRejection(
         InteractionRejectionReason.INVALID_PRESENTATION_STATE
     )
+
     assert invalid_page == expected
+
     assert wrong_version == expected
 
 
 def test_mcp_requires_allowlist_and_cancellation_blocks_dispatch() -> None:
     # Given: a reducer with one bounded MCP capability.
+
+    """函数契约说明.
+
+    功能: 验证 mcp requires allowlist and
+    cancellation blocks dispatch
+    的回归场景和可观察结果。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `None`。
+    """
+
     reducer = _reducer()
+
     blocked = McpDispatchProposal(
         McpCapability.KNOWLEDGE_LOOKUP,
         CommandId("mcp-1"),
         cancelled=False,
     )
+
     cancelled = McpDispatchProposal(
         McpCapability.KNOWLEDGE_LOOKUP,
         CommandId("mcp-2"),
@@ -155,17 +242,32 @@ def test_mcp_requires_allowlist_and_cancellation_blocks_dispatch() -> None:
     )
 
     # When: dispatch is attempted with a missing capability or cancellation.
+
     unsupported = reducer.reduce_mcp(blocked)
+
     cancelled_result = reducer.reduce_mcp(cancelled)
 
     # Then: no direct external call is admitted for either proposal.
+
     assert unsupported == McpDispatchRejected(
         McpDispatchRejection.UNSUPPORTED_CAPABILITY
     )
+
     assert cancelled_result == McpDispatchRejected(McpDispatchRejection.CANCELLED)
 
 
 def _reducer() -> SessionInteractionReducer:
+    """函数契约说明.
+
+    功能: 执行 _reducer 的同步逻辑,并协调
+    SessionInteractionReducer,
+    SessionScheduler,
+    ActionCapabilityRegistry, frozenset。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回
+    `SessionInteractionReducer`。
+    """
+
     return SessionInteractionReducer(
         scheduler=SessionScheduler(
             session_id=SessionId("session-1"),
@@ -177,6 +279,15 @@ def _reducer() -> SessionInteractionReducer:
 
 
 def _comment() -> CommentProposal:
+    """函数契约说明.
+
+    功能: 执行 _comment 的同步逻辑,并协调
+    CommentProposal, EventCorrelation,
+    TraceId, SessionId。
+    参数: 无显式业务参数。
+    契约: 同步调用。 返回 `CommentProposal`。
+    """
+
     return CommentProposal(
         text="请解释量化",
         correlation=EventCorrelation(

@@ -1,4 +1,9 @@
-"""Typed session-control parsing at the authenticated transport boundary."""
+"""模块契约说明.
+
+职责: 提供 orchestrator.control_ingress
+模块的领域模型、边界函数和运行时协作逻辑。
+契约: 模块只提供注释所描述的公开入口,不在文档更新中改变运行时行为。
+"""
 
 from __future__ import annotations
 
@@ -23,41 +28,71 @@ from orchestrator.sessions import EventCorrelation, EventSequence
 
 @dataclass(frozen=True, slots=True)
 class ProfileEnrollmentControl:
-    """One explicit profile enrollment request with opaque encrypted material."""
+    """类契约说明.
+
+    职责: 保存 ProfileEnrollmentControl
+    不可变数据结构,用类型标注表达字段契约。
+    契约: 字段: enrollment、correlation。
+    """
 
     enrollment: ProfileEnrollment
+
     correlation: EventCorrelation
 
 
 @dataclass(frozen=True, slots=True)
 class ProfileRevocationControl:
-    """One explicit profile-consent revocation request."""
+    """类契约说明.
+
+    职责: 保存 ProfileRevocationControl
+    不可变数据结构,用类型标注表达字段契约。
+    契约: 字段: profile_id、correlation。
+    """
 
     profile_id: VoiceProfileId
+
     correlation: EventCorrelation
 
 
 @dataclass(frozen=True, slots=True)
 class ActionControl:
-    """One finite action command already separated from raw transport input."""
+    """类契约说明.
+
+    职责: 保存 ActionControl
+    不可变数据结构,用类型标注表达字段契约。
+    契约: 字段: proposal、correlation。
+    """
 
     proposal: ActionProposal
+
     correlation: EventCorrelation
 
 
 @dataclass(frozen=True, slots=True)
 class PresentationControl:
-    """One typed presentation command from the canonical transport envelope."""
+    """类契约说明.
+
+    职责: 保存 PresentationControl
+    不可变数据结构,用类型标注表达字段契约。
+    契约: 字段: proposal、correlation。
+    """
 
     proposal: PresentationCommand
+
     correlation: EventCorrelation
 
 
 @dataclass(frozen=True, slots=True)
 class PresentationResultControl:
-    """One typed Frontend acknowledgement for a pending presentation command."""
+    """类契约说明.
+
+    职责: 保存 PresentationResultControl
+    不可变数据结构,用类型标注表达字段契约。
+    契约: 字段: result、correlation。
+    """
 
     result: PresentationResult
+
     correlation: EventCorrelation
 
 
@@ -73,46 +108,81 @@ type SessionControl = (
 def parse_session_control(  # noqa: C901, PLR0911, PLR0912
     raw_message: str,
 ) -> SessionControl | None:
-    """Parse only additive session control facts from a canonical envelope."""
+    """函数契约说明.
+
+    功能: 从边界输入解析类型化值。
+    参数: raw_message: str。 必填。
+    契约: 同步调用。 返回 `SessionControl |
+    None`。
+    """
     try:
         value = parse_json_value(raw_message)
+
     except JsonBoundaryError:
         return None
+
     if not isinstance(value, dict):
         return None
+
     if not _canonical_envelope(value):
         return None
+
     correlation = _correlation(value)
+
     if correlation is None:
         return None
+
     data = value.get("data")
+
     if not isinstance(data, dict):
         return None
+
     event_type = value.get("event_type")
+
     source = value.get("source")
+
     match event_type, source:
         case "profile.enroll.command", "orchestrator":
             return _profile_enrollment(data, correlation)
+
         case "profile.revoke.command", "orchestrator":
             return _profile_revocation(data, correlation)
+
         case "action.command", "orchestrator":
             return _action(data, correlation)
+
         case "presentation.load.command", "orchestrator":
             return _presentation(PresentationCommandKind.LOAD, data, correlation)
+
         case "presentation.play.command", "orchestrator":
             return _presentation(PresentationCommandKind.PLAY, data, correlation)
+
         case "presentation.navigate.command", "orchestrator":
             return _presentation(PresentationCommandKind.NAVIGATE, data, correlation)
+
         case "presentation.result", "frontend":
             return _presentation_result(data, correlation)
+
         case _:
             return None
 
 
 def _correlation(value: dict[str, JsonValue]) -> EventCorrelation | None:
+    """函数契约说明.
+
+    功能: 执行 _correlation 的同步逻辑,并协调 get,
+    EventCorrelation, TraceId,
+    SessionId。
+    参数: value: dict[str, JsonValue]。 必填。
+    契约: 同步调用。 返回 `EventCorrelation |
+    None`。
+    """
     trace_id = value.get("trace_id")
+
     session_id = value.get("session_id")
+
     sequence = value.get("seq")
+
     if (
         not isinstance(trace_id, str)
         or trace_id.strip() == ""
@@ -122,6 +192,7 @@ def _correlation(value: dict[str, JsonValue]) -> EventCorrelation | None:
         or sequence < 0
     ):
         return None
+
     return EventCorrelation(
         TraceId(trace_id), SessionId(session_id), EventSequence(sequence)
     )
@@ -130,10 +201,25 @@ def _correlation(value: dict[str, JsonValue]) -> EventCorrelation | None:
 def _profile_enrollment(
     data: dict[str, JsonValue], correlation: EventCorrelation
 ) -> ProfileEnrollmentControl | None:
+    """函数契约说明.
+
+    功能: 执行 _profile_enrollment 的同步逻辑,并协调
+    _text, get,
+    ProfileEnrollmentControl,
+    ProfileEnrollment。
+    参数: data: dict[str, JsonValue]。 必填。
+    correlation: EventCorrelation。 必填。
+    契约: 同步调用。 返回
+    `ProfileEnrollmentControl | None`。
+    """
     profile_id = _text(data, "profile_id")
+
     preferred_name = _text(data, "preferred_name")
+
     encrypted_template = _text(data, "encrypted_template")
+
     consented = data.get("consented")
+
     if (
         profile_id is None
         or preferred_name is None
@@ -141,6 +227,7 @@ def _profile_enrollment(
         or consented is not True
     ):
         return None
+
     return ProfileEnrollmentControl(
         ProfileEnrollment(
             VoiceProfileId(profile_id),
@@ -155,19 +242,43 @@ def _profile_enrollment(
 def _profile_revocation(
     data: dict[str, JsonValue], correlation: EventCorrelation
 ) -> ProfileRevocationControl | None:
+    """函数契约说明.
+
+    功能: 执行 _profile_revocation 的同步逻辑,并协调
+    _text, ProfileRevocationControl,
+    VoiceProfileId。
+    参数: data: dict[str, JsonValue]。 必填。
+    correlation: EventCorrelation。 必填。
+    契约: 同步调用。 返回
+    `ProfileRevocationControl | None`。
+    """
     profile_id = _text(data, "profile_id")
+
     if profile_id is None:
         return None
+
     return ProfileRevocationControl(VoiceProfileId(profile_id), correlation)
 
 
 def _action(
     data: dict[str, JsonValue], correlation: EventCorrelation
 ) -> ActionControl | None:
+    """函数契约说明.
+
+    功能: 执行 _action 的同步逻辑,并协调 _text,
+    ActionControl, ActionProposal,
+    CommandId。
+    参数: data: dict[str, JsonValue]。 必填。
+    correlation: EventCorrelation。 必填。
+    契约: 同步调用。 返回 `ActionControl | None`。
+    """
     command_id = _text(data, "command_id")
+
     action = _text(data, "action")
+
     if command_id is None or action is None:
         return None
+
     return ActionControl(ActionProposal(action, CommandId(command_id)), correlation)
 
 
@@ -176,12 +287,28 @@ def _presentation(
     data: dict[str, JsonValue],
     correlation: EventCorrelation,
 ) -> PresentationControl | None:
+    """函数契约说明.
+
+    功能: 执行 _presentation 的同步逻辑,并协调
+    _text, get, PresentationControl,
+    PresentationCommand。
+    参数: kind: PresentationCommandKind。
+    必填。 data: dict[str, JsonValue]。 必填。
+    correlation: EventCorrelation。 必填。
+    契约: 同步调用。 返回 `PresentationControl |
+    None`。
+    """
     command_id = _text(data, "command_id")
+
     deck_id = _text(data, "deck_id")
+
     deck_version = _text(data, "deck_version")
+
     page = data.get("page")
+
     if command_id is None or deck_id is None or type(page) is not int:
         return None
+
     return PresentationControl(
         PresentationCommand(
             kind,
@@ -197,23 +324,55 @@ def _presentation(
 def _presentation_result(
     data: dict[str, JsonValue], correlation: EventCorrelation
 ) -> PresentationResultControl | None:
+    """函数契约说明.
+
+    功能: 执行 _presentation_result
+    的同步逻辑,并协调 _text, get,
+    PresentationResultControl,
+    PresentationResult。
+    参数: data: dict[str, JsonValue]。 必填。
+    correlation: EventCorrelation。 必填。
+    契约: 同步调用。 返回
+    `PresentationResultControl | None`。
+    """
     command_id = _text(data, "command_id")
+
     succeeded = data.get("succeeded")
+
     if command_id is None or type(succeeded) is not bool:
         return None
+
     return PresentationResultControl(
         PresentationResult(CommandId(command_id), succeeded), correlation
     )
 
 
 def _text(data: dict[str, JsonValue], field_name: str) -> str | None:
+    """函数契约说明.
+
+    功能: 执行 _text 的同步逻辑,并协调 get,
+    isinstance, strip。
+    参数: data: dict[str, JsonValue]。 必填。
+    field_name: str。 必填。
+    契约: 同步调用。 返回 `str | None`。
+    """
     value = data.get(field_name)
+
     if not isinstance(value, str) or value.strip() == "":
         return None
+
     return value
 
 
 def _canonical_envelope(value: dict[str, JsonValue]) -> bool:
+    """函数契约说明.
+
+    功能: 执行 _canonical_envelope 的同步逻辑,并协调
+    difference, isinstance, issubset,
+    strip。
+    参数: value: dict[str, JsonValue]。 必填。
+    契约: 同步调用。 返回 `bool`。
+    """
     required = {
         "schema_version",
         "event_type",
@@ -225,12 +384,18 @@ def _canonical_envelope(value: dict[str, JsonValue]) -> bool:
         "seq",
         "data",
     }
+
     allowed = required | {"turn_id", "segment_id", "traceparent"}
+
     if set(value).difference(allowed) or not required.issubset(value):
         return False
+
     schema_version = value["schema_version"]
+
     event_id = value["event_id"]
+
     event_time = value["time"]
+
     return (
         schema_version in {"1.0.0", "1.1.0"}
         and isinstance(event_id, str)
