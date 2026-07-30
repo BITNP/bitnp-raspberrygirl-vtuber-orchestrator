@@ -26,7 +26,7 @@ class State:
     """类契约说明.
 
     职责: 保存 State 不可变数据结构,用类型标注表达字段契约。
-    契约: 字段: caption、action、scene、mode、se
+    契约: 字段: caption、action、scene、se
     gments、presentation_deck。
     """
 
@@ -35,8 +35,6 @@ class State:
     action: str = "idle"
 
     scene: str = "stage_default"
-
-    mode: str = "virtual_streamer"
 
     segments: frozenset[str] = frozenset()
 
@@ -113,25 +111,7 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
 
     match event_type:
         case "session.created":
-            mode = data.get("mode")
-
-            return (
-                (
-                    State(
-                        state.caption,
-                        state.action,
-                        state.scene,
-                        mode,
-                        state.segments,
-                        state.presentation_deck,
-                        state.presentation_page,
-                        state.presentation_playing,
-                    ),
-                    True,
-                )
-                if isinstance(mode, str) and mode
-                else (state, False)
-            )
+            return state, True
 
         case "vtuber.caption.command":
             text, segment = data.get("text"), event.get("segment_id")
@@ -142,7 +122,6 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
                         text,
                         state.action,
                         state.scene,
-                        state.mode,
                         state.segments | {segment},
                     ),
                     True,
@@ -159,9 +138,7 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
 
             return (
                 (
-                    State(
-                        state.caption, action, state.scene, state.mode, state.segments
-                    ),
+                    State(state.caption, action, state.scene, state.segments),
                     True,
                 )
                 if isinstance(action, str)
@@ -179,7 +156,6 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
                         state.caption,
                         state.action,
                         scene,
-                        state.mode,
                         state.segments,
                         state.presentation_deck,
                         state.presentation_page,
@@ -200,7 +176,6 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
                         state.caption,
                         state.action,
                         state.scene,
-                        state.mode,
                         state.segments,
                         deck_id,
                         page,
@@ -224,7 +199,6 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
                         state.caption,
                         state.action,
                         state.scene,
-                        state.mode,
                         state.segments,
                         state.presentation_deck,
                         page,
@@ -247,7 +221,6 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
                         state.caption,
                         state.action,
                         state.scene,
-                        state.mode,
                         state.segments,
                         state.presentation_deck,
                         page,
