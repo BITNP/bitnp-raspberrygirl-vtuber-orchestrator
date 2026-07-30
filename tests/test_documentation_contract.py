@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from re import finditer
 from typing import Final
 
 ROOT: Final = Path(__file__).resolve().parents[1]
@@ -17,18 +18,8 @@ REPOSITORIES: Final = (
     "bitnp-raspberrygirl-vtuber-frontend",
 )
 
-DOCUMENTS: Final = (
-    "docs/quickstart.en.md",
-    "docs/quickstart.zh-CN.md",
-    "docs/deployment.en.md",
-    "docs/deployment.zh-CN.md",
-    "docs/protocol.en.md",
-    "docs/protocol.zh-CN.md",
-    "docs/architecture.en.md",
-    "docs/architecture.zh-CN.md",
-    "docs/testing.en.md",
-    "docs/testing.zh-CN.md",
-)
+MINIMUM_DOCUMENTS: Final = ("docs/user.zh-CN.md", "docs/developer.zh-CN.md")
+MARKDOWN_LINK_TARGETS: Final = r"\[[^]]+\]\(([^)]+)\)"
 
 
 def test_documentation_tree_and_protocol_ownership_contract() -> None:
@@ -42,34 +33,36 @@ def test_documentation_tree_and_protocol_ownership_contract() -> None:
 
         readme = (repository / "README.md").read_text(encoding="utf-8")
 
-        assert all((repository / document).is_file() for document in DOCUMENTS)
+        assert all((repository / document).is_file() for document in MINIMUM_DOCUMENTS)
 
-        assert "docs/quickstart.en.md" in readme
+        assert "docs/user.zh-CN.md" in readme
 
-        assert "docs/quickstart.zh-CN.md" in readme
+        assert "docs/developer.zh-CN.md" in readme
 
-        protocol = (repository / "docs/protocol.en.md").read_text(encoding="utf-8")
+        assert ".en.md" not in readme
+
+        developer = (repository / "docs/developer.zh-CN.md").read_text(
+            encoding="utf-8"
+        )
 
         if repository == ROOT:
-            testing = (repository / "docs/testing.en.md").read_text(encoding="utf-8")
+            assert "schemas/protocol/envelope.schema.json" in developer
 
-            assert "schemas/protocol/envelope.schema.json" in protocol
+            assert "schemas/protocol/event-data.schema.json" in developer
 
-            assert "schemas/protocol/event-data.schema.json" in protocol
+            assert "scripts/verify_protocol_schema.py" in developer
 
-            assert "scripts/verify_protocol_schema.py" in protocol
+            assert "--sibling-root" in developer
 
-            assert "--sibling-root" in testing
-
-            assert "--frontend-path" in testing
+            assert "--frontend-path" in developer
 
             continue
 
-        assert "ORCHESTRATOR_REPO" in protocol
+        assert "ORCHESTRATOR_REPO" in developer
 
-        assert "schemas/protocol/envelope.schema.json" in protocol
+        assert "schemas/protocol/envelope.schema.json" in developer
 
-        assert "schemas/protocol/event-data.schema.json" in protocol
+        assert "schemas/protocol/event-data.schema.json" in developer
 
         assert not (repository / "schemas").exists()
 
@@ -105,3 +98,28 @@ def test_documentation_tree_and_protocol_ownership_contract() -> None:
         or path.startswith("docs/")
         for path in changed_paths
     )
+
+
+def test_documentation_links_resolve_within_the_workspace() -> None:
+    # Given: the retained Markdown documentation in each sibling repository.
+
+    # When: relative Markdown links are resolved from their source documents.
+
+    for repository_name in REPOSITORIES:
+        repository = WORKSPACE / repository_name
+        documents = (repository / "README.md", *(repository / "docs").glob("*.md"))
+
+        for document in documents:
+            content = document.read_text(encoding="utf-8")
+
+            for match in finditer(MARKDOWN_LINK_TARGETS, content):
+                target = match.group(1)
+                path = target.split("#", maxsplit=1)[0]
+
+                if not path or "://" in path:
+                    continue
+
+                # Then: every retained relative link identifies an existing file.
+                assert (document.parent / path).resolve().is_file(), (
+                    f"broken documentation link in {document}: {target}"
+                )

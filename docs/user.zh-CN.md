@@ -14,47 +14,20 @@ Raspberry Girl 是一个面向公开讲解、虚拟主播和现场产品介绍�
 
 ## 快速开始
 
-开发和测试默认使用 mock LLM provider，不需要凭据、GPU、外部服务、真实音频设备或 Godot。
+开发和测试默认使用 `ORCHESTRATOR_LLM_PROVIDER=mock`，不需要凭据、GPU、外部服务、真实音频设备或 Godot。
 
 ```bash
 cd bitnp-raspberrygirl-vtuber-orchestrator
 uv sync --locked
 uv run pytest
-uv run basedpyright
-uv run ruff check src tests
-python scripts/verify_protocol_schema.py
-python scripts/verify_topology.py --sibling-root ..
-python scripts/verify_vtuber_contract.py --frontend-path ../bitnp-raspberrygirl-vtuber-frontend
 ```
 
-每个 Python 模块也可以单独验证：进入 `bitnp-raspberrygirl-vtuber-mic`、`bitnp-raspberrygirl-vtuber-sound` 或 `bitnp-raspberrygirl-vtuber-comments` 后运行 `uv sync --locked && uv run pytest`。Frontend 使用 Godot 4.6，主场景是 `res://raspberry_girl.tscn`。
+跨模块契约、静态检查和部署说明由[开发者文档](developer.zh-CN.md)统一维护。各模块的本地命令在其自己的用户文档中维护。
 
 ## 使用指南
-
-### 现场语音交互链路
-
-现场语音交互使用 Orchestrator 拥有的音频替换链路：Mic 把 L16 RTP 发给 Orchestrator，Orchestrator 完成 VAD、ASR、LLM 和 vLLM-Omni TTS，再把生成的 L16 RTP 发给 Sound。Frontend 不参与这个音频部署。
-
-启动顺序固定为：
-
-```bash
-uv run orchestrator-transport
-uv run sound-receive
-uv run mic-stream
-```
-
-生产控制面使用 Orchestrator 的 `/control` WSS endpoint，Mic 和 Sound 必须使用同一个 session ID 和 stream ID，并共享可信局域网 token。Mic 与 Sound 不直接通信。
 
 ### 前端形象与演示控制
 
 Orchestrator 向 Frontend 发送有限的动作、表情、场景和演示命令，用同一个智能体覆盖讲解、宣讲、直播和观众互动等场景。LLM 输出只是候选提案，真正执行前会经过 typed command、能力 allowlist、当前状态和前置条件校验。
 
-### 模块入口
-
-- Orchestrator: `uv run orchestrator-transport`
-- Mic: `uv run mic-stream`，本地单帧诊断为 `uv run mic-capture`
-- Sound: `uv run sound-receive`，本地单包诊断为 `uv run sound-play`
-- Comments: `uv run comments-replay`，健康检查为 `uv run comments-health`
-- Frontend: 用 Godot 4.6 打开仓库并运行 `res://raspberry_girl.tscn`
-
-更多模块专属操作请阅读各模块仓库内的用户文档。
+模块专属操作请阅读各模块仓库内的用户文档。

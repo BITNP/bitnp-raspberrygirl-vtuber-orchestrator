@@ -66,4 +66,4 @@ The benchmark report records CER, p95 final latency, stale and duplicate-turn ra
 
 To roll back, change only the protected Orchestrator environment from the streaming ASR model/configuration version to the recorded final-only ASR provider/model/configuration version. Restart Mic, Sound, and Orchestrator in the stop/start ordering above, rerun the benchmark against the same corpus, and retain the before/after reports. Do not route raw Mic RTP to Sound, enable a peer link, or retain streaming shadow logs after the incident window.
 
-For transport and provider details, see [the Orchestrator deployment guide](../docs/deployment.en.md).
+系统架构、协议和验证命令见[Orchestrator 开发者文档](../docs/developer.zh-CN.md)。

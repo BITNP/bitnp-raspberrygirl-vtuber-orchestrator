@@ -73,4 +73,18 @@ python scripts/verify_vtuber_contract.py --frontend-path ../bitnp-raspberrygirl-
 bash scripts/verify_workspace.sh --sibling-root ..
 ```
 
-这些命令验证契约和实现边界；每个服务仍应运行自己的 `uv run pytest`，Frontend 使用 Godot headless smoke test。
+`verify_workspace.sh` 只组合 schema、topology 和 Frontend contract gate，不替代任何仓库的本地测试。各服务的本地命令由其用户文档维护。
+
+## 部署
+
+`orchestrator-transport` 是中心进程，监听认证 WSS 控制连接和 UDP RTP。生产环境使用 `/control` WSS endpoint、`TRUSTED_LAN_TOKEN`、仓库外预配的 TLS 证书及私有 LAN 网络规则。Mic 与 Sound 使用同一个 session ID 和 stream ID，且只连接 Orchestrator。
+
+现场音频链路的启动顺序固定为：
+
+```bash
+uv run orchestrator-transport
+uv run sound-receive
+uv run mic-stream
+```
+
+该链路把 Mic L16 RTP 送入 Orchestrator，经过 ASR、LLM 和 TTS 后将生成的 L16 RTP 交给 Sound。它不会转发原始 Mic RTP，Frontend 不参与该音频部署。systemd 环境文件和主机操作说明见 [部署资产](../deploy/README.md)。
