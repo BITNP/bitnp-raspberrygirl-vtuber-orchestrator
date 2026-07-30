@@ -96,7 +96,9 @@ class OrchestratorTurnPipeline:
         self._queue.append(event)
         return True
 
-    def process_next_turn(self) -> TurnResult | None:
+    def process_next_turn(
+        self, cancellation: CancellationToken | None = None
+    ) -> TurnResult | None:
         """Process one queued input through policy, retrieval, and the LLM."""
         if len(self._queue) == 0:
             return None
@@ -107,12 +109,12 @@ class OrchestratorTurnPipeline:
         self._turn_seq += 1
         turn_id = TurnId(f"{self._turn_id_prefix}-{self._turn_seq:04d}")
         segment_id = SegmentId(f"{self._segment_id_prefix}-{self._turn_seq:04d}")
-        token = CancellationToken()
+        token = CancellationToken() if cancellation is None else cancellation
         text_parts: list[str] = []
         final: LLMFinal | None = None
         request = build_llm_request(
             candidate,
-            context_refs=self._retrieval.retrieve(candidate),
+            retrieval=self._retrieval.retrieve(candidate),
         )
         for llm_event in self._llm.stream(
             request,
