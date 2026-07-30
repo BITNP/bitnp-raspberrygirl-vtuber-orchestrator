@@ -35,6 +35,7 @@ from orchestrator.retrieval import RetrievalFixtureProvider
 from orchestrator.scheduler_reflex import SchedulerOutputFence
 from orchestrator.sessions import SessionScheduler
 from orchestrator.streaming_contracts import (
+    CancellationEpoch,
     FlushAcknowledgement,
     FlushRequestId,
     GeneratedSsrc,
@@ -561,6 +562,71 @@ async def _scheduler_barge_in_proof() -> None:
     assert transport.sent == [
         (old_packet, (SOUND_PEER[0], 5006)),
         (replacement_packet, (SOUND_PEER[0], 5006)),
+    ]
+
+
+def test_generated_rtp_rejects_epoch_41_after_epoch_42_is_active() -> None:
+    asyncio.run(_stale_epoch_gate_proof())
+
+
+async def _stale_epoch_gate_proof() -> None:
+    # Given: a registered generated-audio route whose current cancellation epoch is 42.
+    transport = _Datagrams()
+    hub = RtpHub(transport)
+    hub.register_control(
+        _registration("media.rtp.source.register", "mic", _source()), MIC_PEER[0]
+    )
+    hub.register_control(
+        _registration("media.rtp.sink.register", "sound", _sink()), SOUND_PEER[0]
+    )
+    stream = StreamKey(SESSION_ID, STREAM_ID)
+    correlation = hub.correlation(stream)
+    assert correlation is not None
+    scheduler = SessionScheduler(
+        session_id=SessionId(SESSION_ID), turn_id_prefix="turn-stale-epoch"
+    )
+    fence = SchedulerOutputFence(scheduler)
+    hub.set_output_fence(fence)
+    for epoch in range(41):
+        _ = fence.activate(
+            stream=stream,
+            segment_id=SegmentId(f"segment-{epoch}"),
+            target_generated_ssrc=GeneratedSsrc(0x4242_4242),
+            correlation=correlation,
+        )
+    active = fence.activate(
+        stream=stream,
+        segment_id=SegmentId("segment-41"),
+        target_generated_ssrc=GeneratedSsrc(0x4141_4141),
+        correlation=correlation,
+    )
+    assert active.cancellation_epoch == CancellationEpoch(41)
+    stale_packet = _rtp(0x4141_4141, b"\x10\x20" * 320)
+    active_packet = _rtp(0x4242_4242, b"\x30\x40" * 320)
+
+    await hub.deliver_generated_rtp(stream, active.cancellation_epoch, stale_packet)
+    replacement, flush = fence.interrupt(
+        stream=stream,
+        segment_id=SegmentId("segment-42"),
+        correlation=correlation,
+    )
+
+    # When: a retired packet arrives after a newer generated-audio epoch is active.
+    await hub.deliver_generated_rtp(stream, CancellationEpoch(41), stale_packet)
+    await hub.deliver_generated_rtp(
+        stream, replacement.cancellation_epoch, active_packet
+    )
+
+    assert fence.acknowledge(FlushAcknowledgement.from_flush(flush)) is True
+    await hub.deliver_generated_rtp(stream, CancellationEpoch(41), stale_packet)
+    await hub.deliver_generated_rtp(
+        stream, replacement.cancellation_epoch, active_packet
+    )
+
+    # Then: stale audio remains gated and cannot resume after epoch 42.
+    assert transport.sent == [
+        (stale_packet, (SOUND_PEER[0], 5006)),
+        (active_packet, (SOUND_PEER[0], 5006)),
     ]
 
 

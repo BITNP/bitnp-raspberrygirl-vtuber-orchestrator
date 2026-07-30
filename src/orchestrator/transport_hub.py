@@ -244,7 +244,7 @@ class RtpHub:
         self._route_generations: dict[StreamKey, int] = {}
 
         if onsite_bridge is not None:
-            onsite_bridge.set_output_callback(self._deliver_onsite_packet)
+            onsite_bridge.set_output_callback(self.deliver_generated_rtp)
 
     def attach_transport(self, transport: DatagramSender) -> None:
         """函数契约说明.
@@ -421,12 +421,12 @@ class RtpHub:
                 CancellationEpoch(self._route_generations.get(stream, 0)),
             )
 
-    async def _deliver_onsite_packet(
+    async def deliver_generated_rtp(
         self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
     ) -> None:
         """函数契约说明.
 
-        功能: 执行 _deliver_onsite_packet
+        功能: 执行 deliver_generated_rtp
         的异步逻辑,并协调 get, sendto,
         _record_rtp, _is_canonical_rtp。
         参数: self 表示当前实例。 stream:
@@ -458,23 +458,6 @@ class RtpHub:
         transport.sendto(packet, sink)
 
         self._record_rtp("rtp_egress", stream)
-
-    async def deliver_generated_rtp(
-        self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
-    ) -> None:
-        """函数契约说明.
-
-        功能: 执行 deliver_generated_rtp
-        的异步逻辑,并协调
-        _deliver_onsite_packet。
-        参数: self 表示当前实例。 stream:
-        StreamKey。 必填。 epoch:
-        CancellationEpoch。 必填。 packet:
-        bytes。 必填。
-        契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `None`。
-        """
-        await self._deliver_onsite_packet(stream, epoch, packet)
 
     def _record_rtp(self, stage: OnsiteStage, stream: StreamKey) -> None:
         """函数契约说明.
