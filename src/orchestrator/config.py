@@ -29,7 +29,7 @@ SERVICE_NAME_KEY: Final = "ORCHESTRATOR_SERVICE_NAME"
 SERVICE_VERSION_KEY: Final = "ORCHESTRATOR_SERVICE_VERSION"
 SESSION_ID_PREFIX_KEY: Final = "ORCHESTRATOR_SESSION_ID_PREFIX"
 LlmProvider = Literal["mock", "openai_compatible"]
-AsrProvider = Literal["mock", "openai_compatible"]
+AsrProvider = Literal["mock", "openai_compatible", "funasr"]
 TtsProvider = Literal["mock", "vllm_omni"]
 TrustedLanToken = NewType("TrustedLanToken", str)
 LlmApiKey = NewType("LlmApiKey", str)
@@ -191,7 +191,7 @@ def _parse_llm_provider(raw_provider: str | None) -> LlmProvider:
 def _parse_asr_provider(raw_provider: str | None) -> AsrProvider:
     provider = DEFAULT_ASR_PROVIDER if raw_provider is None else raw_provider.strip()
     match provider:
-        case "mock" | "openai_compatible":
+        case "mock" | "openai_compatible" | "funasr":
             return provider
         case _:
             raise ConfigParseError(field_name=ASR_PROVIDER_KEY)

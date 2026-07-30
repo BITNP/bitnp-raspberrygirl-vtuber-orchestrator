@@ -61,6 +61,18 @@ def test_observability_helpers_emit_json_logs_and_metrics() -> None:
     assert queue.queue_name == "turns"
 
 
+def test_authenticated_readiness_rejects_wrong_token_without_leaking_state() -> None:
+    # Given: a server whose readiness surface is protected by a LAN token.
+    config = load_config_from_env({"TRUSTED_LAN_TOKEN": "readiness-token-123"})
+    server = OrchestratorServer.from_config(config)
+
+    # When: an untrusted caller supplies a different bearer token.
+    report = server.authenticated_readiness("Bearer wrong-token", None, None)
+
+    # Then: no readiness details are exposed.
+    assert report is None
+
+
 def test_env_examples_do_not_commit_real_secrets() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     examples = (repo_root / ".env.example",)
