@@ -3,12 +3,8 @@
 from dataclasses import dataclass
 
 from orchestrator.ids import TurnId
-from orchestrator.interactions import (
-    McpCapability,
-    McpDispatchProposal,
-    PresentationCommand,
-)
-from orchestrator.mcp_adapters import McpIntent
+from orchestrator.interactions import PresentationCommand
+from orchestrator.mcp_adapters import DeckDispatchIntent
 from orchestrator.sessions import SessionSnapshot
 from orchestrator.state_snapshots import TaskStateSnapshot
 from orchestrator.task_registry import (
@@ -36,7 +32,7 @@ class PresentationMcpPlan:
     """One typed task request and its deck-dispatch intent."""
 
     request: TaskRequest
-    intent: McpIntent
+    intent: DeckDispatchIntent
 
 
 def build_presentation_mcp_plan(
@@ -56,11 +52,5 @@ def build_presentation_mcp_plan(
             kind=TaskKind.INTERACTIVE,
             data_snapshot=plan_input.data_snapshot,
         ),
-        intent=McpIntent(
-            McpDispatchProposal(
-                McpCapability.PRESENTATION_DECK, command_id, cancelled=False
-            ),
-            plan_input.proposal,
-            plan_input.deadline_ms,
-        ),
+        intent=DeckDispatchIntent(plan_input.proposal, plan_input.deadline_ms),
     )

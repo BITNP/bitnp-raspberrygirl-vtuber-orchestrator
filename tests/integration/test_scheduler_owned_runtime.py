@@ -20,20 +20,19 @@ from orchestrator.interactions import (
     ActionProposal,
     CommandId,
     CommentProposal,
-    McpCapability,
-    McpDispatchProposal,
     PresentationCommand,
     PresentationCommandKind,
     PresentationResult,
 )
 from orchestrator.mcp_adapters import (
-    McpAdapterResult,
-    McpDispatchOutcome,
-    McpIntent,
-    ScopedMcpAdapterDispatcher,
+    DeckDispatchIntent,
+    DeckDispatchOutcome,
+    DeckEffectDispatcher,
+    DeckEffectResult,
 )
 from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.pipeline_contracts import ASRAudienceEvent
+from orchestrator.provider_streaming import ProviderCancellationHandle
 from orchestrator.runtime_contracts import RuntimeObservables
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import EventCorrelation, EventSequence, StateRevision
@@ -478,14 +477,8 @@ def test_runtime_records_governed_interaction_outcomes_without_sensitive_values(
         )
     )
 
-    scheduled_mcp = runtime.schedule_mcp_task(
-        McpIntent(
-            McpDispatchProposal(
-                McpCapability.PRESENTATION_DECK, command.command_id, cancelled=False
-            ),
-            command,
-            deadline_ms=100,
-        ),
+    scheduled_mcp = runtime.schedule_deck_task(
+        DeckDispatchIntent(command, deadline_ms=100),
         mcp_task,
         correlation,
     )
@@ -515,7 +508,7 @@ def test_runtime_records_governed_interaction_outcomes_without_sensitive_values(
         "action",
         "presentation_command",
         "presentation_ack",
-        "mcp_task",
+        "deck_task",
         "task_cancelled",
         "task_result",
     }
@@ -553,19 +546,13 @@ def test_live_mcp_worker_requires_exact_correlated_ack_before_deck_commit() -> N
 
     adapter = _SuccessfulAdapter()
 
-    runtime.mcp_dispatcher = ScopedMcpAdapterDispatcher(
-        runtime.interaction_ingress.reducer, {McpCapability.PRESENTATION_DECK: adapter}
+    runtime.deck_dispatcher = DeckEffectDispatcher(
+        runtime.interaction_ingress.reducer, adapter
     )
 
-    intent = McpIntent(
-        McpDispatchProposal(
-            McpCapability.PRESENTATION_DECK, command.command_id, cancelled=False
-        ),
-        command,
-        deadline_ms=100,
-    )
+    intent = DeckDispatchIntent(command, deadline_ms=100)
 
-    scheduled = runtime.schedule_mcp_task(
+    scheduled = runtime.schedule_deck_task(
         intent,
         _request(runtime, turn_id),
         correlation,
@@ -575,7 +562,7 @@ def test_live_mcp_worker_requires_exact_correlated_ack_before_deck_commit() -> N
 
     # When: the worker succeeds, then forged and exact acknowledgements arrive.
 
-    outcome = runtime.run_mcp_worker(now_ms=0, correlation=correlation)
+    outcome = runtime.run_deck_worker(now_ms=0, correlation=correlation)
 
     assert outcome.completion is not None
 
@@ -611,25 +598,19 @@ def test_duplicate_presentation_command_id_dispatches_adapter_once() -> None:
         PresentationCommandKind.LOAD, "deck-duplicate", 1, CommandId("deck-duplicate")
     )
     adapter = _SuccessfulAdapter()
-    runtime.mcp_dispatcher = ScopedMcpAdapterDispatcher(
-        runtime.interaction_ingress.reducer, {McpCapability.PRESENTATION_DECK: adapter}
+    runtime.deck_dispatcher = DeckEffectDispatcher(
+        runtime.interaction_ingress.reducer, adapter
     )
 
     # When: the same command ID is scheduled through the runtime twice.
     first = runtime.receive_presentation(command, correlation)
     second = runtime.receive_presentation(command, correlation)
-    scheduled = runtime.schedule_mcp_task(
-        McpIntent(
-            McpDispatchProposal(
-                McpCapability.PRESENTATION_DECK, command.command_id, cancelled=False
-            ),
-            command,
-            deadline_ms=100,
-        ),
+    scheduled = runtime.schedule_deck_task(
+        DeckDispatchIntent(command, deadline_ms=100),
         _request(runtime, TurnId("turn-0001"), task_id="duplicate-deck"),
         correlation,
     )
-    outcome = runtime.run_mcp_worker(now_ms=0, correlation=correlation)
+    outcome = runtime.run_deck_worker(now_ms=0, correlation=correlation)
 
     # Then: duplicate admission creates no second dispatch or adapter side effect.
     assert first.accepted is True
@@ -663,29 +644,23 @@ def test_live_mcp_worker_reconciles_ambiguity_without_adapter_state_commit() -> 
 
     assert runtime.receive_presentation(command, correlation).accepted
 
-    adapter = _ResultAdapter(McpAdapterResult.ambiguous(), McpAdapterResult.succeeded())
+    adapter = _ResultAdapter(DeckEffectResult.ambiguous(), DeckEffectResult.succeeded())
 
-    runtime.mcp_dispatcher = ScopedMcpAdapterDispatcher(
-        runtime.interaction_ingress.reducer, {McpCapability.PRESENTATION_DECK: adapter}
+    runtime.deck_dispatcher = DeckEffectDispatcher(
+        runtime.interaction_ingress.reducer, adapter
     )
 
     request = _request(runtime, turn_id, task_id="ambiguous")
 
-    intent = McpIntent(
-        McpDispatchProposal(
-            McpCapability.PRESENTATION_DECK, command.command_id, cancelled=False
-        ),
-        command,
-        deadline_ms=100,
-    )
+    intent = DeckDispatchIntent(command, deadline_ms=100)
 
-    assert runtime.schedule_mcp_task(intent, request, correlation).accepted
+    assert runtime.schedule_deck_task(intent, request, correlation).accepted
 
     # When: the worker observes ambiguity, then reconciliation succeeds.
 
-    ambiguous = runtime.run_mcp_worker(now_ms=0, correlation=correlation)
+    ambiguous = runtime.run_deck_worker(now_ms=0, correlation=correlation)
 
-    reconciled = runtime.reconcile_mcp_worker(
+    reconciled = runtime.reconcile_deck_worker(
         request.task_id, now_ms=1, correlation=correlation
     )
 
@@ -731,31 +706,37 @@ class _SuccessfulAdapter:
 
         self.calls: list[CommandId] = []
 
-    def execute(self, intent: McpIntent) -> McpAdapterResult:
+    def dispatch(self, intent: DeckDispatchIntent) -> DeckEffectResult:
         """函数契约说明.
 
         功能: 执行 execute 的同步逻辑,并协调 append,
         succeeded。
         参数: self 表示当前实例。 intent:
-        McpIntent。 必填。
-        契约: 同步调用。 返回 `McpAdapterResult`。
+        DeckDispatchIntent。 必填。
+        契约: 同步调用。 返回 `DeckEffectResult`。
         """
 
         self.calls.append(intent.command.command_id)
 
-        return McpAdapterResult.succeeded()
+        return DeckEffectResult.succeeded()
 
-    def reconcile(self, intent: McpIntent) -> McpAdapterResult:
+    def reconcile(self, intent: DeckDispatchIntent) -> DeckEffectResult:
         """函数契约说明.
 
         功能: 执行 reconcile 的同步逻辑,并协调
         execute。
         参数: self 表示当前实例。 intent:
-        McpIntent。 必填。
-        契约: 同步调用。 返回 `McpAdapterResult`。
+        DeckDispatchIntent。 必填。
+        契约: 同步调用。 返回 `DeckEffectResult`。
         """
 
-        return self.execute(intent)
+        return self.dispatch(intent)
+
+    async def dispatch_async(
+        self, intent: DeckDispatchIntent, cancellation: ProviderCancellationHandle
+    ) -> DeckEffectResult:
+        _ = cancellation
+        return self.dispatch(intent)
 
 
 @final
@@ -766,13 +747,13 @@ class _ResultAdapter:
     契约: 方法: __init__、execute、reconcile。
     """
 
-    def __init__(self, *results: McpAdapterResult) -> None:
+    def __init__(self, *results: DeckEffectResult) -> None:
         """函数契约说明.
 
         功能: 初始化 _ResultAdapter
         的字段并建立实例不变式。
         参数: self 表示当前实例。 *results:
-        McpAdapterResult。 必填。
+        DeckEffectResult。 必填。
         契约: 同步调用。 返回 `None`。
         """
 
@@ -780,31 +761,37 @@ class _ResultAdapter:
 
         self.calls: list[CommandId] = []
 
-    def execute(self, intent: McpIntent) -> McpAdapterResult:
+    def dispatch(self, intent: DeckDispatchIntent) -> DeckEffectResult:
         """函数契约说明.
 
         功能: 执行 execute 的同步逻辑,并协调 append,
         len。
         参数: self 表示当前实例。 intent:
-        McpIntent。 必填。
-        契约: 同步调用。 返回 `McpAdapterResult`。
+        DeckDispatchIntent。 必填。
+        契约: 同步调用。 返回 `DeckEffectResult`。
         """
 
         self.calls.append(intent.command.command_id)
 
         return self._results[len(self.calls) - 1]
 
-    def reconcile(self, intent: McpIntent) -> McpAdapterResult:
+    def reconcile(self, intent: DeckDispatchIntent) -> DeckEffectResult:
         """函数契约说明.
 
         功能: 执行 reconcile 的同步逻辑,并协调
         execute。
         参数: self 表示当前实例。 intent:
-        McpIntent。 必填。
-        契约: 同步调用。 返回 `McpAdapterResult`。
+        DeckDispatchIntent。 必填。
+        契约: 同步调用。 返回 `DeckEffectResult`。
         """
 
-        return self.execute(intent)
+        return self.dispatch(intent)
+
+    async def dispatch_async(
+        self, intent: DeckDispatchIntent, cancellation: ProviderCancellationHandle
+    ) -> DeckEffectResult:
+        _ = cancellation
+        return self.dispatch(intent)
 
 
 def test_mcp_cancel_before_worker_removes_retained_intent_without_ack_commit() -> None:
@@ -825,7 +812,7 @@ def test_mcp_cancel_before_worker_removes_retained_intent_without_ack_commit() -
 
     cancelled = runtime.cancel_task(request.task_id, correlation)
 
-    outcome = runtime.run_mcp_worker(now_ms=0, correlation=correlation)
+    outcome = runtime.run_deck_worker(now_ms=0, correlation=correlation)
 
     # Then: no adapter or ACK path can commit the deck state.
 
@@ -850,11 +837,13 @@ def test_mcp_deadline_before_worker_times_out_without_adapter_call() -> None:
     契约: 同步调用。 返回 `None`。
     """
 
-    runtime, request, _, correlation, adapter = _scheduled_deck("before", deadline_ms=0)
+    runtime, request, command, correlation, adapter = _scheduled_deck(
+        "before", deadline_ms=0
+    )
 
     # When: the worker selects pending work after its deadline.
 
-    outcome = runtime.run_mcp_worker(now_ms=1, correlation=correlation)
+    outcome = runtime.run_deck_worker(now_ms=1, correlation=correlation)
 
     # Then: the task times out without adapter work or acknowledged deck state.
 
@@ -867,6 +856,10 @@ def test_mcp_deadline_before_worker_times_out_without_adapter_call() -> None:
     assert record.state is TaskState.TIMED_OUT
 
     assert adapter.calls == []
+
+    assert not runtime.receive_presentation_result(
+        PresentationResult(command.command_id, succeeded=True), correlation
+    ).accepted
 
     assert runtime.interaction_ingress.reducer.presentation_state is None
 
@@ -883,17 +876,17 @@ def test_ambiguous_reconcile_after_deadline_times_out_without_commit() -> None:
     契约: 同步调用。 返回 `None`。
     """
 
-    runtime, request, _, correlation, adapter = _scheduled_deck(
+    runtime, request, command, correlation, adapter = _scheduled_deck(
         "ambiguous-timeout",
-        adapter_results=(McpAdapterResult.ambiguous(),),
+        adapter_results=(DeckEffectResult.ambiguous(),),
         deadline_ms=1,
     )
 
-    assert not runtime.run_mcp_worker(now_ms=0, correlation=correlation).accepted
+    assert not runtime.run_deck_worker(now_ms=0, correlation=correlation).accepted
 
     # When: reconciliation arrives after the retained intent deadline.
 
-    outcome = runtime.reconcile_mcp_worker(
+    outcome = runtime.reconcile_deck_worker(
         request.task_id, now_ms=2, correlation=correlation
     )
 
@@ -908,6 +901,10 @@ def test_ambiguous_reconcile_after_deadline_times_out_without_commit() -> None:
     assert record.state is TaskState.TIMED_OUT
 
     assert adapter.calls == [CommandId("deck-ambiguous-timeout")]
+
+    assert not runtime.receive_presentation_result(
+        PresentationResult(command.command_id, succeeded=True), correlation
+    ).accepted
 
     assert runtime.interaction_ingress.reducer.presentation_state is None
 
@@ -969,29 +966,23 @@ def test_active_local_mcp_cancellation_rejects_late_completion_without_ack_commi
 
     request = _request(runtime, turn_id, task_id="active")
 
-    intent = McpIntent(
-        McpDispatchProposal(
-            McpCapability.PRESENTATION_DECK, command.command_id, cancelled=False
-        ),
-        command,
-        100,
-    )
+    intent = DeckDispatchIntent(command, 100)
 
-    assert runtime.schedule_mcp_task(intent, request, correlation).accepted
+    assert runtime.schedule_deck_task(intent, request, correlation).accepted
 
     # When: task cancellation wins during the adapter's async execution yield point.
 
-    async def run() -> McpDispatchOutcome:
+    async def run() -> DeckDispatchOutcome:
         """函数契约说明.
 
         功能: 运行流程并协调其依赖步骤。
         参数: 无显式业务参数。
         契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `McpDispatchOutcome`。
+        `DeckDispatchOutcome`。
         """
 
         worker = asyncio.create_task(
-            runtime.run_mcp_worker_async(now_ms=0, correlation=correlation)
+            runtime.run_deck_worker_async(now_ms=0, correlation=correlation)
         )
 
         await asyncio.sleep(0)
@@ -1016,7 +1007,7 @@ def test_active_local_mcp_cancellation_rejects_late_completion_without_ack_commi
 def _scheduled_deck(
     suffix: str,
     *,
-    adapter_results: tuple[McpAdapterResult, ...] | None = None,
+    adapter_results: tuple[DeckEffectResult, ...] | None = None,
     deadline_ms: int = 100,
 ) -> tuple[
     SessionRuntime, TaskRequest, PresentationCommand, EventCorrelation, _ResultAdapter
@@ -1028,7 +1019,7 @@ def _scheduled_deck(
     PresentationCommand。
     参数: suffix: str。 必填。
     adapter_results:
-    tuple[McpAdapterResult, ...] | None。
+    tuple[DeckEffectResult, ...] | None。
     可省略。 deadline_ms: int。 可省略。
     契约: 同步调用。 返回 `tuple[SessionRuntime,
     TaskRequest, PresentationCommand,
@@ -1048,26 +1039,20 @@ def _scheduled_deck(
     assert runtime.receive_presentation(command, correlation).accepted
 
     results = (
-        (McpAdapterResult.succeeded(),) if adapter_results is None else adapter_results
+        (DeckEffectResult.succeeded(),) if adapter_results is None else adapter_results
     )
 
     adapter = _ResultAdapter(*results)
 
-    runtime.mcp_dispatcher = ScopedMcpAdapterDispatcher(
-        runtime.interaction_ingress.reducer, {McpCapability.PRESENTATION_DECK: adapter}
+    runtime.deck_dispatcher = DeckEffectDispatcher(
+        runtime.interaction_ingress.reducer, adapter
     )
 
     request = _request(runtime, turn_id, task_id=suffix, deadline_ms=deadline_ms)
 
-    intent = McpIntent(
-        McpDispatchProposal(
-            McpCapability.PRESENTATION_DECK, command.command_id, cancelled=False
-        ),
-        command,
-        deadline_ms=deadline_ms,
-    )
+    intent = DeckDispatchIntent(command, deadline_ms=deadline_ms)
 
-    assert runtime.schedule_mcp_task(intent, request, correlation).accepted
+    assert runtime.schedule_deck_task(intent, request, correlation).accepted
 
     return runtime, request, command, correlation, adapter
 

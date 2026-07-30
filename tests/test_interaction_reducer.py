@@ -279,6 +279,7 @@ def test_mcp_requires_allowlist_and_cancellation_blocks_dispatch() -> None:
     )
 
     assert duplicate == McpDispatchRejected(McpDispatchRejection.DUPLICATE)
+    assert reducer.presentation_state is None
 
 
 def _reducer(

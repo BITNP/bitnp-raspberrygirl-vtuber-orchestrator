@@ -15,7 +15,7 @@ import pytest
 
 from orchestrator.config import TrustedLanToken
 from orchestrator.ids import SessionId
-from orchestrator.mcp_adapters import McpJournalKind
+from orchestrator.mcp_adapters import DeckJournalKind
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 from orchestrator.transport_config import TransportConfig
@@ -722,15 +722,15 @@ def test_control_connection_routes_authenticated_profile_action_and_presentation
         "action",
         "presentation_command",
         "task_scheduled",
-        "mcp_task",
-        "mcp_dispatch",
+        "deck_task",
+        "deck_dispatch",
         "task_result",
         "presentation_ack",
     ]
 
-    assert [entry.kind for entry in session_runtime.mcp_dispatcher.journal] == [
-        McpJournalKind.INTENT_DISPATCHED,
-        McpJournalKind.RESULT_SUCCEEDED,
+    assert [entry.kind for entry in session_runtime.deck_dispatcher.journal] == [
+        DeckJournalKind.DISPATCHED,
+        DeckJournalKind.SUCCEEDED,
     ]
 
     assert "template-sensitive" not in repr(session_runtime.operational_journal.records)
@@ -775,7 +775,7 @@ def test_control_connection_skips_expired_presentation_mcp() -> None:
 
     # Then: no adapter issue or presentation state can be committed.
 
-    assert session_runtime.mcp_dispatcher.journal == ()
+    assert session_runtime.deck_dispatcher.journal == ()
 
     assert session_runtime.interaction_ingress.reducer.presentation_state is None
 

@@ -26,15 +26,14 @@ from orchestrator.interactions import (
     CommandId,
     CommentProposal,
     InteractionAccepted,
-    McpCapability,
     PresentationCommand,
     PresentationResult,
 )
 from orchestrator.mcp_adapters import (
-    LocalDeckAdapter,
-    McpDispatchOutcome,
-    McpIntent,
-    ScopedMcpAdapterDispatcher,
+    DeckDispatchIntent,
+    DeckDispatchOutcome,
+    DeckEffectDispatcher,
+    LocalDeckEffectExecutor,
 )
 from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.operational_journal import OperationalJournal, OperationalRecord
@@ -126,7 +125,7 @@ class SessionRuntime:
 
     interaction_ingress: SessionInteractionIngress
 
-    mcp_dispatcher: ScopedMcpAdapterDispatcher
+    deck_dispatcher: DeckEffectDispatcher
 
     mode_policy: AdaptiveAgentPolicy
 
@@ -138,9 +137,9 @@ class SessionRuntime:
 
     _correlations: set[EventCorrelation] = field(default_factory=set)
 
-    _mcp_intents: dict[TaskId, McpIntent] = field(default_factory=dict)
+    _deck_intents: dict[TaskId, DeckDispatchIntent] = field(default_factory=dict)
 
-    _active_mcp_tasks: dict[TaskId, CommandId] = field(default_factory=dict)
+    _active_deck_tasks: dict[TaskId, CommandId] = field(default_factory=dict)
 
     _presentation_correlations: dict[CommandId, EventCorrelation] = field(
         default_factory=dict
@@ -204,9 +203,8 @@ class SessionRuntime:
             executor=TaskLaneExecutor(task_registry, max_pending_per_lane=4),
             output_fence=SchedulerOutputFence(scheduler),
             interaction_ingress=interaction_ingress,
-            mcp_dispatcher=ScopedMcpAdapterDispatcher(
-                interaction_ingress.reducer,
-                {McpCapability.PRESENTATION_DECK: LocalDeckAdapter()},
+            deck_dispatcher=DeckEffectDispatcher(
+                interaction_ingress.reducer, LocalDeckEffectExecutor()
             ),
             mode_policy=AdaptiveAgentPolicy(),
             clock=clock,
@@ -359,8 +357,8 @@ class SessionRuntime:
         功能: 执行
         _schedule_presentation_mcp
         的异步逻辑,并协调 receive_presentation,
-        TaskRequest, McpIntent,
-        schedule_mcp_task。
+        TaskRequest, DeckDispatchIntent,
+        schedule_deck_task。
         参数: self 表示当前实例。 proposal:
         PresentationCommand。 必填。
         correlation: EventCorrelation。
@@ -385,14 +383,14 @@ class SessionRuntime:
             )
         )
 
-        scheduled = self.schedule_mcp_task(plan.intent, plan.request, correlation)
+        scheduled = self.schedule_deck_task(plan.intent, plan.request, correlation)
 
         if not scheduled.accepted:
             self.interaction_ingress.reducer.cancel_presentation(proposal.command_id)
 
             return scheduled
 
-        _ = await self.run_mcp_worker_async(
+        _ = await self.run_deck_worker_async(
             now_ms=self.clock(), correlation=correlation
         )
 
@@ -576,19 +574,19 @@ class SessionRuntime:
             None,
         )
 
-    def schedule_mcp_task(
+    def schedule_deck_task(
         self,
-        intent: McpIntent,
+        intent: DeckDispatchIntent,
         request: TaskRequest,
         correlation: EventCorrelation,
     ) -> RuntimeOutcome:
         """函数契约说明.
 
-        功能: 执行 schedule_mcp_task
+        功能: 执行 schedule_deck_task
         的同步逻辑,并协调 schedule_task,
         _record_interaction。
         参数: self 表示当前实例。 intent:
-        McpIntent。 必填。 request:
+        DeckDispatchIntent。 必填。 request:
         TaskRequest。 必填。 correlation:
         EventCorrelation。 必填。
         契约: 同步调用。 返回 `RuntimeOutcome`。
@@ -596,13 +594,13 @@ class SessionRuntime:
         outcome = self.schedule_task(request, correlation)
 
         if outcome.accepted:
-            self._mcp_intents[request.task_id] = intent
+            self._deck_intents[request.task_id] = intent
 
         self.operational_journal.append(
             interaction_record(
                 correlation,
                 self.scheduler.snapshot,
-                "mcp_task",
+                "deck_task",
                 outcome.accepted,
                 request.task_id,
             )
@@ -610,9 +608,9 @@ class SessionRuntime:
 
         return outcome
 
-    def run_mcp_worker(
+    def run_deck_worker(
         self, *, now_ms: int, correlation: EventCorrelation
-    ) -> McpDispatchOutcome:
+    ) -> DeckDispatchOutcome:
         """函数契约说明.
 
         功能: 运行流程并协调其依赖步骤。
@@ -620,24 +618,24 @@ class SessionRuntime:
         必填。 correlation:
         EventCorrelation。 必填。
         契约: 同步调用。 返回
-        `McpDispatchOutcome`。
+        `DeckDispatchOutcome`。
         """
         request = self.next_task(now_ms=now_ms)
 
         if request is None:
-            self._discard_terminal_mcp_intents()
+            self._discard_terminal_deck_intents()
 
-            return McpDispatchOutcome(accepted=False)
+            return DeckDispatchOutcome(accepted=False)
 
-        intent = self._mcp_intents.pop(request.task_id, None)
+        intent = self._deck_intents.pop(request.task_id, None)
 
         if intent is None:
-            return McpDispatchOutcome(accepted=False)
+            return DeckDispatchOutcome(accepted=False)
 
-        outcome = self.mcp_dispatcher.dispatch(intent, now_ms=now_ms)
+        outcome = self.deck_dispatcher.dispatch(intent, now_ms=now_ms)
 
         if not outcome.accepted:
-            self._mcp_intents[request.task_id] = intent
+            self._deck_intents[request.task_id] = intent
 
             return outcome
 
@@ -654,9 +652,9 @@ class SessionRuntime:
 
         return outcome
 
-    async def run_mcp_worker_async(
+    async def run_deck_worker_async(
         self, *, now_ms: int, correlation: EventCorrelation
-    ) -> McpDispatchOutcome:
+    ) -> DeckDispatchOutcome:
         """函数契约说明.
 
         功能: 运行流程并协调其依赖步骤。
@@ -664,40 +662,40 @@ class SessionRuntime:
         必填。 correlation:
         EventCorrelation。 必填。
         契约: 异步调用。 可能等待 I/O 或协程结果。 返回
-        `McpDispatchOutcome`。
+        `DeckDispatchOutcome`。
         """
         request = self.next_task(now_ms=now_ms)
 
         if request is None:
-            self._discard_terminal_mcp_intents()
+            self._discard_terminal_deck_intents()
 
-            return McpDispatchOutcome(accepted=False)
+            return DeckDispatchOutcome(accepted=False)
 
-        intent = self._mcp_intents.pop(request.task_id, None)
+        intent = self._deck_intents.pop(request.task_id, None)
 
         if intent is None:
-            return McpDispatchOutcome(accepted=False)
+            return DeckDispatchOutcome(accepted=False)
 
-        self._active_mcp_tasks[request.task_id] = intent.command.command_id
+        self._active_deck_tasks[request.task_id] = intent.command.command_id
 
         try:
-            outcome = await self.mcp_dispatcher.dispatch_async(intent, now_ms=now_ms)
+            outcome = await self.deck_dispatcher.dispatch_async(intent, now_ms=now_ms)
 
         finally:
-            _ = self._active_mcp_tasks.pop(request.task_id, None)
+            _ = self._active_deck_tasks.pop(request.task_id, None)
 
         self.operational_journal.append(
             interaction_record(
                 correlation,
                 self.scheduler.snapshot,
-                "mcp_dispatch",
+                "deck_dispatch",
                 outcome.accepted,
                 request.task_id,
             )
         )
 
         if not outcome.accepted:
-            self._mcp_intents[request.task_id] = intent
+            self._deck_intents[request.task_id] = intent
 
             return outcome
 
@@ -714,16 +712,16 @@ class SessionRuntime:
 
         return outcome
 
-    def reconcile_mcp_worker(
+    def reconcile_deck_worker(
         self,
         task_id: TaskId,
         *,
         now_ms: int,
         correlation: EventCorrelation,
-    ) -> McpDispatchOutcome:
+    ) -> DeckDispatchOutcome:
         """函数契约说明.
 
-        功能: 执行 reconcile_mcp_worker
+        功能: 执行 reconcile_deck_worker
         的同步逻辑,并协调 get, reconcile, task,
         pop。
         参数: self 表示当前实例。 task_id:
@@ -731,23 +729,25 @@ class SessionRuntime:
         correlation: EventCorrelation。
         必填。
         契约: 同步调用。 返回
-        `McpDispatchOutcome`。
+        `DeckDispatchOutcome`。
         """
-        intent = self._mcp_intents.get(task_id)
+        intent = self._deck_intents.get(task_id)
 
         if intent is None:
-            return McpDispatchOutcome(accepted=False)
+            return DeckDispatchOutcome(accepted=False)
 
         if now_ms > intent.deadline_ms:
             _ = self.task_registry.timeout(task_id)
 
-            _ = self._mcp_intents.pop(task_id)
+            _ = self._deck_intents.pop(task_id)
 
-            _ = self.mcp_dispatcher.reconcile(intent.command.command_id, now_ms=now_ms)
+            self._cancel_pending_deck_presentation(intent.command.command_id)
 
-            return McpDispatchOutcome(accepted=False)
+            _ = self.deck_dispatcher.reconcile(intent.command.command_id, now_ms=now_ms)
 
-        outcome = self.mcp_dispatcher.reconcile(
+            return DeckDispatchOutcome(accepted=False)
+
+        outcome = self.deck_dispatcher.reconcile(
             intent.command.command_id, now_ms=now_ms
         )
 
@@ -757,9 +757,9 @@ class SessionRuntime:
         request = self.task_registry.task(task_id)
 
         if request is None:
-            return McpDispatchOutcome(accepted=False)
+            return DeckDispatchOutcome(accepted=False)
 
-        _ = self._mcp_intents.pop(task_id)
+        _ = self._deck_intents.pop(task_id)
 
         _ = self.reduce_task(
             TaskResult(
@@ -790,21 +790,19 @@ class SessionRuntime:
         cancelled = self.task_registry.cancel(task_id, reason="cancelled")
 
         if cancelled is not None:
-            intent = self._mcp_intents.pop(task_id, None)
+            intent = self._deck_intents.pop(task_id, None)
 
             if intent is not None:
-                _ = self.mcp_dispatcher.cancel(intent.command.command_id)
+                _ = self.deck_dispatcher.cancel(intent.command.command_id)
 
-                self.interaction_ingress.reducer.cancel_presentation(
-                    intent.command.command_id
-                )
+                self._cancel_pending_deck_presentation(intent.command.command_id)
 
-            active_command = self._active_mcp_tasks.get(task_id)
+            active_command = self._active_deck_tasks.get(task_id)
 
             if active_command is not None:
-                _ = self.mcp_dispatcher.cancel(active_command)
+                _ = self.deck_dispatcher.cancel(active_command)
 
-                self.interaction_ingress.reducer.cancel_presentation(active_command)
+                self._cancel_pending_deck_presentation(active_command)
 
         return self._interaction_outcome(
             correlation,
@@ -813,20 +811,26 @@ class SessionRuntime:
             task_id,
         )
 
-    def _discard_terminal_mcp_intents(self) -> None:
+    def _discard_terminal_deck_intents(self) -> None:
         """函数契约说明.
 
         功能: 执行
-        _discard_terminal_mcp_intents
+        _discard_terminal_deck_intents
         的同步逻辑,并协调 tuple, task, pop。
         参数: self 表示当前实例。
         契约: 同步调用。 返回 `None`。
         """
-        for task_id in tuple(self._mcp_intents):
+        for task_id in tuple(self._deck_intents):
             record = self.task_registry.task(task_id)
 
             if record is None or record.state is not TaskState.PENDING:
-                _ = self._mcp_intents.pop(task_id)
+                intent = self._deck_intents.pop(task_id)
+
+                self._cancel_pending_deck_presentation(intent.command.command_id)
+
+    def _cancel_pending_deck_presentation(self, command_id: CommandId) -> None:
+        self.interaction_ingress.reducer.cancel_presentation(command_id)
+        _ = self._presentation_correlations.pop(command_id, None)
 
     @property
     def _task_data_snapshot(self) -> TaskStateSnapshot:
