@@ -220,12 +220,10 @@ class RtpHub:
         if sink is None or self._transport is None:
             return False
 
-        if self._onsite_bridge is not None:
-            return self._route_onsite(data, stream)
+        if self._onsite_bridge is None:
+            return False
 
-        self._transport.sendto(data, sink)
-
-        return True
+        return self._route_onsite(data, stream)
 
     def _route_onsite(self, data: bytes, stream: StreamKey) -> bool:
         actors = self._onsite_actors

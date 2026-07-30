@@ -21,7 +21,7 @@ from orchestrator.retrieval import RetrievalFixtureProvider
 from .e2e_replay_harness import ModuleEdge, ReplayHarness, ScenarioSummary
 
 COMMENT_FIXTURE: Final = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "bilibili_comments.jsonl"
+    Path(__file__).resolve().parents[1] / "fixtures" / "replay_comments.jsonl"
 )
 
 COMMENT_FIELD_PATTERN: Final = re.compile(

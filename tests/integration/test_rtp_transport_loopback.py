@@ -78,7 +78,7 @@ class FakePortAudio:
         self.closed = True
 
 
-def test_mic_orchestrator_sound_loopback_forwards_rejects_cancels_and_closes() -> None:
+def test_mic_orchestrator_sound_loopback_drops_raw_rtp_without_onsite_bridge() -> None:
 
     asyncio.run(_run_loopback_proof())
 
@@ -135,13 +135,11 @@ async def _run_loopback_proof() -> None:
             ).run()
         )
 
-        _ = await asyncio.wait_for(playback.frame_written.wait(), timeout=2)
-
-        assert len(playback.frames) == 1
-
         await asyncio.wait_for(mic_task, timeout=2)
 
-        playback.frame_written.clear()
+        await _assert_no_additional_frame(playback)
+
+        assert playback.frames == []
 
         _send_rtp(rtp_port, _rtp_packet(0x4D494331))
 
@@ -161,7 +159,7 @@ async def _run_loopback_proof() -> None:
 
         await _assert_no_additional_frame(playback)
 
-        assert len(playback.frames) == 1
+        assert playback.frames == []
 
     finally:
         await _cancel(sound_task)

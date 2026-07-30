@@ -33,8 +33,8 @@ def test_comment_turn_emits_media_stream_and_frontend_cues_after_synthesis() -> 
 
     accepted = pipeline.accept_audience_input(
         CommentAudienceEvent(
-            platform="bilibili",
-            source="danmaku",
+            platform="replay",
+            source="fixture",
             user="alice",
             text="Say hi",
             timestamp="2026-07-08T00:00:01Z",

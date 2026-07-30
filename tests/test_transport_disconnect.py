@@ -151,9 +151,9 @@ async def _disconnect_route_proof() -> None:
 
     endpoint = ("127.0.0.1", 41_000)
 
-    # When: the source route forwards once, then only its WSS connection closes.
+    # When: the source route receives RTP, then only its WSS connection closes.
 
-    assert runtime.route_datagram(packet, endpoint) is True
+    assert runtime.route_datagram(packet, endpoint) is False
 
     source.closed.set()
 
@@ -163,12 +163,9 @@ async def _disconnect_route_proof() -> None:
 
     assert runtime.route_datagram(packet, endpoint) is False
 
-    assert runtime.route_datagram(retained_packet, endpoint) is True
+    assert runtime.route_datagram(retained_packet, endpoint) is False
 
-    assert transport.sent == [
-        (packet, ("127.0.0.1", 5006)),
-        (retained_packet, ("127.0.0.1", 5007)),
-    ]
+    assert transport.sent == []
 
     sink.closed.set()
 

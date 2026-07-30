@@ -8,7 +8,7 @@ from typing import Final
 from orchestrator.modes import AdaptiveAgentPolicy, AudienceInput, AudienceSource
 
 COMMENT_FIXTURE = (
-    Path(__file__).resolve().parent / "fixtures" / "bilibili_comments.jsonl"
+    Path(__file__).resolve().parent / "fixtures" / "replay_comments.jsonl"
 )
 
 COMMENT_FIELD_PATTERN: Final = re.compile(
@@ -50,9 +50,9 @@ def test_orchestrator_contract_accepts_replay_comment_as_turn_candidate() -> Non
 
     # Then: the comment has the required contract fields and becomes a turn candidate.
 
-    assert fixture_comment.platform == "bilibili"
+    assert fixture_comment.platform == "replay"
 
-    assert fixture_comment.source == "danmaku"
+    assert fixture_comment.source == "fixture"
 
     assert fixture_comment.user == "alice"
 

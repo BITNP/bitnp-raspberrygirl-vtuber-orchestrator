@@ -132,7 +132,7 @@ class _IncrementingClock:
         return value
 
 
-def test_hub_forwards_only_valid_pinned_v2_pt96_l16_packets() -> None:
+def test_hub_does_not_forward_valid_mic_rtp_without_an_onsite_bridge() -> None:
     # Given: authenticated Mic and Sound registrations for one canonical stream.
 
 
@@ -146,15 +146,15 @@ def test_hub_forwards_only_valid_pinned_v2_pt96_l16_packets() -> None:
 
     packet = _rtp_packet(payload_type=96)
 
-    # When: the first valid Mic packet arrives from its authenticated peer address.
+    # When: the first valid Mic packet arrives without an onsite bridge.
 
     forwarded = hub.route_datagram(packet, SOURCE_PEER)
 
-    # Then: the unchanged V2 PT96 L16 packet reaches Sound's authenticated IP and port.
+    # Then: the packet is not sent to Sound.
 
-    assert forwarded is True
+    assert forwarded is False
 
-    assert transport.sent == [(packet, (SINK_PEER[0], 5006))]
+    assert transport.sent == []
 
 
 def test_hub_accepts_canonical_source_and_sink_ready_events() -> None:
@@ -175,11 +175,11 @@ def test_hub_accepts_canonical_source_and_sink_ready_events() -> None:
 
     hub.register_control(_sink_ready(), SINK_PEER[0])
 
-    # Then: readiness is accepted without changing the registered forward route.
+    # Then: readiness cannot enable a raw Mic-to-Sound fallback.
 
-    assert hub.route_datagram(_rtp_packet(payload_type=96), SOURCE_PEER) is True
+    assert hub.route_datagram(_rtp_packet(payload_type=96), SOURCE_PEER) is False
 
-    assert len(transport.sent) == 1
+    assert transport.sent == []
 
 
 def test_hub_rejects_invalid_rtp() -> None:
@@ -294,7 +294,7 @@ def test_hub_removes_stream_routes_when_sound_cancels_stream() -> None:
 
     hub.register_control(_sink_registration(), SINK_PEER[0])
 
-    assert hub.route_datagram(_rtp_packet(payload_type=96), SOURCE_PEER) is True
+    assert hub.route_datagram(_rtp_packet(payload_type=96), SOURCE_PEER) is False
 
     # When: Sound reports the canonical cancelled stream state.
 
@@ -304,7 +304,7 @@ def test_hub_removes_stream_routes_when_sound_cancels_stream() -> None:
 
     assert hub.route_datagram(_rtp_packet(payload_type=96), SOURCE_PEER) is False
 
-    assert len(transport.sent) == 1
+    assert transport.sent == []
 
 
 def test_dispatch_waits_for_sound_ready_before_releasing_mic() -> None:
