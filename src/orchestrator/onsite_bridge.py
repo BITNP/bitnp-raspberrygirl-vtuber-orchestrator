@@ -66,6 +66,8 @@ class PipelineFactory(Protocol):
 
 type OnsiteOutput = Callable[[StreamKey, CancellationEpoch, bytes], Awaitable[None]]
 
+type OnsiteOutputFinished = Callable[[StreamKey, CancellationEpoch], Awaitable[None]]
+
 type OnsiteOutputAuthorization = Callable[[StreamKey, CancellationEpoch], bool]
 
 
@@ -73,6 +75,10 @@ async def _discard_output(
     stream: StreamKey, epoch: CancellationEpoch, packet: bytes
 ) -> None:
     _ = (stream, epoch, packet)
+
+
+async def _discard_finished(stream: StreamKey, epoch: CancellationEpoch) -> None:
+    _ = (stream, epoch)
 
 
 def _allow_output(stream: StreamKey, epoch: CancellationEpoch) -> bool:
@@ -152,12 +158,17 @@ class OnsiteExplainerBridge:
 
     output: OnsiteOutput = field(default=_discard_output)
 
+    output_finished: OnsiteOutputFinished = field(default=_discard_finished)
+
     authorize_output: OnsiteOutputAuthorization = field(default=_allow_output)
 
     observability: OnsiteObservability | None = None
 
     def set_output_callback(self, callback: OnsiteOutput) -> None:
         self.output = callback
+
+    def set_output_finished_callback(self, callback: OnsiteOutputFinished) -> None:
+        self.output_finished = callback
 
     def set_output_authorizer(self, callback: OnsiteOutputAuthorization) -> None:
         """Install the transport's scheduler-owned output admission callback."""
@@ -545,6 +556,10 @@ class _BridgeStages(OnsiteStages):
         self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
     ) -> None:
         await self.bridge.output(stream, epoch, packet)
+
+    @override
+    async def finish_output(self, stream: StreamKey, epoch: CancellationEpoch) -> None:
+        await self.bridge.output_finished(stream, epoch)
 
 
 def build_onsite_bridge(

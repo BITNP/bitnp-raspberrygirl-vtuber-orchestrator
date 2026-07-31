@@ -263,6 +263,17 @@ class TransportControlDispatch:
 
         return True
 
+    async def finish_generated_stream(
+        self, stream: StreamKey, epoch: int
+    ) -> None:
+        sink = self._sinks.get(stream)
+        correlation = self._hub.correlation(stream)
+        if sink is None or correlation is None:
+            return
+        await sink.connection.send(
+            _stream_end_envelope(stream, epoch, self._hub.output_ssrc(stream, epoch), correlation)
+        )
+
     @property
     def flush_failures(self) -> tuple[FlushFailure, ...]:
         return tuple(self._flush_admission.failures)
@@ -524,6 +535,16 @@ def _cancel_envelope(stream_id: str, correlation: EnvelopeCorrelation) -> str:
         correlation=correlation,
         segment_id=stream_id,
         data={"reason": "transport_cancelled"},
+    )
+
+
+def _stream_end_envelope(
+    stream: StreamKey, epoch: int, ssrc: int, correlation: EnvelopeCorrelation
+) -> str:
+    return _envelope(
+        event_type="media.stream.end",
+        correlation=correlation,
+        data={"stream_id": stream.stream_id, "cancellation_epoch": epoch, "ssrc": ssrc},
     )
 
 

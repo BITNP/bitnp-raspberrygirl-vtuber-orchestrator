@@ -61,6 +61,11 @@ class OnsiteBridge(Protocol):
     ) -> None:
         ...
 
+    def set_output_finished_callback(
+        self, callback: Callable[[StreamKey, CancellationEpoch], Awaitable[None]]
+    ) -> None:
+        ...
+
     def set_output_authorizer(
         self,
         callback: Callable[[StreamKey, CancellationEpoch], bool],
@@ -153,6 +158,13 @@ class RtpHub:
 
         if onsite_bridge is not None:
             onsite_bridge.set_output_callback(self.deliver_generated_rtp)
+
+    def set_output_finished_callback(
+        self, callback: Callable[[StreamKey, CancellationEpoch], Awaitable[None]]
+    ) -> None:
+        bridge = self._onsite_bridge
+        if bridge is not None:
+            bridge.set_output_finished_callback(callback)
 
     def attach_transport(self, transport: DatagramSender) -> None:
         self._transport = transport

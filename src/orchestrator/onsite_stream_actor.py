@@ -56,6 +56,9 @@ class OnsiteStages(Protocol):
     ) -> None:
         ...
 
+    async def finish_output(self, stream: StreamKey, epoch: CancellationEpoch) -> None:
+        ...
+
 
 _RTP_FRAME_DURATION_SECONDS = 0.020
 
@@ -414,6 +417,11 @@ class OnsiteStreamActor:
                     # and truncates the audible tail.  Cancellation cancels the
                     # chunk task, so this pacing never delays barge-in.
                     await asyncio.sleep(_RTP_FRAME_DURATION_SECONDS)
+
+            if item.chunk is None and not self._closed:
+                finisher = getattr(self.stages, "finish_output", None)
+                if finisher is not None:
+                    await finisher(self.stream, item.epoch)
 
     def _correlation(
         self, endpoint: EndpointedUtterance, epoch: CancellationEpoch
