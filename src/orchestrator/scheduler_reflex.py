@@ -188,8 +188,8 @@ class SchedulerOutputFence:
         if (
             lease is None
             or stream in self._pending
-            or turn_id != lease.turn_id
-            or segment_id != lease.segment_id
+            or (turn_id is not None and turn_id != lease.turn_id)
+            or (segment_id is not None and segment_id != lease.segment_id)
             or cancellation_epoch != lease.cancellation_epoch
         ):
             return False
