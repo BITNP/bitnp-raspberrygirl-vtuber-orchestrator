@@ -180,11 +180,12 @@ def main() -> int:
 
 
 def deployment_errors(root: Path) -> list[str]:
-    orchestrator, mic, sound = _deployment_service_paths(root)
+    orchestrator, mic, comments, sound = _deployment_service_paths(root)
 
     environments = {
         "orchestrator": _read_environment(orchestrator / ".env.example"),
         "mic": _read_environment(mic / ".env.example"),
+        "comments": _read_environment(comments / ".env.example"),
         "sound": _read_environment(sound / ".env.example"),
     }
 
@@ -195,17 +196,23 @@ def deployment_errors(root: Path) -> list[str]:
     return found
 
 
-def _deployment_service_paths(root: Path) -> tuple[Path, Path, Path]:
+def _deployment_service_paths(root: Path) -> tuple[Path, Path, Path, Path]:
     workspace_orchestrator = root / "bitnp-raspberrygirl-vtuber-orchestrator"
 
     if workspace_orchestrator.exists():
         return (
             workspace_orchestrator,
             root / "bitnp-raspberrygirl-vtuber-mic",
+            root / "bitnp-raspberrygirl-vtuber-comments",
             root / "bitnp-raspberrygirl-vtuber-sound",
         )
 
-    return root / "orchestrator", root / "mic", root / "sound"
+    return (
+        root / "orchestrator",
+        root / "mic",
+        root / "comments",
+        root / "sound",
+    )
 
 
 def _read_environment(path: Path) -> dict[str, str]:
@@ -229,6 +236,8 @@ def _environment_errors(environments: dict[str, dict[str, str]]) -> list[str]:
     orchestrator = environments["orchestrator"]
 
     mic = environments["mic"]
+
+    comments = environments["comments"]
 
     sound = environments["sound"]
 
@@ -261,6 +270,17 @@ def _environment_errors(environments: dict[str, dict[str, str]]) -> list[str]:
         found.append(
             "sound: control endpoint must be the advertised Orchestrator WSS URL"
         )
+
+    if comments.get("ORCHESTRATOR_WS_URL") != expected_url:
+        found.append(
+            "comments: control endpoint must be the advertised Orchestrator WSS URL"
+        )
+
+    found.extend(
+        f"{service}: ORCHESTRATOR_TLS_CA_PATH must name a PEM CA bundle"
+        for service, values in environments.items()
+        if values.get("ORCHESTRATOR_TLS_CA_PATH", "") == ""
+    )
 
     if (
         mic.get("ORCHESTRATOR_RTP_HOST") != host

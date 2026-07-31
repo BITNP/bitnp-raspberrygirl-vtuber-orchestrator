@@ -24,6 +24,10 @@ MISMATCHED_IDENTITIES_DEPLOYMENT: Final = (
     ROOT / "tests" / "fixtures" / "deployment" / "mismatched_identities"
 )
 
+MISSING_CA_PATH_DEPLOYMENT: Final = (
+    ROOT / "tests" / "fixtures" / "deployment" / "missing_ca_path"
+)
+
 
 def test_deployment_validator_accepts_repository_artifacts(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -78,6 +82,24 @@ def test_deployment_validator_rejects_mismatched_stream_identity(
     assert exit_code == 1
 
     assert "stream IDs differ" in output
+
+
+def test_deployment_validator_rejects_missing_ca_bundle_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Given: a deployment fixture whose service environment examples omit the CA bundle.
+
+    # When: the deployment acceptance validator scans the fixture.
+
+    exit_code, output = _run(
+        monkeypatch, capsys, "--deployment-root", str(MISSING_CA_PATH_DEPLOYMENT)
+    )
+
+    # Then: every service missing the shared CA bundle contract is rejected.
+
+    assert exit_code == 1
+
+    assert "ORCHESTRATOR_TLS_CA_PATH must name a PEM CA bundle" in output
 
 
 def test_deployment_validator_accepts_sanitized_fixture(

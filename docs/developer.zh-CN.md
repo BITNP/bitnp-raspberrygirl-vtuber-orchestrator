@@ -77,7 +77,7 @@ bash scripts/verify_workspace.sh --sibling-root ..
 
 ## 部署
 
-`orchestrator-transport` 是中心进程，监听认证 WSS 控制连接和 UDP RTP。生产环境使用 `/control` WSS endpoint、`TRUSTED_LAN_TOKEN`、仓库外预配的 TLS 证书及私有 LAN 网络规则。Mic 与 Sound 使用同一个 session ID 和 stream ID，且只连接 Orchestrator。
+`orchestrator-transport` 是中心进程，监听认证 WSS 控制连接和 UDP RTP。生产环境使用 `/control` WSS endpoint、`TRUSTED_LAN_TOKEN`、仓库外预配的 TLS 证书、一个只读 PEM CA bundle 及私有 LAN 网络规则。Orchestrator、Mic、Sound 和 Comments 都设置 `ORCHESTRATOR_TLS_CA_PATH` 指向该 bundle；它可包含内部根证书和中间证书。Orchestrator 用它校验自托管 ASR、LLM、TTS 的 HTTPS endpoint，Mic、Sound、Comments 用它校验 Orchestrator WSS 证书。主机系统信任库可作为已安装相同 CA 时的替代，但不是部署契约。Mic 与 Sound 使用同一个 session ID 和 stream ID，且只连接 Orchestrator。具体挂载和环境文件见 [部署资产](../deploy/README.md)。
 
 现场音频链路的启动顺序固定为：
 
@@ -87,4 +87,4 @@ uv run sound-receive
 uv run mic-stream
 ```
 
-该链路把 Mic L16 RTP 送入 Orchestrator，经过 ASR、LLM 和 TTS 后将生成的 L16 RTP 交给 Sound。它不会转发原始 Mic RTP，Frontend 不参与该音频部署。systemd 环境文件和主机操作说明见 [部署资产](../deploy/README.md)。
+该链路把 Mic L16 RTP 送入 Orchestrator，经过 ASR、LLM 和 TTS 后将生成的 L16 RTP 交给 Sound。它不会转发原始 Mic RTP，Frontend 不参与该音频部署。
