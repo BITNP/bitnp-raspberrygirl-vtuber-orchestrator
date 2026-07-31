@@ -301,6 +301,11 @@ class OnsiteStreamActor:
             if item.epoch == self.epoch and event is not None:
                 correlation = self._correlation(item.endpoint, item.epoch)
 
+                authorizer = getattr(self.stages, "authorize_output", None)
+
+                if authorizer is not None and not authorizer(self.stream, item.epoch):
+                    continue
+
                 self._record_correlation("asr_final", correlation, latency_ms)
 
                 self._append_answer(_AnswerItem(item.epoch, event, correlation))

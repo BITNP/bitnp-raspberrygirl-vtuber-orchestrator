@@ -1,15 +1,16 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import dataclass, field
 from http.client import HTTPConnection, HTTPSConnection
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, override
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
 
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
@@ -305,7 +306,7 @@ class VllmOmniTTSAdapter:
                 "input": text,
                 "voice": voice,
                 "task_type": "Base",
-                "ref_audio": ref_audio,
+                "ref_audio": _portable_reference_audio(ref_audio),
                 "ref_text": ref_text,
             },
         )
@@ -352,6 +353,29 @@ def _headers(api_key: str | None, content_type: str) -> dict[str, str]:
         headers["Authorization"] = f"Bearer {api_key.strip()}"
 
     return headers
+
+
+def _portable_reference_audio(ref_audio: str) -> str:
+    stripped = ref_audio.strip()
+
+    if stripped.startswith("data:"):
+        return stripped
+
+    parsed = urlsplit(stripped)
+
+    if parsed.scheme == "file":
+        return _audio_data_url(Path(unquote(parsed.path)))
+
+    if parsed.scheme == "" and Path(stripped).is_absolute():
+        return _audio_data_url(Path(stripped))
+
+    return ref_audio
+
+
+def _audio_data_url(path: Path) -> str:
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+
+    return f"data:audio/wav;base64,{encoded}"
 
 
 def _normalize_asr_sse(

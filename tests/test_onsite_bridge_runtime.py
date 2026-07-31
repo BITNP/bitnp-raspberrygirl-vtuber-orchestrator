@@ -9,6 +9,7 @@ import wave
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from orchestrator.ids import ConnectionId
 from orchestrator.llm import MockLLMAdapter
 from orchestrator.media_adapters import SynthesizedAudio
 from orchestrator.modes import AdaptiveAgentPolicy
@@ -228,6 +229,69 @@ async def _close_before_release_proof() -> None:
     assert transport.sent == []
 
 
+def test_mic_source_disconnect_finalizes_active_streaming_utterance() -> None:
+
+    asyncio.run(_source_disconnect_finalizes_proof())
+
+
+async def _source_disconnect_finalizes_proof() -> None:
+    # Given: a non-legacy onsite route with one voiced RTP frame below forced endpoint.
+
+
+    transport = _Datagrams()
+
+    listener = _DatagramListener(transport)
+
+    asr = _DelayedAsr()
+
+    runtime = TransportRuntime(
+        _loopback_config(),
+        datagram_listener=listener.listen,
+        control_listener=_control_listener,
+        onsite_bridge=_bridge(asr, legacy_keyed=False),
+    )
+
+    await runtime.start()
+
+    assert listener.hub is not None
+
+    mic_owner = ConnectionId("mic-control")
+
+    listener.hub.register_control(_source_registration(), "127.0.0.1", mic_owner)
+
+    listener.hub.register_control(_sink_registration(), "127.0.0.1")
+
+    assert runtime.route_datagram(_rtp_packet(), ("127.0.0.1", 41_000)) is False
+
+    await runtime.wait_for_onsite_jobs()
+
+    # When: the bounded Mic stream closes before silence or the 15 s forced endpoint.
+
+    listener.hub.remove_connection(mic_owner)
+
+    try:
+        asr_started = await asyncio.to_thread(asr.started.wait, 1.0)
+
+        assert asr_started
+
+        asr.release.set()
+
+        await runtime.wait_for_onsite_jobs()
+
+    finally:
+        asr.release.set()
+
+        await runtime.close()
+
+    # Then: disconnect finalization reached ASR and generated output was not cancelled.
+
+    assert asr.completed.is_set()
+
+    assert asr.cancelled.is_set() is False
+
+    assert len(transport.sent) == 1
+
+
 def _source_registration() -> str:
 
     return _registration(
@@ -288,7 +352,9 @@ def _rtp_packet() -> bytes:
     return b"\x80\x60\x00\x01\x00\x00\x00\x01\x10\x20\x30\x40" + (b"\x7f\xff" * 320)
 
 
-def _bridge(asr: _DelayedAsr) -> OnsiteExplainerBridge:
+def _bridge(asr: _DelayedAsr, *, legacy_keyed: bool = True) -> OnsiteExplainerBridge:
+
+    legacy_frame_limit = 1 if legacy_keyed else None
 
     return OnsiteExplainerBridge(
         asr=asr,
@@ -305,7 +371,7 @@ def _bridge(asr: _DelayedAsr) -> OnsiteExplainerBridge:
         ref_audio="file:///voice.wav",
         ref_text="reference",
         frames_per_utterance=1,
-        legacy_keyed_frames_per_utterance=1,
+        legacy_keyed_frames_per_utterance=legacy_frame_limit,
     )
 
 

@@ -8,6 +8,7 @@ import threading
 import wave
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, override
 
 from sound.receive import ReceiveRuntime
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
     from sound.rtp_playback import L16PlaybackFrame
 
 
-_Mode = Literal["success", "asr_failure"]
+_Mode = Literal["success", "asr_failure", "qwen_24k"]
 
 _SAMPLE_RATE: Final = 16_000
 
@@ -45,6 +46,8 @@ class _FakeProvider:
     def __post_init__(self) -> None:
 
         _ProviderHandler.mode = self.mode
+
+        _ProviderHandler.speech_bodies = []
 
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _ProviderHandler)
 
@@ -69,9 +72,11 @@ class _ProviderHandler(BaseHTTPRequestHandler):
 
     mode: ClassVar[_Mode]
 
+    speech_bodies: ClassVar[list[bytes]] = []
+
     def do_POST(self) -> None:
 
-        _ = self.rfile.read(int(self.headers["content-length"]))
+        body = self.rfile.read(int(self.headers["content-length"]))
 
         if self.path.endswith("/audio/transcriptions") and self.mode == "asr_failure":
             self.send_response(503)
@@ -94,6 +99,8 @@ class _ProviderHandler(BaseHTTPRequestHandler):
                 )
 
             case path if path.endswith("/audio/speech"):
+                self.speech_bodies.append(body)
+
                 self._wav()
 
             case _:
@@ -128,7 +135,11 @@ class _ProviderHandler(BaseHTTPRequestHandler):
 
     def _wav(self) -> None:
 
-        data = _wav(b"\x10\x20" * 320)
+        if self.mode == "qwen_24k":
+            data = _wav(b"\x10\x20" * 480, sample_rate=24_000)
+
+        else:
+            data = _wav(b"\x10\x20" * 320)
 
         self.send_response(200)
 
@@ -333,7 +344,38 @@ def test_fake_local_provider_non_success_drops_mic_without_raw_fallback() -> Non
     assert generated is None
 
 
-def _bridge(endpoint: str) -> OnsiteExplainerBridge:
+def test_qwen_shaped_tts_response_becomes_canonical_generated_rtp(
+    tmp_path: Path,
+) -> None:
+    # Given: the local Qwen server requires portable reference audio and emits 24 kHz WAV.
+
+
+    reference = tmp_path / "voice.wav"
+    _ = reference.write_bytes(b"RIFFvoice")
+
+    with _FakeProvider("qwen_24k") as endpoint:
+        bridge = _bridge(endpoint, ref_audio=str(reference))
+
+        mic_packet = _rtp(b"\x01\x02" * 320)
+
+        # When: Mic RTP reaches the real onsite ASR, LLM, TTS, and RTP stages.
+
+        generated = asyncio.run(bridge.ingest_mic_rtp(mic_packet))
+
+        speech_bodies = tuple(_ProviderHandler.speech_bodies)
+
+    # Then: the request is Qwen-compatible and Sound-facing RTP remains canonical L16.
+
+    assert isinstance(generated, tuple)
+    assert len(speech_bodies) == 1
+    assert b'"ref_audio": "data:audio/wav;base64,' in speech_bodies[0]
+    assert generated[0][0:2] == b"\x80\x60"
+    assert len(generated[0][12:]) == 640
+    assert generated[0][12:] == b"\x20\x10" * 320
+    assert generated[0] != mic_packet
+
+
+def _bridge(endpoint: str, *, ref_audio: str = "data:audio/wav;base64,UklGRg==") -> OnsiteExplainerBridge:
 
     adapters = PipelineAdapters(
         mode_policy=AdaptiveAgentPolicy(),
@@ -354,7 +396,7 @@ def _bridge(endpoint: str) -> OnsiteExplainerBridge:
             config=PipelineConfig(1, "turn-onsite", "segment-onsite"),
         ),
         voice="raspberry",
-        ref_audio="file:///voice.wav",
+        ref_audio=ref_audio,
         ref_text="reference",
         frames_per_utterance=1,
     )
@@ -395,7 +437,7 @@ def _rtp(payload: bytes) -> bytes:
     return b"\x80\x60\x00\x01\x00\x00\x00\x01\x10\x20\x30\x40" + payload
 
 
-def _wav(payload: bytes) -> bytes:
+def _wav(payload: bytes, *, sample_rate: int = _SAMPLE_RATE) -> bytes:
 
     output = io.BytesIO()
 
@@ -404,7 +446,7 @@ def _wav(payload: bytes) -> bytes:
 
         audio.setsampwidth(2)
 
-        audio.setframerate(_SAMPLE_RATE)
+        audio.setframerate(sample_rate)
 
         audio.writeframes(payload)
 

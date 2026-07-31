@@ -78,6 +78,11 @@ class FakeOnsiteExplainerBridge:
 
         self._output = callback
 
+    def set_output_authorizer(
+        self, callback: Callable[[StreamKey, CancellationEpoch], bool]
+    ) -> None:
+        _ = callback
+
     def submit_mic_rtp(
         self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
     ) -> None:
@@ -156,6 +161,10 @@ class FakeOnsiteExplainerBridge:
 
         for task in tuple(self._tasks):
             _ = task.cancel()
+
+    def disconnect_stream(self, stream: StreamKey) -> None:
+
+        _ = stream
 
     async def wait_quiescent(self) -> None:
 

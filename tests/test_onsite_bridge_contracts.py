@@ -38,7 +38,50 @@ def test_l16_from_wav_converts_pcm16_little_endian_to_network_samples() -> None:
     assert network_l16 == b"\x12\x34\xab\xcd"
 
 
-def _wav(payload: bytes) -> bytes:
+def test_l16_from_wav_converts_qwen_24khz_pcm16_to_16khz_l16() -> None:
+    # Given: Qwen TTS returns mono PCM16 WAV at 24 kHz.
+
+
+    response = SynthesizedAudio(
+        _wav(
+            b"\x01\x00"
+            b"\x02\x00"
+            b"\x03\x00"
+            b"\x04\x00"
+            b"\x05\x00"
+            b"\x06\x00",
+            sample_rate=24_000,
+        ),
+        "audio/wav",
+    )
+
+    # When: the response crosses into canonical RTP L16 payload bytes.
+
+    network_l16 = l16_from_wav(response)
+
+    # Then: complete 24 kHz sample triplets become deterministic 16 kHz samples.
+
+    assert network_l16 == b"\x00\x01\x00\x02\x00\x04\x00\x05"
+
+
+def test_l16_from_wav_rejects_unsupported_sample_rate() -> None:
+    # Given: a provider returns mono PCM16 WAV at an unsupported rate.
+
+
+    response = SynthesizedAudio(_wav(b"\x01\x00", sample_rate=22_050), "audio/wav")
+
+    # When / Then: Orchestrator refuses media it cannot make canonical.
+
+    try:
+        _ = l16_from_wav(response)
+    except ValueError as error:
+        assert str(error) == "onsite TTS WAV must become 16 kHz mono PCM16"
+
+    else:
+        raise AssertionError("unsupported TTS sample rate was accepted")
+
+
+def _wav(payload: bytes, *, sample_rate: int = 16_000) -> bytes:
 
     output = io.BytesIO()
 
@@ -47,7 +90,7 @@ def _wav(payload: bytes) -> bytes:
 
         audio.setsampwidth(2)
 
-        audio.setframerate(16_000)
+        audio.setframerate(sample_rate)
 
         audio.writeframes(payload)
 

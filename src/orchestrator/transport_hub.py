@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Protocol, final, override
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
     FlushAcknowledgement,
+    GeneratedSsrc,
+    SegmentId,
     StreamFlush,
     StreamKey,
 )
@@ -59,6 +61,11 @@ class OnsiteBridge(Protocol):
     ) -> None:
         ...
 
+    def set_output_authorizer(
+        self, callback: Callable[[StreamKey, CancellationEpoch], bool]
+    ) -> None:
+        ...
+
     def submit_mic_rtp(
         self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
     ) -> None:
@@ -67,6 +74,9 @@ class OnsiteBridge(Protocol):
     def invalidate_stream(
         self, stream: StreamKey, next_epoch: CancellationEpoch
     ) -> None:
+        ...
+
+    def disconnect_stream(self, stream: StreamKey) -> None:
         ...
 
     async def wait_quiescent(self) -> None:
@@ -151,6 +161,34 @@ class RtpHub:
 
     def set_output_fence(self, output_fence: SchedulerOutputFence) -> None:
         self._output_fence = output_fence
+
+        bridge = self._onsite_bridge
+
+        if bridge is not None:
+            bridge.set_output_authorizer(self.authorize_onsite_output)
+
+    def authorize_onsite_output(
+        self, stream: StreamKey, epoch: CancellationEpoch
+    ) -> bool:
+        """Activate a scheduler lease for a finalized onsite utterance."""
+        output_fence = self._output_fence
+
+        if output_fence is None:
+            return True
+
+        correlation = self._correlations.get(stream)
+
+        if correlation is None:
+            return False
+
+        lease = output_fence.activate(
+            stream=stream,
+            segment_id=SegmentId(f"onsite-{stream.stream_id}-{int(epoch)}"),
+            target_generated_ssrc=GeneratedSsrc(generated_ssrc(stream, epoch)),
+            correlation=correlation,
+        )
+
+        return lease.cancellation_epoch == epoch
 
     @property
     def route_ready(self) -> bool:
@@ -388,7 +426,8 @@ class RtpHub:
         self._remove_sink(stream)
 
     def _remove_source(self, stream: StreamKey) -> None:
-        self._invalidate_stream(stream)
+        if self._onsite_bridge is not None:
+            self._onsite_bridge.disconnect_stream(stream)
 
         _ = self._pending_sources.pop(stream, None)
 

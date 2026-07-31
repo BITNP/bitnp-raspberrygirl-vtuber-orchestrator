@@ -66,11 +66,19 @@ class PipelineFactory(Protocol):
 
 type OnsiteOutput = Callable[[StreamKey, CancellationEpoch, bytes], Awaitable[None]]
 
+type OnsiteOutputAuthorization = Callable[[StreamKey, CancellationEpoch], bool]
+
 
 async def _discard_output(
     stream: StreamKey, epoch: CancellationEpoch, packet: bytes
 ) -> None:
     _ = (stream, epoch, packet)
+
+
+def _allow_output(stream: StreamKey, epoch: CancellationEpoch) -> bool:
+    _ = (stream, epoch)
+
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,10 +152,16 @@ class OnsiteExplainerBridge:
 
     output: OnsiteOutput = field(default=_discard_output)
 
+    authorize_output: OnsiteOutputAuthorization = field(default=_allow_output)
+
     observability: OnsiteObservability | None = None
 
     def set_output_callback(self, callback: OnsiteOutput) -> None:
         self.output = callback
+
+    def set_output_authorizer(self, callback: OnsiteOutputAuthorization) -> None:
+        """Install the transport's scheduler-owned output admission callback."""
+        self.authorize_output = callback
 
     def set_observability(self, observability: OnsiteObservability) -> None:
         self.observability = observability
@@ -173,6 +187,14 @@ class OnsiteExplainerBridge:
         if endpoint is None:
             return
 
+        self._submit_endpoint(stream, endpoint, epoch)
+
+    def _submit_endpoint(
+        self,
+        stream: StreamKey,
+        endpoint: EndpointedUtterance,
+        epoch: CancellationEpoch,
+    ) -> None:
         actor = self._stream_actors.get(stream)
 
         if actor is None:
@@ -256,15 +278,13 @@ class OnsiteExplainerBridge:
             )
 
     def disconnect_stream(self, stream: StreamKey) -> None:
-        actor = self._stream_actors.get(stream)
+        endpointer = self._input_actors.pop(stream, None)
 
-        next_epoch = (
-            CancellationEpoch(0)
-            if actor is None
-            else CancellationEpoch(int(actor.epoch) + 1)
-        )
+        if endpointer is not None:
+            endpoint = endpointer.disconnect()
 
-        self.invalidate_stream(stream, next_epoch)
+            if endpoint is not None:
+                self._submit_endpoint(stream, endpoint, endpoint.cancellation_epoch)
 
         _ = self._legacy_keyed_frames.pop(stream, None)
 
@@ -506,6 +526,9 @@ class _BridgeStages(OnsiteStages):
         self, event: ASRAudienceEvent, cancellation: CancellationToken
     ) -> TurnResult | None:
         return self.bridge.answer(self.pipeline, event, cancellation)
+
+    def authorize_output(self, stream: StreamKey, epoch: CancellationEpoch) -> bool:
+        return self.bridge.authorize_output(stream, epoch)
 
     @override
     def synthesize(

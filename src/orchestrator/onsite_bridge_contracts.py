@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 _SAMPLE_RATE: Final = 16_000
 
+_QWEN_SAMPLE_RATE: Final = 24_000
+
 _PCM16_BYTES: Final = 2
 
 
@@ -41,7 +43,7 @@ class OnsiteBridgeMediaError(ValueError):
                 return "onsite TTS must return audio/wav"
 
             case "wave_format":
-                return "onsite TTS WAV must be 16 kHz mono PCM16"
+                return "onsite TTS WAV must become 16 kHz mono PCM16"
 
 
 class AsrAdapter(Protocol):
@@ -100,12 +102,21 @@ def l16_from_wav(response: SynthesizedAudio) -> bytes:
         if (
             audio.getnchannels() != 1
             or audio.getsampwidth() != _PCM16_BYTES
-            or audio.getframerate() != _SAMPLE_RATE
             or audio.getcomptype() != "NONE"
         ):
             raise OnsiteBridgeMediaError(reason="wave_format")
 
-        return _swap_pcm16_byte_order(audio.readframes(audio.getnframes()))
+        payload = audio.readframes(audio.getnframes())
+
+        match audio.getframerate():
+            case 16_000:
+                return _swap_pcm16_byte_order(payload)
+
+            case 24_000:
+                return _swap_pcm16_byte_order(_resample_24000_to_16000(payload))
+
+            case _:
+                raise OnsiteBridgeMediaError(reason="wave_format")
 
 
 def pad_l16_frames(audio: bytes) -> bytes:
@@ -127,3 +138,41 @@ def _swap_pcm16_byte_order(payload: bytes) -> bytes:
     samples = range(0, len(payload), _PCM16_BYTES)
 
     return b"".join(payload[offset : offset + _PCM16_BYTES][::-1] for offset in samples)
+
+
+def _resample_24000_to_16000(payload: bytes) -> bytes:
+    input_samples = len(payload) // _PCM16_BYTES
+
+    output_samples = input_samples * _SAMPLE_RATE // _QWEN_SAMPLE_RATE
+
+    return b"".join(
+        _sample_to_pcm16le(_interpolated_sample(payload, output_index))
+        for output_index in range(output_samples)
+    )
+
+
+def _interpolated_sample(payload: bytes, output_index: int) -> int:
+    source_numerator = output_index * _QWEN_SAMPLE_RATE
+
+    source_index = source_numerator // _SAMPLE_RATE
+
+    remainder = source_numerator % _SAMPLE_RATE
+
+    current = _pcm16le_sample(payload, source_index)
+
+    if remainder == 0:
+        return current
+
+    following = _pcm16le_sample(payload, source_index + 1)
+
+    return current + (following - current) * remainder // _SAMPLE_RATE
+
+
+def _pcm16le_sample(payload: bytes, sample_index: int) -> int:
+    offset = sample_index * _PCM16_BYTES
+
+    return int.from_bytes(payload[offset : offset + _PCM16_BYTES], "little", signed=True)
+
+
+def _sample_to_pcm16le(sample: int) -> bytes:
+    return sample.to_bytes(_PCM16_BYTES, "little", signed=True)

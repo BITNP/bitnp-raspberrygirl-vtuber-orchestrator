@@ -421,6 +421,12 @@ async def _runtime_composition_proof() -> None:
 
     hub = RtpHub(transport, onsite_bridge=_bridge("Explain BitNet", 19_840))
 
+    scheduler = SessionScheduler(
+        session_id=SessionId(SESSION_ID), turn_id_prefix="turn-onsite-runtime"
+    )
+
+    hub.set_output_fence(SchedulerOutputFence(scheduler))
+
     hub.register_control(
         _registration("media.rtp.source.register", "mic", _source()), MIC_PEER[0]
     )
