@@ -2,6 +2,7 @@
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, Literal, NewType, override
 
 DEFAULT_SERVICE_NAME: Final = "orchestrator"
@@ -43,6 +44,8 @@ TTS_MODEL_KEY: Final = "ORCHESTRATOR_TTS_MODEL"
 TTS_API_KEY_KEY: Final = "ORCHESTRATOR_TTS_API_KEY"
 
 TRUSTED_LAN_TOKEN_KEY: Final = "TRUSTED_LAN_TOKEN"  # noqa: S105 - env key name only.
+
+TLS_CA_PATH_KEY: Final = "ORCHESTRATOR_TLS_CA_PATH"
 
 SERVICE_NAME_KEY: Final = "ORCHESTRATOR_SERVICE_NAME"
 
@@ -108,6 +111,8 @@ class OrchestratorConfigInput:
 
     trusted_lan_token: TrustedLanToken | None = None
 
+    tls_ca_path: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class OrchestratorConfig:
@@ -145,6 +150,8 @@ class OrchestratorConfig:
     tts_api_key: str | None = None
 
     trusted_lan_token: TrustedLanToken | None = None
+
+    tls_ca_path: Path | None = None
 
     @classmethod
     def parse(cls, config: OrchestratorConfigInput) -> "OrchestratorConfig":
@@ -190,6 +197,7 @@ class OrchestratorConfig:
             tts_model=_normalize_optional(config.tts_model),
             tts_api_key=_normalize_optional(config.tts_api_key),
             trusted_lan_token=config.trusted_lan_token,
+            tls_ca_path=_parse_optional_path(config.tls_ca_path),
         )
 
 
@@ -229,6 +237,7 @@ def load_config_from_env(env: Mapping[str, str] | None = None) -> OrchestratorCo
             tts_model=source.get(TTS_MODEL_KEY),
             tts_api_key=source.get(TTS_API_KEY_KEY),
             trusted_lan_token=_parse_optional_token(source.get(TRUSTED_LAN_TOKEN_KEY)),
+            tls_ca_path=source.get(TLS_CA_PATH_KEY),
         )
     )
 
@@ -295,6 +304,12 @@ def _normalize_optional(value: str | None) -> str | None:
         return None
 
     return value.strip()
+
+
+def _parse_optional_path(raw_path: str | None) -> Path | None:
+    normalized_path = _normalize_optional(raw_path)
+
+    return None if normalized_path is None else Path(normalized_path)
 
 
 def _parse_optional_secret(raw_secret: str | None) -> LlmApiKey | None:
