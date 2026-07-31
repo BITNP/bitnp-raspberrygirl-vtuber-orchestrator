@@ -393,6 +393,9 @@ class OnsiteStreamActor:
         return cancellation
 
     async def _run_chunks(self) -> None:
+        loop = asyncio.get_running_loop()
+        next_packet_deadline = loop.time()
+
         while self._chunks:
             item = self._chunks.popleft()
 
@@ -407,6 +410,13 @@ class OnsiteStreamActor:
 
             for packet in packets:
                 if not self._closed:
+                    # Anchor every frame to one monotonic media timeline.  A
+                    # relative 20 ms sleep after each send includes Python and
+                    # UDP handling time, so a long answer slowly runs behind
+                    # the 16 kHz playback clock and drains Sound's reserve.
+                    wait_seconds = next_packet_deadline - loop.time()
+                    if wait_seconds > 0:
+                        await asyncio.sleep(wait_seconds)
                     await self.stages.output(self.stream, item.epoch, packet)
 
                     self._record_correlation("rtp_egress", item.correlation, None)
@@ -416,7 +426,7 @@ class OnsiteStreamActor:
                     # event-loop turn overflows Sound's socket/playback queues
                     # and truncates the audible tail.  Cancellation cancels the
                     # chunk task, so this pacing never delays barge-in.
-                    await asyncio.sleep(_RTP_FRAME_DURATION_SECONDS)
+                    next_packet_deadline += _RTP_FRAME_DURATION_SECONDS
 
             if item.chunk is None and not self._closed:
                 finisher = getattr(self.stages, "finish_output", None)
