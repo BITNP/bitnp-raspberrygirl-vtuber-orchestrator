@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import wave
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -120,6 +121,9 @@ _START_TIMESTAMP = 96_000
 
 _RTP_HEADER_PREFIX = bytes((RTP_V2_HEADER, RTP_PAYLOAD_TYPE))
 
+_LOGGER = logging.getLogger(__name__)
+_RTP_DIAGNOSTIC_INTERVAL = 100
+
 
 @dataclass(slots=True)
 class OnsiteExplainerBridge:
@@ -149,6 +153,8 @@ class OnsiteExplainerBridge:
     _legacy_keyed_frames: dict[StreamKey, list[bytes]] = field(default_factory=dict)
 
     _legacy_keyed_sequences: dict[StreamKey, int] = field(default_factory=dict)
+
+    _rtp_diagnostic_counts: dict[StreamKey, int] = field(default_factory=dict)
 
     _processing_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -180,6 +186,15 @@ class OnsiteExplainerBridge:
     def submit_mic_rtp(
         self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
     ) -> None:
+        frame_count = self._rtp_diagnostic_counts.get(stream, 0) + 1
+        self._rtp_diagnostic_counts[stream] = frame_count
+        if frame_count % _RTP_DIAGNOSTIC_INTERVAL == 0:
+            _LOGGER.warning(
+                "onsite_rtp_ingress stream=%s frames=%d epoch=%d",
+                stream.stream_id,
+                frame_count,
+                epoch,
+            )
         endpointer = self._input_actors.setdefault(stream, StreamEndpointer(stream))
 
         endpoint: EndpointedUtterance | None = None
@@ -198,6 +213,13 @@ class OnsiteExplainerBridge:
         if endpoint is None:
             return
 
+        _LOGGER.warning(
+            "onsite_endpoint stream=%s reason=%s pcm_bytes=%d epoch=%d",
+            stream.stream_id,
+            endpoint.reason,
+            len(endpoint.payload),
+            epoch,
+        )
         self._submit_endpoint(stream, endpoint, epoch)
 
     def _submit_endpoint(
@@ -413,7 +435,7 @@ class OnsiteExplainerBridge:
             filename = "onsite-l16.pcm"
 
         try:
-            return self.asr.transcribe(
+            event = self.asr.transcribe(
                 audio=audio,
                 filename=filename,
                 received_at_ms=sequence * 20,
@@ -421,9 +443,19 @@ class OnsiteExplainerBridge:
                 seq=sequence,
                 cancellation=cancellation,
             )
-
         except (MediaAdapterConfigError, OSError):
+            _LOGGER.exception("onsite_asr_failed segment=%s", segment_id)
             return None
+        else:
+            if event is None:
+                _LOGGER.warning("onsite_asr_empty segment=%s", segment_id)
+                return None
+            _LOGGER.warning(
+                "onsite_asr_final segment=%s chars=%d",
+                event.segment_id,
+                len(event.text),
+            )
+            return event
 
     def answer(
         self,
@@ -435,10 +467,18 @@ class OnsiteExplainerBridge:
             return None
 
         try:
-            return pipeline.process_next_turn(cancellation)
-
+            turn = pipeline.process_next_turn(cancellation)
         except (AdapterConfigError, OSError):
+            _LOGGER.exception("onsite_llm_failed")
             return None
+        else:
+            if turn is not None:
+                _LOGGER.warning(
+                    "onsite_llm_final turn=%s chars=%d",
+                    turn.turn_id,
+                    len(turn.answer_text),
+                )
+            return turn
 
     def synthesize(
         self, text: str, cancellation: CancellationToken
@@ -467,10 +507,15 @@ class OnsiteExplainerBridge:
                 l16[offset : offset + 2][::-1] for offset in range(0, len(l16), 2)
             )
 
-            return (Pcm16leChunk(pcm16le),)
-
+            chunks = (Pcm16leChunk(pcm16le),)
         except (MediaAdapterConfigError, OnsiteBridgeMediaError, OSError, wave.Error):
+            _LOGGER.exception("onsite_tts_failed")
             return None
+        else:
+            _LOGGER.warning(
+                "onsite_tts_complete pcm_bytes=%d", len(pcm16le)
+            )
+            return chunks
 
     def complete(
         self,
