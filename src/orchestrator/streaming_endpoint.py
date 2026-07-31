@@ -266,10 +266,13 @@ class StreamEndpointer:
         return (expected - sequence) % 65_536 <= _SEQUENCE_HALF_RANGE
 
     def _is_speech(self, payload: bytes) -> bool:
-        samples = range(0, L16_FRAME_BYTES, 2)
-
-        return any(
+        # A single peak is not speech: normal microphone noise and keyboard
+        # taps can exceed a sample threshold.  Gate on a whole 20 ms frame's
+        # mean absolute amplitude so real trailing silence reaches the 600 ms
+        # endpoint instead of being forced into fifteen-second ASR batches.
+        total_amplitude = sum(
             abs(int.from_bytes(payload[offset : offset + 2], "big", signed=True))
-            >= _SPEECH_ENERGY
-            for offset in samples
+            for offset in range(0, L16_FRAME_BYTES, 2)
         )
+
+        return total_amplitude >= _SPEECH_ENERGY * _FRAME_SAMPLES

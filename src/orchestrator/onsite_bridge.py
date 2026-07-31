@@ -35,6 +35,7 @@ from orchestrator.pipeline_contracts import (
     PipelineConfig,
     TurnResult,
 )
+from orchestrator.provider_streaming import ProviderDeadlines
 from orchestrator.retrieval import RetrievalFixtureProvider
 from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
 from orchestrator.streaming_endpoint import (
@@ -643,6 +644,11 @@ def build_onsite_bridge(
             config.llm_endpoint,
             config.llm_model,
             config.llm_api_key,
+            # Remote reasoning can legitimately take longer than the short
+            # interactive default; a deadline expiry must not masquerade as a
+            # TTS failure after ASR has already accepted the utterance.
+            timeout_seconds=120.0,
+            deadlines=ProviderDeadlines(read_seconds=60.0, total_seconds=120.0),
             ca_path=config.tls_ca_path,
         ),
         retrieval=RetrievalFixtureProvider(()),

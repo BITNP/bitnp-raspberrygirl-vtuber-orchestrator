@@ -73,6 +73,27 @@ def test_endpointer_forces_a_final_after_fifteen_seconds_of_speech() -> None:
     assert len(final.payload) == 640 * 750
 
 
+def test_endpointer_rejects_an_isolated_noise_peak_as_speech() -> None:
+    # Given: a quiet canonical frame containing one loud click.
+
+
+    actor = StreamEndpointer(StreamKey("session-a", "stream-a"))
+    payload = bytearray(640)
+    payload[:2] = (10_000).to_bytes(2, "big", signed=True)
+    packet = b"\x80\x60" + (1).to_bytes(2, "big") + (320).to_bytes(4, "big")
+    packet += b"\x12\x34\x56\x78" + bytes(payload)
+
+    # When: the click reaches the endpointer.
+
+
+    events = actor.push(packet)
+
+    # Then: it remains pre-roll rather than opening an endless speech turn.
+
+
+    assert events == ()
+
+
 def test_endpointer_drops_duplicate_and_accepts_one_frame_reorder() -> None:
     # Given: a stream with a one-frame reordering window.
 

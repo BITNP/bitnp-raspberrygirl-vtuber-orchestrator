@@ -154,7 +154,9 @@ def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(
         api_key: str,
         *,
         ca_path: Path | None,
+        **kwargs: object,
     ) -> OpenAICompatibleLLMRuntimeAdapter:
+        _ = kwargs
         llm_ca_paths.append(ca_path)
         return OpenAICompatibleLLMRuntimeAdapter(
             endpoint,
