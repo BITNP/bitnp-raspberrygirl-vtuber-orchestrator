@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
+    import ssl
     from collections.abc import Callable
 
     from orchestrator.json_boundary import JsonValue
@@ -140,11 +141,15 @@ class _SoundConnector:
 
     control: _SoundControl
 
-    async def connect(self, url: str, headers: dict[str, str]) -> _SoundControl:
+    async def connect(
+        self, url: str, headers: dict[str, str], ssl_context: ssl.SSLContext | None
+    ) -> _SoundControl:
 
         assert url == "wss://orchestrator.example.test/control"
 
         assert headers == {}
+
+        assert ssl_context is None
 
         return self.control
 

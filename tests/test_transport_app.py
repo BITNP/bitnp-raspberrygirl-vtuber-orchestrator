@@ -67,7 +67,7 @@ def _onsite_config(_env: Mapping[str, str]) -> _Config:
 
     return _Config(
         session_id_prefix="test",
-        asr_provider="openai_compatible",
+        asr_provider="funasr",
         llm_provider="openai_compatible",
         tts_provider="vllm_omni",
     )
@@ -181,7 +181,7 @@ def test_transport_skips_onsite_bridge_for_mock_provider_config(
     assert runtime.observability_set is False
 
 
-def test_transport_enables_onsite_bridge_for_real_provider_config(
+def test_transport_enables_onsite_bridge_for_native_funasr_provider_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: the real ASR/LLM/TTS provider combination for onsite spoken dialogue.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -16,6 +17,7 @@ from orchestrator.provider_streaming import ProviderResponseError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 
 @dataclass(slots=True)
@@ -79,6 +81,70 @@ def _connect(
         return connection
 
     return factory
+
+
+@pytest.fixture
+def ca_path(tmp_path: Path) -> Path:
+    certificate = ssl.create_default_context().get_ca_certs(binary_form=True)[0]
+    path = tmp_path / "ca.pem"
+    _ = path.write_text(ssl.DER_cert_to_PEM_cert(certificate), encoding="ascii")
+    return path
+
+
+def test_funasr_wss_uses_configured_ca_bundle(
+    monkeypatch: pytest.MonkeyPatch, ca_path: Path
+) -> None:
+    # Given: a secure native endpoint and a local CA bundle.
+
+
+    connection = _FakeFunASRConnection(['{"text":"done","is_final":true}'])
+    connect_arguments: list[dict[str, object]] = []
+
+    def connect(*_args: object, **kwargs: object) -> _FakeFunASRConnection:
+        connect_arguments.append(kwargs)
+        return connection
+
+    monkeypatch.setattr("orchestrator.funasr_adapter.connect", connect)
+
+    # When: the adapter opens the FunASR stream.
+
+    _ = tuple(
+        FunASRWebSocketAdapter(
+            "wss://asr.example.test:10095", "paraformer", ca_path=ca_path
+        ).stream(_request())
+    )
+
+    # Then: websockets receives the verified CA-based TLS context.
+
+    assert isinstance(connect_arguments[0]["ssl"], ssl.SSLContext)
+
+
+def test_funasr_ws_omits_tls_context_even_with_configured_ca_bundle(
+    monkeypatch: pytest.MonkeyPatch, ca_path: Path
+) -> None:
+    # Given: a plaintext native endpoint and a configured CA bundle.
+
+
+    connection = _FakeFunASRConnection(['{"text":"done","is_final":true}'])
+    connect_arguments: list[dict[str, object]] = []
+
+    def connect(*_args: object, **kwargs: object) -> _FakeFunASRConnection:
+        connect_arguments.append(kwargs)
+        return connection
+
+    monkeypatch.setattr("orchestrator.funasr_adapter.connect", connect)
+
+    # When: the adapter opens the FunASR stream.
+
+    _ = tuple(
+        FunASRWebSocketAdapter(
+            "ws://asr.example.test:10095", "paraformer", ca_path=ca_path
+        ).stream(_request())
+    )
+
+    # Then: the plaintext WebSocket call preserves its existing arguments.
+
+    assert "ssl" not in connect_arguments[0]
 
 
 def test_funasr_normalizes_vad_partial_then_one_final(

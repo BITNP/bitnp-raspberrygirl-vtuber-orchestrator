@@ -22,6 +22,7 @@ from orchestrator.pipeline_contracts import PipelineConfig
 from orchestrator.retrieval import RetrievalFixtureProvider
 
 if TYPE_CHECKING:
+    import ssl
     from collections.abc import Callable
 
     from sound.rtp_playback import L16PlaybackFrame
@@ -220,11 +221,15 @@ class _Connector:
 
     control: _Control
 
-    async def connect(self, url: str, headers: dict[str, str]) -> _Control:
+    async def connect(
+        self, url: str, headers: dict[str, str], ssl_context: ssl.SSLContext | None
+    ) -> _Control:
 
         assert url == "wss://orchestrator.example.test/control"
 
         assert headers == {}
+
+        assert ssl_context is None
 
         return self.control
 

@@ -22,9 +22,11 @@ from orchestrator.provider_streaming import (
     ProviderDeadlines,
     ProviderResponseError,
 )
+from orchestrator.tls import build_tls_context
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 
 class _FunASRConnection(Protocol):
@@ -45,6 +47,8 @@ class FunASRWebSocketAdapter:
     endpoint: str
 
     model: str
+
+    ca_path: Path | None = None
 
     deadlines: ProviderDeadlines = field(default_factory=ProviderDeadlines)
 
@@ -93,7 +97,18 @@ class FunASRWebSocketAdapter:
         if cancellation is not None and cancellation.cancelled:
             return
 
-        connection = connect(self.endpoint, open_timeout=self.deadlines.connect_seconds)
+        tls_context = build_tls_context(self.ca_path)
+
+        if self.endpoint.startswith("wss://") and tls_context is not None:
+            connection = connect(
+                self.endpoint,
+                open_timeout=self.deadlines.connect_seconds,
+                ssl=tls_context,
+            )
+        else:
+            connection = connect(
+                self.endpoint, open_timeout=self.deadlines.connect_seconds
+            )
 
         release = _noop if cancellation is None else cancellation.bind(connection.close)
 
