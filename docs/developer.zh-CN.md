@@ -24,7 +24,7 @@ Orchestrator 拥有 session state、revisioned event history、active turn、tas
 
 ## 数据流动关系
 
-语音输入从 Mic 进入 Orchestrator 的 RTP ingress。现场语音交互链路启用时，Orchestrator 对 20 ms L16 RTP 帧做端点检测，封装 16 kHz mono PCM WAV 给 ASR，再经 turn pipeline、LLM 和 TTS 生成新的 WAV，校验后重新 packetize 为 L16 RTP 发给 Sound。原始 Mic RTP 不直接转发给 Sound。
+语音输入从 Mic 进入 Orchestrator 的 RTP ingress。现场语音交互链路启用时，Orchestrator 对 20 ms L16 RTP 帧做端点检测，约 600 ms 静音后提交并以 15 秒为单段上限，封装 16 kHz mono PCM WAV 给 ASR，再经 turn pipeline、LLM 和 TTS 生成新的 WAV，校验后重新 packetize 为 L16 RTP 发给 Sound。每个输出使用独立 packetizer 和生成 SSRC；新的有效 ASR final 会取消过期回答工作，已取消的 LLM/TTS 结果不得产生 RTP。原始 Mic RTP 不直接转发给 Sound。
 
 评论输入由 Comments 以规范 envelope 提交为 `audience.input`。Frontend 只接收 Orchestrator 源的 caption、action、scene、presentation 等命令，演示命令完成后返回 `presentation.result`。所有迟到、超时、取消或被 supersede 的任务即使物理完成，也不能提交状态或产生副作用。
 
@@ -42,7 +42,7 @@ Orchestrator 拥有 session state、revisioned event history、active turn、tas
 
 - Orchestrator：唯一 session state writer；唯一协议权威；唯一 ASR/LLM/TTS provider 边界；唯一跨服务 reducer 和命令校验者。
 - Mic：只向 Orchestrator 注册 RTP source，收到 matching `media.rtp.source.ready` 后才发送 UDP RTP。
-- Sound：只向 Orchestrator 注册 RTP sink，只播放匹配 `media.stream.command` 的流，并报告 queued、playing、cancelled、flush ack 等状态。
+- Sound：只向 Orchestrator 注册 RTP sink，只播放匹配 `media.stream.command` 的流，并报告 queued、playing、finished、cancelled、flush ack 等状态；只有精确关联的 `finished` 才能释放输出 lease。
 - Comments：只向 Orchestrator 发送观众输入，不拥有平台生产接入的全功能边界。
 - Frontend：只连接 Orchestrator，执行有限动作、表情、场景和演示控制映射。
 
