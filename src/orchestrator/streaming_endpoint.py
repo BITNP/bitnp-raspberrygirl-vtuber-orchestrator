@@ -22,7 +22,11 @@ _SILENCE_FRAMES: Final = 30
 
 _FORCED_FRAMES: Final = 750
 
-_SPEECH_ENERGY: Final = 400
+# A laptop's quiet-room capture can remain around 300-700 mean absolute PCM
+# units.  Keep the gate materially above that floor so background hiss does
+# not continuously reset the 600 ms endpoint timer and manufacture false
+# barge-ins while the agent is speaking.
+_SPEECH_ENERGY: Final = 900
 
 _SEQUENCE_HALF_RANGE: Final = 32_768
 
