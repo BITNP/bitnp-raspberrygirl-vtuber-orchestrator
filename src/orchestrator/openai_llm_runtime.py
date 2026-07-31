@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
@@ -42,6 +43,8 @@ class OpenAICompatibleLLMRuntimeAdapter:
     capability: ProviderCapability = "final_only"
 
     deadlines: ProviderDeadlines = field(default_factory=ProviderDeadlines)
+
+    ca_path: Path | None = None
 
     def __post_init__(self) -> None:
         if self.endpoint.strip() == "":
@@ -91,6 +94,7 @@ class OpenAICompatibleLLMRuntimeAdapter:
                     "Authorization": f"Bearer {self.api_key}",
                 },
                 "llm",
+                self.ca_path,
             ),
             deadlines=ProviderDeadlines(
                 connect_seconds=self.deadlines.connect_seconds,
@@ -162,6 +166,7 @@ class OpenAICompatibleLLMRuntimeAdapter:
                     "Authorization": f"Bearer {self.api_key}",
                 },
                 "llm",
+                self.ca_path,
             ),
             deadlines=self.deadlines,
             cancellation=cancellation,

@@ -8,8 +8,11 @@ from threading import Lock
 from typing import TYPE_CHECKING, Literal, override
 from urllib.parse import urlsplit
 
+from orchestrator.tls import build_tls_context
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+    from pathlib import Path
 
 
 ProviderCapability = Literal["streaming", "final_only"]
@@ -39,6 +42,8 @@ class ProviderRequest:
     headers: dict[str, str]
 
     stage: str
+
+    ca_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -117,7 +122,7 @@ def post_sse(
     deadlines: ProviderDeadlines,
     cancellation: ProviderCancellationHandle | None,
 ) -> Iterator[str]:
-    connection = _connection(request.url, deadlines, request.stage)
+    connection = _connection(request.url, deadlines, request.stage, request.ca_path)
 
     release = _noop if cancellation is None else cancellation.bind(connection.close)
 
@@ -174,7 +179,7 @@ def post_bytes(
     deadlines: ProviderDeadlines,
     cancellation: ProviderCancellationHandle | None,
 ) -> bytes:
-    connection = _connection(request.url, deadlines, request.stage)
+    connection = _connection(request.url, deadlines, request.stage, request.ca_path)
 
     release = _noop if cancellation is None else cancellation.bind(connection.close)
 
@@ -270,7 +275,10 @@ def _raise_non_success(response: HTTPResponse, stage: str) -> None:
 
 
 def _connection(
-    url: str, deadlines: ProviderDeadlines, stage: str
+    url: str,
+    deadlines: ProviderDeadlines,
+    stage: str,
+    ca_path: Path | None,
 ) -> HTTPConnection | HTTPSConnection:
     parsed = urlsplit(url)
 
@@ -279,7 +287,15 @@ def _connection(
             return HTTPConnection(parsed.netloc, timeout=deadlines.connect_seconds)
 
         case "https":
-            return HTTPSConnection(parsed.netloc, timeout=deadlines.connect_seconds)
+            context = build_tls_context(ca_path)
+            if context is None:
+                return HTTPSConnection(parsed.netloc, timeout=deadlines.connect_seconds)
+
+            return HTTPSConnection(
+                parsed.netloc,
+                timeout=deadlines.connect_seconds,
+                context=context,
+            )
 
         case _:
             raise ProviderResponseError(stage=stage, reason="endpoint")

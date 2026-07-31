@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import ssl
 import threading
 from dataclasses import dataclass, field
 from http.client import ResponseNotReady
@@ -25,10 +26,16 @@ from orchestrator.media_adapters import (
 )
 from orchestrator.openai_llm_runtime import OpenAICompatibleLLMRuntimeAdapter
 from orchestrator.pipeline_contracts import ASRAudienceEvent
-from orchestrator.provider_streaming import ProviderDeadlines, ProviderResponseError
+from orchestrator.provider_streaming import (
+    ProviderDeadlines,
+    ProviderRequest,
+    ProviderResponseError,
+    post_bytes,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 
 _StreamMode = Literal["asr", "llm", "malformed", "error", "block", "final_block"]
@@ -162,6 +169,151 @@ class _StreamingHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
 
         _ = (format, args)
+
+
+@final
+class _ProviderSocket:
+    def settimeout(self, _seconds: float) -> None:
+        return
+
+
+@final
+class _ProviderResponse:
+    status: int = 200
+
+    def read(self) -> bytes:
+        return b""
+
+    def close(self) -> None:
+        return
+
+
+@final
+class _ProviderConnection:
+    def __init__(self) -> None:
+        self.sock = _ProviderSocket()
+
+    def request(
+        self, _method: str, _path: str, *, body: bytes, headers: dict[str, str]
+    ) -> None:
+        _ = (body, headers)
+
+    def getresponse(self) -> _ProviderResponse:
+        return _ProviderResponse()
+
+    def close(self) -> None:
+        return
+
+
+@pytest.fixture
+def ca_path(tmp_path: Path) -> Path:
+    certificate = ssl.create_default_context().get_ca_certs(binary_form=True)[0]
+    path = tmp_path / "ca.pem"
+    _ = path.write_text(ssl.DER_cert_to_PEM_cert(certificate), encoding="ascii")
+    return path
+
+
+def test_provider_https_connection_receives_verified_configured_ca_context(
+    monkeypatch: pytest.MonkeyPatch, ca_path: Path
+) -> None:
+    # Given: a provider HTTPS endpoint and configured local CA bundle.
+
+
+    arguments: list[dict[str, ssl.SSLContext | float]] = []
+
+    def connect(
+        *_args: str, **kwargs: ssl.SSLContext | float
+    ) -> _ProviderConnection:
+        arguments.append(kwargs)
+        return _ProviderConnection()
+
+    monkeypatch.setattr(provider_streaming, "HTTPSConnection", connect)
+
+    # When: the shared provider transport opens the secure endpoint.
+
+    _ = post_bytes(
+        ProviderRequest(
+            "https://provider.example.test/v1",
+            b"",
+            {},
+            "llm",
+            ca_path,
+        ),
+        _deadlines(),
+        None,
+    )
+
+    # Then: HTTPSConnection receives the existing verified CA-based context.
+
+    context = arguments[0]["context"]
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+
+
+def test_provider_http_connection_omits_tls_context_even_with_configured_ca_bundle(
+    monkeypatch: pytest.MonkeyPatch, ca_path: Path
+) -> None:
+    # Given: a plaintext provider endpoint and configured local CA bundle.
+
+
+    arguments: list[dict[str, float]] = []
+
+    def connect(*_args: str, **kwargs: float) -> _ProviderConnection:
+        arguments.append(kwargs)
+        return _ProviderConnection()
+
+    monkeypatch.setattr(provider_streaming, "HTTPConnection", connect)
+
+    # When: the shared provider transport opens the plaintext endpoint.
+
+    _ = post_bytes(
+        ProviderRequest(
+            "http://provider.example.test/v1",
+            b"",
+            {},
+            "asr",
+            ca_path,
+        ),
+        _deadlines(),
+        None,
+    )
+
+    # Then: the existing HTTP constructor arguments remain unchanged.
+
+    assert arguments == [{"timeout": 1.0}]
+
+
+def test_provider_https_connection_omits_context_without_configured_ca_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a secure provider endpoint without custom CA configuration.
+
+
+    arguments: list[dict[str, float]] = []
+
+    def connect(*_args: str, **kwargs: float) -> _ProviderConnection:
+        arguments.append(kwargs)
+        return _ProviderConnection()
+
+    monkeypatch.setattr(provider_streaming, "HTTPSConnection", connect)
+
+    # When: the shared provider transport opens the endpoint.
+
+    _ = post_bytes(
+        ProviderRequest(
+            "https://provider.example.test/v1",
+            b"",
+            {},
+            "llm",
+        ),
+        _deadlines(),
+        None,
+    )
+
+    # Then: default HTTPS construction is unchanged.
+
+    assert arguments == [{"timeout": 1.0}]
 
 
 @final
@@ -374,7 +526,10 @@ def test_final_only_asr_cancellation_absorbs_response_close_attribute_race(
     failure: list[BaseException] = []
 
     def connection_factory(
-        _url: str, _deadlines: ProviderDeadlines, _stage: str
+        _url: str,
+        _deadlines: ProviderDeadlines,
+        _stage: str,
+        _ca_path: Path | None,
     ) -> _RaceConnection:
 
         return connection
@@ -431,7 +586,10 @@ def test_final_only_asr_cancellation_absorbs_response_not_ready_race(
     failure: list[BaseException] = []
 
     def connection_factory(
-        _url: str, _deadlines: ProviderDeadlines, _stage: str
+        _url: str,
+        _deadlines: ProviderDeadlines,
+        _stage: str,
+        _ca_path: Path | None,
     ) -> _RaceConnection:
 
         return connection

@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
@@ -22,6 +23,7 @@ from orchestrator.provider_streaming import (
     post_bytes,
     post_sse,
 )
+from orchestrator.tls import build_tls_context
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +111,8 @@ class OpenAICompatibleASRAdapter:
 
     deadlines: ProviderDeadlines = field(default_factory=ProviderDeadlines)
 
+    ca_path: Path | None = None
+
     def __post_init__(self) -> None:
         _require_endpoint_and_model(self.endpoint, self.model)
 
@@ -165,6 +169,7 @@ class OpenAICompatibleASRAdapter:
                 body,
                 _headers(self.api_key, f"multipart/form-data; boundary={boundary}"),
                 "asr",
+                self.ca_path,
             ),
             deadlines=self.deadlines,
             cancellation=cancellation,
@@ -237,6 +242,7 @@ class OpenAICompatibleASRAdapter:
                 body,
                 _headers(self.api_key, f"multipart/form-data; boundary={boundary}"),
                 "asr",
+                self.ca_path,
             ),
             deadlines=self.deadlines,
             cancellation=cancellation,
@@ -277,6 +283,8 @@ class VllmOmniTTSAdapter:
     model: str
 
     api_key: str | None = None
+
+    ca_path: Path | None = None
 
     def __post_init__(self) -> None:
         _require_endpoint_and_model(self.endpoint, self.model)
@@ -323,6 +331,7 @@ class VllmOmniTTSAdapter:
             json.dumps(speech.json).encode(),
             _headers(self.api_key, "application/json"),
             cancellation,
+            self.ca_path,
         )
 
         return SynthesizedAudio(data=response.data, media_type=response.media_type)
@@ -387,6 +396,7 @@ def _post(
     body: bytes,
     headers: dict[str, str],
     cancellation: ProviderCancellationHandle | None,
+    ca_path: Path | None,
 ) -> _HttpResponse:
     parsed = urlsplit(url)
 
@@ -402,7 +412,11 @@ def _post(
         )
 
     elif parsed.scheme == "https":
-        connection = HTTPSConnection(parsed.netloc, timeout=30)
+        context = build_tls_context(ca_path)
+        if context is None:
+            connection = HTTPSConnection(parsed.netloc, timeout=30)
+        else:
+            connection = HTTPSConnection(parsed.netloc, timeout=30, context=context)
 
     else:
         raise MediaAdapterConfigError(field_name="endpoint")

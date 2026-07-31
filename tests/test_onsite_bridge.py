@@ -1,12 +1,16 @@
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
+from orchestrator import onsite_bridge
 from orchestrator.config import load_config_from_env
 from orchestrator.funasr_adapter import FunASRWebSocketAdapter
+from orchestrator.llm import OpenAICompatibleASRAdapter, VllmOmniTTSAdapter
 from orchestrator.onsite_bridge import OnsiteBridgeConfigError, build_onsite_bridge
+from orchestrator.openai_llm_runtime import OpenAICompatibleLLMRuntimeAdapter
 
 
 @dataclass(slots=True)
@@ -97,6 +101,7 @@ def test_build_onsite_bridge_selects_native_funasr_streaming_adapter() -> None:
             "ORCHESTRATOR_ASR_PROVIDER": "funasr",
             "ORCHESTRATOR_ASR_ENDPOINT": "ws://asr.example.test:10095",
             "ORCHESTRATOR_ASR_MODEL": "paraformer",
+            "ORCHESTRATOR_TLS_CA_PATH": "/run/secrets/onsite-ca.pem",
             "ORCHESTRATOR_TTS_PROVIDER": "vllm_omni",
             "ORCHESTRATOR_TTS_ENDPOINT": "https://tts.example.test/v1",
             "ORCHESTRATOR_TTS_MODEL": "tts-model",
@@ -115,6 +120,66 @@ def test_build_onsite_bridge_selects_native_funasr_streaming_adapter() -> None:
     # Then: native WebSocket streaming is selected without changing RTP boundaries.
 
     assert isinstance(bridge.asr, FunASRWebSocketAdapter)
+
+    assert bridge.asr.ca_path == Path("/run/secrets/onsite-ca.pem")
+
+
+def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: complete HTTPS provider configuration with one shared CA bundle.
+
+
+    ca_path = Path("/run/secrets/onsite-ca.pem")
+    config = load_config_from_env(
+        {
+            "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
+            "ORCHESTRATOR_LLM_ENDPOINT": "https://llm.example.test/v1",
+            "ORCHESTRATOR_LLM_MODEL": "onsite-model",
+            "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+            "ORCHESTRATOR_ASR_PROVIDER": "openai_compatible",
+            "ORCHESTRATOR_ASR_ENDPOINT": "https://asr.example.test/v1",
+            "ORCHESTRATOR_ASR_MODEL": "asr-model",
+            "ORCHESTRATOR_TTS_PROVIDER": "vllm_omni",
+            "ORCHESTRATOR_TTS_ENDPOINT": "https://tts.example.test/v1",
+            "ORCHESTRATOR_TTS_MODEL": "tts-model",
+            "ORCHESTRATOR_TLS_CA_PATH": str(ca_path),
+        }
+    )
+    llm_ca_paths: list[Path | None] = []
+
+    def build_llm(
+        endpoint: str,
+        model: str,
+        api_key: str,
+        *,
+        ca_path: Path | None,
+    ) -> OpenAICompatibleLLMRuntimeAdapter:
+        llm_ca_paths.append(ca_path)
+        return OpenAICompatibleLLMRuntimeAdapter(
+            endpoint,
+            model,
+            api_key,
+            ca_path=ca_path,
+        )
+
+    monkeypatch.setattr(onsite_bridge, "OpenAICompatibleLLMRuntimeAdapter", build_llm)
+
+    # When: the onsite composition root builds all HTTP provider adapters.
+
+    bridge = build_onsite_bridge(
+        config,
+        voice="raspberry",
+        ref_audio="file:///voice.wav",
+        ref_text="reference",
+    )
+    # Then: each adapter retains the one configured CA path for HTTPS requests.
+
+    assert llm_ca_paths == [ca_path]
+    assert isinstance(bridge.asr, OpenAICompatibleASRAdapter)
+    assert bridge.asr.ca_path == ca_path
+    assert isinstance(bridge.tts, VllmOmniTTSAdapter)
+    assert bridge.tts.ca_path == ca_path
 
 
 def test_native_funasr_bridge_declares_pcm_for_raw_pcm16le_payload(

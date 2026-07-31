@@ -560,6 +560,7 @@ def build_onsite_bridge(
             config.llm_endpoint,
             config.llm_model,
             config.llm_api_key,
+            ca_path=config.tls_ca_path,
         ),
         retrieval=RetrievalFixtureProvider(()),
     )
@@ -570,11 +571,16 @@ def build_onsite_bridge(
         return OrchestratorTurnPipeline(adapters=adapters, config=pipeline_config)
 
     asr = OpenAICompatibleASRAdapter(
-        config.asr_endpoint, config.asr_model, config.asr_api_key
+        config.asr_endpoint,
+        config.asr_model,
+        config.asr_api_key,
+        ca_path=config.tls_ca_path,
     )
 
     if config.asr_provider == "funasr":
-        asr = FunASRWebSocketAdapter(config.asr_endpoint, config.asr_model)
+        asr = FunASRWebSocketAdapter(
+            config.asr_endpoint, config.asr_model, config.tls_ca_path
+        )
 
     return OnsiteExplainerBridge(
         asr=asr,
@@ -582,6 +588,7 @@ def build_onsite_bridge(
             config.tts_endpoint,
             config.tts_model,
             config.tts_api_key,
+            ca_path=config.tls_ca_path,
         ),
         pipeline_factory=pipeline_factory,
         voice=voice,
