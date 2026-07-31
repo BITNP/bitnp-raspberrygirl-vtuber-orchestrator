@@ -66,6 +66,10 @@ class SchedulerOutputFence:
 
         self._leases: dict[StreamKey, OutputLease] = {}
 
+        # Completed leases are removed, but their generation is retained so a
+        # later natural turn cannot accidentally reuse the prior SSRC/epoch.
+        self._last_generation: dict[StreamKey, int] = {}
+
         self._pending: dict[StreamKey, _PendingReplacement] = {}
 
         self._flush_sequence = 0
@@ -80,11 +84,13 @@ class SchedulerOutputFence:
     ) -> OutputLease:
         previous = self._leases.get(stream)
 
-        generation = 0 if previous is None else previous.generation + 1
-
-        epoch = CancellationEpoch(
-            0 if previous is None else int(previous.cancellation_epoch) + 1
+        generation = (
+            self._last_generation.get(stream, -1) + 1
+            if previous is None
+            else previous.generation + 1
         )
+
+        epoch = CancellationEpoch(generation)
 
         lease = OutputLease(
             stream=stream,
@@ -96,6 +102,8 @@ class SchedulerOutputFence:
         )
 
         self._leases[stream] = lease
+
+        self._last_generation[stream] = generation
 
         _ = self._pending.pop(stream, None)
 
@@ -160,6 +168,35 @@ class SchedulerOutputFence:
             and epoch == lease.cancellation_epoch
             and str(lease.turn_id) == str(self._scheduler.snapshot.active_turn_id)
         )
+
+    def finish(
+        self,
+        *,
+        stream: StreamKey,
+        turn_id: TurnId | None,
+        segment_id: SegmentId | None,
+        cancellation_epoch: CancellationEpoch | None,
+    ) -> bool:
+        """Release only the exact lease Sound reports as physically consumed.
+
+        A finished notification is advisory until all correlation fields match.
+        In particular, it must not release a replacement that is awaiting a
+        flush acknowledgement.
+        """
+        lease = self._leases.get(stream)
+
+        if (
+            lease is None
+            or stream in self._pending
+            or turn_id != lease.turn_id
+            or segment_id != lease.segment_id
+            or cancellation_epoch != lease.cancellation_epoch
+        ):
+            return False
+
+        del self._leases[stream]
+
+        return True
 
     def _start_turn(self, correlation: EnvelopeCorrelation) -> TurnId:
         result = self._scheduler.apply(

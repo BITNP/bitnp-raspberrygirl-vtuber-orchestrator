@@ -364,10 +364,17 @@ def _portable_reference_audio(ref_audio: str) -> str:
     parsed = urlsplit(stripped)
 
     if parsed.scheme == "file":
-        return _audio_data_url(Path(unquote(parsed.path)))
+        path = Path(unquote(parsed.path))
+
+        # A configured provider may own a mounted reference file.  Preserve the
+        # URI when it is not locally available instead of failing the whole TTS
+        # request before the provider can return a typed error.
+        return _audio_data_url(path) if path.is_file() else ref_audio
 
     if parsed.scheme == "" and Path(stripped).is_absolute():
-        return _audio_data_url(Path(stripped))
+        path = Path(stripped)
+
+        return _audio_data_url(path) if path.is_file() else ref_audio
 
     return ref_audio
 

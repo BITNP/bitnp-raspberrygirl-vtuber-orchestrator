@@ -6,7 +6,7 @@ import time
 from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 from orchestrator.llm import CancellationToken
 from orchestrator.observability import (
@@ -25,6 +25,8 @@ from orchestrator.streaming_pipeline_actors import (
 from orchestrator.tts_rtp import Pcm16leChunk, TtsPcmRtpPacketizer
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from orchestrator.pipeline_contracts import ASRAudienceEvent, TurnResult
     from orchestrator.streaming_endpoint import EndpointedUtterance
 
@@ -82,6 +84,8 @@ class _ChunkItem:
 
     correlation: StageCorrelation
 
+    packetizer: TtsPcmRtpPacketizer
+
 
 @dataclass(slots=True)
 class OnsiteStreamActor:
@@ -116,14 +120,9 @@ class OnsiteStreamActor:
 
     _closed: bool = False
 
-    _packetizer: TtsPcmRtpPacketizer = field(init=False)
-
     _latest_correlation: StageCorrelation | None = None
 
     _active_cancellations: set[CancellationToken] = field(default_factory=set)
-
-    def __post_init__(self) -> None:
-        self._packetizer = TtsPcmRtpPacketizer(self.stream, self.epoch)
 
     @property
     def drop_counts(self) -> PipelineDropCounts:
@@ -143,8 +142,6 @@ class OnsiteStreamActor:
         self.epoch = next_epoch
 
         self._closed = True
-
-        self._packetizer.cancel()
 
         correlation = self._latest_correlation
 
@@ -301,10 +298,16 @@ class OnsiteStreamActor:
             if item.epoch == self.epoch and event is not None:
                 correlation = self._correlation(item.endpoint, item.epoch)
 
-                authorizer = getattr(self.stages, "authorize_output", None)
+                authorizer = cast(
+                    "Callable[[StreamKey, CancellationEpoch], bool] | None",
+                    getattr(self.stages, "authorize_output", None),
+                )
 
-                if authorizer is not None and not authorizer(self.stream, item.epoch):
-                    continue
+                if authorizer is not None:
+                    authorized = authorizer(self.stream, item.epoch)
+
+                    if authorized is False:
+                        continue
 
                 self._record_correlation("asr_final", correlation, latency_ms)
 
@@ -327,13 +330,22 @@ class OnsiteStreamActor:
             finally:
                 self._active_cancellations.discard(cancellation)
 
-            if item.epoch != self.epoch or chunks is None:
+            if self._closed or chunks is None:
                 continue
 
-            for chunk in chunks:
-                self._append_chunk(_ChunkItem(item.epoch, chunk, item.correlation))
+            # A packetizer has exactly one lifetime: one synthesized response.
+            # Reusing it after finish would retain RTP sequence/timestamp state and
+            # can never safely represent a later turn.
+            packetizer = TtsPcmRtpPacketizer(self.stream, item.epoch)
 
-            self._append_chunk(_ChunkItem(item.epoch, None, item.correlation))
+            for chunk in chunks:
+                self._append_chunk(
+                    _ChunkItem(item.epoch, chunk, item.correlation, packetizer)
+                )
+
+            self._append_chunk(
+                _ChunkItem(item.epoch, None, item.correlation, packetizer)
+            )
 
     def _answer_and_synthesize(
         self,
@@ -378,17 +390,17 @@ class OnsiteStreamActor:
         while self._chunks:
             item = self._chunks.popleft()
 
-            if item.epoch != self.epoch:
+            if self._closed:
                 continue
 
             packets = (
-                self._packetizer.finish()
+                item.packetizer.finish()
                 if item.chunk is None
-                else self._packetizer.push(item.chunk)
+                else item.packetizer.push(item.chunk)
             )
 
             for packet in packets:
-                if item.epoch == self.epoch:
+                if not self._closed:
                     await self.stages.output(self.stream, item.epoch, packet)
 
                     self._record_correlation("rtp_egress", item.correlation, None)

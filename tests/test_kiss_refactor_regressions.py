@@ -143,6 +143,52 @@ def test_output_fence_correlates_flush_epoch_41_and_never_resumes_stale_audio() 
     assert fence.can_emit(stream, CancellationEpoch(42)) is True
 
 
+def test_output_fence_releases_only_exact_finished_lease_and_advances_epoch() -> None:
+    scheduler = SessionScheduler(
+        session_id=SessionId("session-1"), turn_id_prefix="turn"
+    )
+    fence = SchedulerOutputFence(scheduler)
+    stream = StreamKey(session_id="session-1", stream_id="stream-1")
+    correlation = EnvelopeCorrelation("trace-1", "session-1", 1)
+    first = fence.activate(
+        stream=stream,
+        segment_id=SegmentId("segment-1"),
+        target_generated_ssrc=GeneratedSsrc(0x1234_5678),
+        correlation=correlation,
+    )
+
+    # A forged completion cannot free an active output lease.
+    assert (
+        fence.finish(
+            stream=stream,
+            turn_id=first.turn_id,
+            segment_id=SegmentId("other-segment"),
+            cancellation_epoch=first.cancellation_epoch,
+        )
+        is False
+    )
+    assert fence.can_emit(stream, first.cancellation_epoch) is True
+
+    assert (
+        fence.finish(
+            stream=stream,
+            turn_id=first.turn_id,
+            segment_id=first.segment_id,
+            cancellation_epoch=first.cancellation_epoch,
+        )
+        is True
+    )
+
+    # A natural next turn gets a distinct epoch instead of reviving old RTP.
+    second = fence.activate(
+        stream=stream,
+        segment_id=SegmentId("segment-2"),
+        target_generated_ssrc=GeneratedSsrc(0x8765_4321),
+        correlation=EnvelopeCorrelation("trace-1", "session-1", 2),
+    )
+    assert second.cancellation_epoch == CancellationEpoch(1)
+
+
 def test_action_reducer_allows_one_allowlisted_command_and_rejects_replay() -> None:
     # Given: a reducer that permits only the finite wave avatar action.
     reducer = SessionInteractionReducer(

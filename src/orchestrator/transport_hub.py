@@ -62,7 +62,8 @@ class OnsiteBridge(Protocol):
         ...
 
     def set_output_authorizer(
-        self, callback: Callable[[StreamKey, CancellationEpoch], bool]
+        self,
+        callback: Callable[[StreamKey, CancellationEpoch], bool],
     ) -> None:
         ...
 
@@ -235,10 +236,13 @@ class RtpHub:
             case StreamState(
                 session_id=session_id,
                 stream_id=stream_id,
-                state="cancelled" | "finished" | "error",
+                state="cancelled" | "error",
             ):
                 self._remove_stream(StreamKey(session_id, stream_id))
 
+            # Playback completion is not a disconnect.  Keeping the established
+            # Mic/Sound route lets the next scheduler-authorized turn allocate a
+            # fresh generated SSRC without requiring either peer to reconnect.
             case StreamReady() | StreamState() | StreamFlush() | FlushAcknowledgement():
                 return
 
@@ -384,6 +388,14 @@ class RtpHub:
 
     def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None:
         return self._correlations.get(stream)
+
+    def advance_onsite_epoch(self, stream: StreamKey, epoch: int) -> None:
+        """Retire a consumed output actor while preserving the live RTP route."""
+        if self._onsite_bridge is None or epoch <= self._route_generations.get(stream, 0):
+            return
+
+        self._route_generations[stream] = epoch
+        self._onsite_bridge.invalidate_stream(stream, CancellationEpoch(epoch))
 
     def _register_source(
         self,

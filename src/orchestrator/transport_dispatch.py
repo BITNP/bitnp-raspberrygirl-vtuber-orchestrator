@@ -71,6 +71,9 @@ class RouteRegistry(Protocol):
     def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None:
         ...
 
+    def advance_onsite_epoch(self, stream: StreamKey, epoch: int) -> None:
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class _SourcePeer:
@@ -165,9 +168,38 @@ class TransportControlDispatch:
             case StreamState(
                 session_id=session_id,
                 stream_id=stream_id,
-                state="cancelled" | "finished" | "error",
+                state="cancelled" | "error",
             ):
                 self._discard(StreamKey(session_id, stream_id))
+
+            case StreamState(
+                session_id=session_id,
+                stream_id=stream_id,
+                state="finished",
+                turn_id=turn_id,
+                segment_id=segment_id,
+                cancellation_epoch=cancellation_epoch,
+            ):
+                output_fence = self._output_fence
+
+                if output_fence is not None:
+                    released = output_fence.finish(
+                        stream=StreamKey(session_id, stream_id),
+                        turn_id=turn_id,
+                        segment_id=segment_id,
+                        cancellation_epoch=cancellation_epoch,
+                    )
+
+                    if released and cancellation_epoch is not None:
+                        # Retire the actor that owns the completed packetizer.
+                        # The next microphone frame constructs a fresh actor whose
+                        # input epoch equals the next scheduler lease epoch.
+                        self._hub.advance_onsite_epoch(
+                            StreamKey(session_id, stream_id),
+                            int(cancellation_epoch) + 1,
+                        )
+
+                return
 
             case StreamState():
                 return

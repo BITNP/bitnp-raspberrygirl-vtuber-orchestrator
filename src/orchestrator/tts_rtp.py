@@ -51,6 +51,11 @@ class PcmChunkError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class PacketizerFinishedError(RuntimeError):
+    """Raised when a completed RTP packetizer is accidentally reused."""
+
+
+@dataclass(frozen=True, slots=True)
 class Pcm16leChunk:
 
     data: bytes
@@ -99,12 +104,17 @@ class TtsPcmRtpPacketizer:
 
     _cancelled: bool = field(default=False, init=False)
 
+    _finished: bool = field(default=False, init=False)
+
     def __post_init__(self) -> None:
         self.ssrc = generated_ssrc(self.stream, self.cancellation_epoch)
 
     def push(self, chunk: Pcm16leChunk) -> tuple[bytes, ...]:
         if self._cancelled:
             return ()
+
+        if self._finished:
+            raise PacketizerFinishedError
 
         self._pending += chunk.data
 
@@ -130,6 +140,11 @@ class TtsPcmRtpPacketizer:
         if self._cancelled:
             return ()
 
+        if self._finished:
+            raise PacketizerFinishedError
+
+        self._finished = True
+
         if len(self._pending) % _PCM_SAMPLE_BYTES != 0:
             raise PcmChunkError(reason="incomplete_sample")
 
@@ -144,6 +159,8 @@ class TtsPcmRtpPacketizer:
 
     def cancel(self) -> None:
         self._cancelled = True
+
+        self._finished = True
 
         self._pending = b""
 
