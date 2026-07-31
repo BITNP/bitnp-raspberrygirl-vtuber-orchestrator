@@ -287,6 +287,8 @@ class VllmOmniTTSAdapter:
 
     ca_path: Path | None = None
 
+    timeout_seconds: float = 120.0
+
     def __post_init__(self) -> None:
         _require_endpoint_and_model(self.endpoint, self.model)
 
@@ -333,6 +335,7 @@ class VllmOmniTTSAdapter:
             _headers(self.api_key, "application/json"),
             cancellation,
             self.ca_path,
+            self.timeout_seconds,
         )
 
         return SynthesizedAudio(data=response.data, media_type=response.media_type)
@@ -428,6 +431,7 @@ def _post(
     headers: dict[str, str],
     cancellation: ProviderCancellationHandle | None,
     ca_path: Path | None,
+    timeout_seconds: float = 30.0,
 ) -> _HttpResponse:
     parsed = urlsplit(url)
 
@@ -439,15 +443,17 @@ def _post(
     if parsed.scheme == "http":
         connection: HTTPConnection | HTTPSConnection = HTTPConnection(
             parsed.netloc,
-            timeout=30,
+            timeout=timeout_seconds,
         )
 
     elif parsed.scheme == "https":
         context = build_tls_context(ca_path)
         if context is None:
-            connection = HTTPSConnection(parsed.netloc, timeout=30)
+            connection = HTTPSConnection(parsed.netloc, timeout=timeout_seconds)
         else:
-            connection = HTTPSConnection(parsed.netloc, timeout=30, context=context)
+            connection = HTTPSConnection(
+                parsed.netloc, timeout=timeout_seconds, context=context
+            )
 
     else:
         raise MediaAdapterConfigError(field_name="endpoint")
