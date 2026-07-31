@@ -1,8 +1,8 @@
-
 from __future__ import annotations
 
 import base64
 import json
+import logging
 from dataclasses import dataclass, field
 from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path
@@ -26,10 +26,11 @@ from orchestrator.provider_streaming import (
 )
 from orchestrator.tls import build_tls_context
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class MediaAdapterConfigError(ValueError):
-
     field_name: str
 
     @override
@@ -39,7 +40,6 @@ class MediaAdapterConfigError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ASRPartialEvent:
-
     text: str
 
     received_at_ms: int
@@ -54,7 +54,6 @@ type ASRStreamEvent = ASRPartialEvent | ASRAudienceEvent
 
 @dataclass(frozen=True, slots=True)
 class ASRStreamRequest:
-
     audio: bytes
 
     filename: str
@@ -67,7 +66,6 @@ class ASRStreamRequest:
 
 
 class VllmOmniSpeechPayload(TypedDict):
-
     model: str
 
     input: str
@@ -83,7 +81,6 @@ class VllmOmniSpeechPayload(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class HttpSpeechRequest:
-
     method: Literal["POST"]
 
     url: str
@@ -93,7 +90,6 @@ class HttpSpeechRequest:
 
 @dataclass(frozen=True, slots=True)
 class SynthesizedAudio:
-
     data: bytes
 
     media_type: str
@@ -101,7 +97,6 @@ class SynthesizedAudio:
 
 @dataclass(frozen=True, slots=True)
 class OpenAICompatibleASRAdapter:
-
     endpoint: str
 
     model: str
@@ -164,6 +159,15 @@ class OpenAICompatibleASRAdapter:
             boundary, self.model, request.filename, request.audio
         )
 
+        _LOGGER.debug(
+            "asr_request endpoint=%s model=%s segment=%s audio_bytes=%d filename=%s",
+            self.endpoint,
+            self.model,
+            request.segment_id,
+            len(request.audio),
+            request.filename,
+        )
+
         response = post_bytes(
             ProviderRequest(
                 f"{self.endpoint.rstrip('/')}/audio/transcriptions",
@@ -193,12 +197,18 @@ class OpenAICompatibleASRAdapter:
         if not isinstance(text, str):
             raise MediaAdapterConfigError(field_name="response.text")
 
-        return self.normalize_final(
+        event = self.normalize_final(
             response={"text": text},
             received_at_ms=request.received_at_ms,
             segment_id=request.segment_id,
             seq=request.seq,
         )
+        _LOGGER.debug(
+            "asr_response kind=final segment=%s chars=%d",
+            event.segment_id,
+            len(event.text),
+        )
+        return event
 
     def stream(
         self,
@@ -278,7 +288,6 @@ class OpenAICompatibleASRAdapter:
 
 @dataclass(frozen=True, slots=True)
 class VllmOmniTTSAdapter:
-
     endpoint: str
 
     model: str
@@ -419,7 +428,6 @@ def _normalize_asr_sse(
 
 @dataclass(frozen=True, slots=True)
 class _HttpResponse:
-
     data: bytes
 
     media_type: str

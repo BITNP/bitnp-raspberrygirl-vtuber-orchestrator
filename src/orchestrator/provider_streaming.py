@@ -1,6 +1,6 @@
-
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from http.client import HTTPConnection, HTTPResponse, HTTPSConnection, ResponseNotReady
@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Literal, override
 from urllib.parse import urlsplit
 
 from orchestrator.tls import build_tls_context
+
+_LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -24,7 +26,6 @@ _SUCCESS_MAX = 300
 
 @dataclass(frozen=True, slots=True)
 class ProviderDeadlines:
-
     connect_seconds: float = 5.0
 
     read_seconds: float = 30.0
@@ -34,7 +35,6 @@ class ProviderDeadlines:
 
 @dataclass(frozen=True, slots=True)
 class ProviderRequest:
-
     url: str
 
     body: bytes
@@ -48,7 +48,6 @@ class ProviderRequest:
 
 @dataclass(slots=True)
 class ProviderResponseError(OSError):
-
     stage: str
 
     reason: str
@@ -59,7 +58,6 @@ class ProviderResponseError(OSError):
 
 
 class ProviderCancellationHandle:
-
     def __init__(self) -> None:
         self._callbacks: dict[int, Callable[[], None]] = {}
 
@@ -122,6 +120,12 @@ def post_sse(
     deadlines: ProviderDeadlines,
     cancellation: ProviderCancellationHandle | None,
 ) -> Iterator[str]:
+    _LOGGER.debug(
+        "provider_request stage=%s transport=http-sse url=%s request_bytes=%d",
+        request.stage,
+        request.url,
+        len(request.body),
+    )
     connection = _connection(request.url, deadlines, request.stage, request.ca_path)
 
     release = _noop if cancellation is None else cancellation.bind(connection.close)
@@ -155,6 +159,11 @@ def post_sse(
             ) from error
 
         _raise_non_success(response, request.stage)
+        _LOGGER.debug(
+            "provider_response stage=%s transport=http-sse status=%d",
+            request.stage,
+            response.status,
+        )
 
         response_release = (
             _noop if cancellation is None else cancellation.bind(response.close)
@@ -179,6 +188,12 @@ def post_bytes(
     deadlines: ProviderDeadlines,
     cancellation: ProviderCancellationHandle | None,
 ) -> bytes:
+    _LOGGER.debug(
+        "provider_request stage=%s transport=http url=%s request_bytes=%d",
+        request.stage,
+        request.url,
+        len(request.body),
+    )
     connection = _connection(request.url, deadlines, request.stage, request.ca_path)
 
     release = _noop if cancellation is None else cancellation.bind(connection.close)
@@ -227,6 +242,12 @@ def post_bytes(
         if time.monotonic() - started > deadlines.total_seconds:
             raise ProviderResponseError(stage=request.stage, reason="total")
 
+        _LOGGER.debug(
+            "provider_response stage=%s transport=http status=%d response_bytes=%d",
+            request.stage,
+            response.status,
+            len(data),
+        )
         return data
 
     finally:
@@ -334,5 +355,4 @@ def _decode_sse_data(line: bytes, stage: str) -> str | None:
     return decoded.removeprefix("data:").lstrip()
 
 
-def _noop() -> None:
-    ...
+def _noop() -> None: ...

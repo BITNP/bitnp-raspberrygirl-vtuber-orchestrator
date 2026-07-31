@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -62,9 +61,7 @@ if TYPE_CHECKING:
 
 
 class PipelineFactory(Protocol):
-
-    def __call__(self) -> OrchestratorTurnPipeline:
-        ...
+    def __call__(self) -> OrchestratorTurnPipeline: ...
 
 
 type OnsiteOutput = Callable[[StreamKey, CancellationEpoch, bytes], Awaitable[None]]
@@ -92,7 +89,6 @@ def _allow_output(stream: StreamKey, epoch: CancellationEpoch) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class _LegacyTurn:
-
     utterance: bytes
 
     sequence: int
@@ -129,7 +125,6 @@ _RTP_DIAGNOSTIC_INTERVAL = 100
 
 @dataclass(slots=True)
 class OnsiteExplainerBridge:
-
     asr: AsrAdapter
 
     tts: TtsAdapter
@@ -191,7 +186,7 @@ class OnsiteExplainerBridge:
         frame_count = self._rtp_diagnostic_counts.get(stream, 0) + 1
         self._rtp_diagnostic_counts[stream] = frame_count
         if frame_count % _RTP_DIAGNOSTIC_INTERVAL == 0:
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "onsite_rtp_ingress stream=%s frames=%d epoch=%d",
                 stream.stream_id,
                 frame_count,
@@ -215,7 +210,7 @@ class OnsiteExplainerBridge:
         if endpoint is None:
             return
 
-        _LOGGER.warning(
+        _LOGGER.debug(
             "onsite_endpoint stream=%s reason=%s pcm_bytes=%d epoch=%d",
             stream.stream_id,
             endpoint.reason,
@@ -436,6 +431,13 @@ class OnsiteExplainerBridge:
 
             filename = "onsite-l16.pcm"
 
+        _LOGGER.debug(
+            "onsite_asr_request segment=%s audio_bytes=%d format=%s",
+            segment_id,
+            len(audio),
+            filename,
+        )
+
         started_at = perf_counter()
         try:
             event = self.asr.transcribe(
@@ -451,9 +453,9 @@ class OnsiteExplainerBridge:
             return None
         else:
             if event is None:
-                _LOGGER.warning("onsite_asr_empty segment=%s", segment_id)
+                _LOGGER.debug("onsite_asr_empty segment=%s", segment_id)
                 return None
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "onsite_asr_final segment=%s chars=%d latency_ms=%.1f",
                 event.segment_id,
                 len(event.text),
@@ -470,6 +472,12 @@ class OnsiteExplainerBridge:
         if not pipeline.accept_audience_input(event):
             return None
 
+        _LOGGER.debug(
+            "onsite_llm_request segment=%s transcript_chars=%d",
+            event.segment_id,
+            len(event.text),
+        )
+
         started_at = perf_counter()
         try:
             turn = pipeline.process_next_turn(cancellation)
@@ -478,7 +486,7 @@ class OnsiteExplainerBridge:
             return None
         else:
             if turn is not None:
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "onsite_llm_final turn=%s chars=%d latency_ms=%.1f",
                     turn.turn_id,
                     len(turn.answer_text),
@@ -490,6 +498,9 @@ class OnsiteExplainerBridge:
         self, text: str, cancellation: CancellationToken
     ) -> tuple[Pcm16leChunk, ...] | None:
         started_at = perf_counter()
+        _LOGGER.debug(
+            "onsite_tts_request text_chars=%d voice=%s", len(text), self.voice
+        )
         try:
             if isinstance(self.tts, StreamingTtsAdapter):
                 return self.tts.stream_pcm16le(
@@ -519,7 +530,7 @@ class OnsiteExplainerBridge:
             _LOGGER.exception("onsite_tts_failed")
             return None
         else:
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "onsite_tts_complete pcm_bytes=%d latency_ms=%.1f",
                 len(pcm16le),
                 (perf_counter() - started_at) * 1_000,
@@ -570,7 +581,6 @@ class OnsiteExplainerBridge:
 
 @dataclass(frozen=True, slots=True)
 class _BridgeStages(OnsiteStages):
-
     bridge: OnsiteExplainerBridge
 
     pipeline: OrchestratorTurnPipeline

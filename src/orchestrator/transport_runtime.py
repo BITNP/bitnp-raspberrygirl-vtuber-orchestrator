@@ -1,7 +1,7 @@
-
 from __future__ import annotations
 
 import asyncio
+import logging
 import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
@@ -31,6 +31,8 @@ from orchestrator.transport_hub import (
     RtpHub,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from websockets.http11 import Request, Response
 
@@ -44,28 +46,20 @@ type DatagramListener = Callable[[str, int, RtpHub], Awaitable[DatagramSender]]
 
 
 class ControlServer(Protocol):
+    def close(self) -> None: ...
 
-    def close(self) -> None:
-        ...
-
-    async def wait_closed(self) -> None:
-        ...
+    async def wait_closed(self) -> None: ...
 
 
 class ControlConnection(Protocol):
-
     @property
-    def remote_address(self) -> tuple[str, int] | None:
-        ...
+    def remote_address(self) -> tuple[str, int] | None: ...
 
-    def __aiter__(self) -> AsyncIterator[str | bytes]:
-        ...
+    def __aiter__(self) -> AsyncIterator[str | bytes]: ...
 
-    def respond(self, status: HTTPStatus, text: str) -> Response:
-        ...
+    def respond(self, status: HTTPStatus, text: str) -> Response: ...
 
-    async def send(self, message: str) -> None:
-        ...
+    async def send(self, message: str) -> None: ...
 
 
 type ControlHandler = Callable[[ControlConnection], Awaitable[None]]
@@ -77,7 +71,6 @@ type ControlListener = Callable[
 
 @dataclass(frozen=True, slots=True)
 class TransportReadiness:
-
     listener_ready: bool
 
     route_ready: bool
@@ -89,7 +82,6 @@ class TransportReadiness:
 
 @final
 class TransportRuntime:
-
     def __init__(
         self,
         config: TransportConfig,
@@ -165,6 +157,13 @@ class TransportRuntime:
         )
 
         self._flush_driver = asyncio.create_task(self._drive_flush_admission())
+        _LOGGER.debug(
+            "transport_started udp=%s:%d control=%s:%d",
+            self._config.udp_bind_host,
+            self._config.udp_bind_port,
+            self._config.control_bind_host,
+            self._config.control_bind_port,
+        )
 
     async def cancel_stream(self, session_id: str, stream_id: str) -> None:
         await self._control_dispatch.cancel_stream(session_id, stream_id)
@@ -224,6 +223,9 @@ class TransportRuntime:
         try:
             async for message in connection:
                 if isinstance(message, str):
+                    _LOGGER.debug(
+                        "control_received peer=%s bytes=%d", peer_ip, len(message)
+                    )
                     if not bearer_token_matches(
                         self._config.control_token,
                         _connection_authorization(connection),
@@ -233,6 +235,9 @@ class TransportRuntime:
                     session_runtime = self._session_runtime
 
                     if session_runtime is not None and parse_comment_proposal(message):
+                        _LOGGER.debug(
+                            "control_received kind=audience.input peer=%s", peer_ip
+                        )
                         self._receive_comment(connection, session_runtime, message)
 
                         continue
@@ -258,6 +263,7 @@ class TransportRuntime:
                             peer_ip,
                             connection,
                         )
+                        _LOGGER.debug("control_dispatched peer=%s", peer_ip)
 
                     except (ControlEnvelopeError, JsonBoundaryError):
                         continue
@@ -297,7 +303,15 @@ class TransportRuntime:
             _ = session_runtime.receive_comment(proposal)
 
     def route_datagram(self, data: bytes, peer: tuple[str, int]) -> bool:
-        return self._hub.route_datagram(data, peer)
+        routed = self._hub.route_datagram(data, peer)
+        _LOGGER.debug(
+            "rtp_received peer=%s:%d bytes=%d routed=%s",
+            peer[0],
+            peer[1],
+            len(data),
+            routed,
+        )
+        return routed
 
     async def wait_for_onsite_jobs(self) -> None:
         await self._hub.wait_for_onsite_jobs()
@@ -311,7 +325,6 @@ class TransportRuntime:
 
 @final
 class _RtpDatagramProtocol(asyncio.DatagramProtocol):
-
     def __init__(self, hub: RtpHub) -> None:
         self._hub: RtpHub = hub
 

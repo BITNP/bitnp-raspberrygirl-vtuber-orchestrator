@@ -1,7 +1,7 @@
-
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -28,10 +28,11 @@ from orchestrator.provider_streaming import (
     post_sse,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class OpenAICompatibleLLMRuntimeAdapter:
-
     endpoint: str
 
     model: str
@@ -64,6 +65,15 @@ class OpenAICompatibleLLMRuntimeAdapter:
     ) -> Iterator[LLMStreamEvent]:
         if cancellation is not None and cancellation.cancelled:
             return
+
+        _LOGGER.debug(
+            "llm_request endpoint=%s model=%s capability=%s system=%d user=%d",
+            self.endpoint,
+            self.model,
+            self.capability,
+            len(request.prompt.system),
+            len(request.prompt.user),
+        )
 
         match self.capability:
             case "final_only":
@@ -136,7 +146,9 @@ class OpenAICompatibleLLMRuntimeAdapter:
         if not isinstance(text, str) or text.strip() == "":
             raise AdapterConfigError(field_name="response.message.content")
 
-        yield LLMFinal(text=text.strip(), used_fallback=False)
+        final = text.strip()
+        _LOGGER.debug("llm_response kind=final chars=%d", len(final))
+        yield LLMFinal(text=final, used_fallback=False)
 
     def _stream_sse(
         self, request: LLMRequest, cancellation: CancellationToken | None
@@ -180,13 +192,21 @@ class OpenAICompatibleLLMRuntimeAdapter:
 
             chunks.append(text)
 
+            _LOGGER.debug(
+                "llm_response kind=chunk index=%d chars=%d", len(chunks) - 1, len(text)
+            )
+
             yield LLMChunk(index=len(chunks) - 1, text=text)
 
         if cancellation is None or not cancellation.cancelled:
             if not done or len(chunks) == 0:
                 raise ProviderResponseError(stage="llm", reason="missing_final")
 
-            yield LLMFinal(text="".join(chunks), used_fallback=False)
+            final = "".join(chunks)
+            _LOGGER.debug(
+                "llm_response kind=final chars=%d chunks=%d", len(final), len(chunks)
+            )
+            yield LLMFinal(text=final, used_fallback=False)
 
 
 def _sse_delta(data: str) -> str:

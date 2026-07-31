@@ -1,9 +1,9 @@
-
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+from collections.abc import Mapping
 
 from orchestrator.config import OrchestratorConfig, load_config_from_env
 from orchestrator.ids import SessionId
@@ -66,7 +66,7 @@ def _onsite_bridge_enabled(config: OrchestratorConfig) -> bool:
 
 def main() -> None:
     logging.basicConfig(
-        level=logging.INFO,
+        level=_log_level(os.environ),
         format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
@@ -75,3 +75,8 @@ def main() -> None:
 
     except KeyboardInterrupt:
         return
+
+
+def _log_level(env: Mapping[str, str]) -> int:
+    """Return the development-selectable level; production defaults to INFO."""
+    return getattr(logging, env.get("BITNP_LOG_LEVEL", "INFO").upper(), logging.INFO)

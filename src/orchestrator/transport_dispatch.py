@@ -1,7 +1,7 @@
-
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Protocol, final
@@ -41,43 +41,34 @@ _CODEC = {
     "payload_type": 96,
     "samples_per_frame": 320,
 }
+_LOGGER = logging.getLogger(__name__)
 
 
 class ControlPeer(Protocol):
-
-    async def send(self, message: str) -> None:
-        ...
+    async def send(self, message: str) -> None: ...
 
 
 class RouteRegistry(Protocol):
-
     def register_control(
         self,
         raw_message: ControlEvent | str,
         peer_ip: str,
         owner: ConnectionId | None = None,
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    def remove_connection(self, owner: ConnectionId) -> None:
-        ...
+    def remove_connection(self, owner: ConnectionId) -> None: ...
 
-    def remove_stream(self, session_id: str, stream_id: str) -> None:
-        ...
+    def remove_stream(self, session_id: str, stream_id: str) -> None: ...
 
-    def output_ssrc(self, stream: StreamKey, cancellation_epoch: int = 0) -> int:
-        ...
+    def output_ssrc(self, stream: StreamKey, cancellation_epoch: int = 0) -> int: ...
 
-    def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None:
-        ...
+    def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None: ...
 
-    def advance_onsite_epoch(self, stream: StreamKey, epoch: int) -> None:
-        ...
+    def advance_onsite_epoch(self, stream: StreamKey, epoch: int) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class _SourcePeer:
-
     connection: ControlPeer
 
     ssrc: int
@@ -85,7 +76,6 @@ class _SourcePeer:
 
 @dataclass(frozen=True, slots=True)
 class _SinkPeer:
-
     connection: ControlPeer
 
     host: str
@@ -95,7 +85,6 @@ class _SinkPeer:
 
 @final
 class TransportControlDispatch:
-
     def __init__(
         self,
         hub: RouteRegistry,
@@ -130,6 +119,8 @@ class TransportControlDispatch:
         self, raw_message: str, peer_ip: str, connection: ControlPeer
     ) -> None:
         event = parse_control_event(raw_message)
+
+        _LOGGER.debug("control_register event=%s peer=%s", type(event).__name__, peer_ip)
 
         self._hub.register_control(event, peer_ip, _connection_id(connection))
 
@@ -260,18 +251,30 @@ class TransportControlDispatch:
                 flush,
             )
         )
+        _LOGGER.debug(
+            "control_sent event=media.stream.command session=%s stream=%s epoch=%d",
+            flush.stream.session_id,
+            flush.stream.stream_id,
+            int(flush.cancellation_epoch),
+        )
 
         return True
 
-    async def finish_generated_stream(
-        self, stream: StreamKey, epoch: int
-    ) -> None:
+    async def finish_generated_stream(self, stream: StreamKey, epoch: int) -> None:
         sink = self._sinks.get(stream)
         correlation = self._hub.correlation(stream)
         if sink is None or correlation is None:
             return
         await sink.connection.send(
-            _stream_end_envelope(stream, epoch, self._hub.output_ssrc(stream, epoch), correlation)
+            _stream_end_envelope(
+                stream, epoch, self._hub.output_ssrc(stream, epoch), correlation
+            )
+        )
+        _LOGGER.debug(
+            "control_sent event=media.stream.end session=%s stream=%s epoch=%d",
+            stream.session_id,
+            stream.stream_id,
+            epoch,
         )
 
     async def announce_output(self, stream: StreamKey, epoch: int) -> None:
@@ -281,8 +284,18 @@ class TransportControlDispatch:
             return
         await sink.connection.send(
             _stream_command_envelope(
-                stream, self._hub.output_ssrc(stream, epoch), sink, correlation, epoch=epoch
+                stream,
+                self._hub.output_ssrc(stream, epoch),
+                sink,
+                correlation,
+                epoch=epoch,
             )
+        )
+        _LOGGER.debug(
+            "control_sent event=media.stream.command session=%s stream=%s epoch=%d",
+            stream.session_id,
+            stream.stream_id,
+            epoch,
         )
 
     @property
@@ -307,6 +320,11 @@ class TransportControlDispatch:
 
         if sink is not None and correlation is not None:
             await sink.connection.send(_cancel_envelope(stream_id, correlation))
+            _LOGGER.debug(
+                "control_sent event=media.stream.cancel session=%s stream=%s",
+                session_id,
+                stream_id,
+            )
 
     def clear(self) -> None:
         self._sources.clear()
@@ -612,7 +630,6 @@ def _envelope(
 
 @final
 class _MonotonicFlushClock:
-
     @property
     def now_ms(self) -> int:
         return int(time.monotonic() * 1_000)

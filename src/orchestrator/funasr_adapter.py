@@ -1,7 +1,7 @@
-
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
@@ -24,26 +24,23 @@ from orchestrator.provider_streaming import (
 )
 from orchestrator.tls import build_tls_context
 
+_LOGGER = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
 
 class _FunASRConnection(Protocol):
+    def send(self, message: str | bytes) -> None: ...
 
-    def send(self, message: str | bytes) -> None:
-        ...
+    def recv(self, timeout: float | None = None) -> str | bytes: ...
 
-    def recv(self, timeout: float | None = None) -> str | bytes:
-        ...
-
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class FunASRWebSocketAdapter:
-
     endpoint: str
 
     model: str
@@ -96,6 +93,14 @@ class FunASRWebSocketAdapter:
     ) -> Iterator[ASRStreamEvent]:
         if cancellation is not None and cancellation.cancelled:
             return
+
+        _LOGGER.debug(
+            "asr_funasr_request endpoint=%s segment=%s audio_bytes=%d filename=%s",
+            self.endpoint,
+            request.segment_id,
+            len(request.audio),
+            request.filename,
+        )
 
         tls_context = build_tls_context(self.ca_path)
 
@@ -182,6 +187,11 @@ def _receive_events(
             continue
 
         if isinstance(event, ASRPartialEvent):
+            _LOGGER.debug(
+                "asr_funasr_response kind=partial segment=%s chars=%d",
+                request.segment_id,
+                len(event.text),
+            )
             yield event
 
             continue
@@ -190,6 +200,12 @@ def _receive_events(
             raise ProviderResponseError(stage="asr", reason="duplicate_final")
 
         final_emitted = True
+
+        _LOGGER.debug(
+            "asr_funasr_response kind=final segment=%s chars=%d",
+            request.segment_id,
+            len(event.text),
+        )
 
         yield event
 
