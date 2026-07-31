@@ -17,7 +17,6 @@ from orchestrator.observability import (
 )
 from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
 from orchestrator.streaming_pipeline_actors import (
-    ANSWER_TURN_CAPACITY,
     ENDPOINTED_UTTERANCE_CAPACITY,
     TTS_CHUNK_CAPACITY,
     PipelineDropCounts,
@@ -130,6 +129,12 @@ class OnsiteStreamActor:
 
     _active_cancellations: set[CancellationToken] = field(default_factory=set)
 
+    # The answer lane is deliberately single-flight.  Retain its cancellation
+    # handle separately so a newer *recognized* utterance cannot wait behind
+    # an obsolete remote LLM/TTS request.  Endpoint arrivals alone are not
+    # enough: they include VAD noise and blank ASR results.
+    _active_answer_cancellation: CancellationToken | None = None
+
     @property
     def drop_counts(self) -> PipelineDropCounts:
         return self._drops
@@ -222,12 +227,22 @@ class OnsiteStreamActor:
             self._endpoint_task = asyncio.create_task(self._run_endpoints())
 
     def _append_answer(self, item: _AnswerItem) -> None:
-        if len(self._answers) == ANSWER_TURN_CAPACITY:
-            _ = self._answers.popleft()
+        active = self._active_answer_cancellation
+
+        if active is not None:
+            _ = active.cancel(reason="superseded_asr_final")
+
+        # A later ASR final represents the user's latest completed input.  Do
+        # not let an already queued answer begin after the active provider has
+        # released its cancellation resource.
+        dropped_answers = len(self._answers)
+        self._answers.clear()
+
+        if dropped_answers > 0:
 
             self._drops = PipelineDropCounts(
                 endpointed_utterances=self._drops.endpointed_utterances,
-                answer_turns=self._drops.answer_turns + 1,
+                answer_turns=self._drops.answer_turns + dropped_answers,
                 tts_chunks=self._drops.tts_chunks,
             )
 
@@ -325,6 +340,8 @@ class OnsiteStreamActor:
 
             cancellation = self._new_cancellation()
 
+            self._active_answer_cancellation = cancellation
+
             try:
                 chunks = await asyncio.to_thread(
                     self._answer_and_synthesize,
@@ -336,7 +353,10 @@ class OnsiteStreamActor:
             finally:
                 self._active_cancellations.discard(cancellation)
 
-            if self._closed or chunks is None:
+                if self._active_answer_cancellation is cancellation:
+                    self._active_answer_cancellation = None
+
+            if self._closed or cancellation.cancelled or chunks is None:
                 continue
 
             # A packetizer has exactly one lifetime: one synthesized response.

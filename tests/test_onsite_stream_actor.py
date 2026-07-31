@@ -257,7 +257,9 @@ class _BackpressureStages:
 
         self.answer_count += 1
 
-        if self.answer_count == 3:
+        # Newer recognized ASR finals cancel the active answer and retain only
+        # the latest queued answer, so the stale first answer never emits.
+        if self.answer_count == 2:
             _ = self.all_answers_finished.set()
 
         return TurnResult(
