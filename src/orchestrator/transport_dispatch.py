@@ -274,6 +274,17 @@ class TransportControlDispatch:
             _stream_end_envelope(stream, epoch, self._hub.output_ssrc(stream, epoch), correlation)
         )
 
+    async def announce_output(self, stream: StreamKey, epoch: int) -> None:
+        sink = self._sinks.get(stream)
+        correlation = self._hub.correlation(stream)
+        if sink is None or correlation is None:
+            return
+        await sink.connection.send(
+            _stream_command_envelope(
+                stream, self._hub.output_ssrc(stream, epoch), sink, correlation, epoch=epoch
+            )
+        )
+
     @property
     def flush_failures(self) -> tuple[FlushFailure, ...]:
         return tuple(self._flush_admission.failures)
@@ -502,6 +513,7 @@ def _stream_command_envelope(
     sink: _SinkPeer,
     correlation: EnvelopeCorrelation | None,
     flush: StreamFlush | None = None,
+    epoch: int | None = None,
 ) -> str:
     if correlation is None:
         message = "stream correlation is required"
@@ -519,6 +531,8 @@ def _stream_command_envelope(
 
     if flush is not None:
         data["cancellation_epoch"] = int(flush.cancellation_epoch)
+    elif epoch is not None:
+        data["cancellation_epoch"] = epoch
 
     return _envelope(
         event_type="media.stream.command",

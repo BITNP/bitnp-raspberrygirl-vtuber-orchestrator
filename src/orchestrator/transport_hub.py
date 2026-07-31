@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, final, override
 
@@ -156,6 +157,8 @@ class RtpHub:
 
         self._route_generations: dict[StreamKey, int] = {}
 
+        self._output_command_callback: Callable[[StreamKey, int], Awaitable[None]] | None = None
+
         if onsite_bridge is not None:
             onsite_bridge.set_output_callback(self.deliver_generated_rtp)
 
@@ -165,6 +168,11 @@ class RtpHub:
         bridge = self._onsite_bridge
         if bridge is not None:
             bridge.set_output_finished_callback(callback)
+
+    def set_output_command_callback(
+        self, callback: Callable[[StreamKey, int], Awaitable[None]]
+    ) -> None:
+        self._output_command_callback = callback
 
     def attach_transport(self, transport: DatagramSender) -> None:
         self._transport = transport
@@ -200,6 +208,12 @@ class RtpHub:
             target_generated_ssrc=GeneratedSsrc(generated_ssrc(stream, epoch)),
             correlation=correlation,
         )
+
+        callback = self._output_command_callback
+        if callback is not None:
+            asyncio.get_running_loop().create_task(
+                callback(stream, int(lease.cancellation_epoch))
+            )
 
         return lease.cancellation_epoch == epoch
 

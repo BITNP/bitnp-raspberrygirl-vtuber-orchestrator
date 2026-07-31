@@ -119,6 +119,7 @@ class TransportRuntime:
         self._hub.set_output_finished_callback(
             self._control_dispatch.finish_generated_stream
         )
+        self._hub.set_output_command_callback(self._control_dispatch.announce_output)
 
         self._datagram_transport: DatagramSender | None = None
 
