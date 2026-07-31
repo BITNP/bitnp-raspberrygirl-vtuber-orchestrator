@@ -6,6 +6,7 @@ import logging
 import wave
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import TYPE_CHECKING, Protocol, override
 
 from orchestrator.funasr_adapter import FunASRWebSocketAdapter
@@ -435,6 +436,7 @@ class OnsiteExplainerBridge:
 
             filename = "onsite-l16.pcm"
 
+        started_at = perf_counter()
         try:
             event = self.asr.transcribe(
                 audio=audio,
@@ -452,9 +454,10 @@ class OnsiteExplainerBridge:
                 _LOGGER.warning("onsite_asr_empty segment=%s", segment_id)
                 return None
             _LOGGER.warning(
-                "onsite_asr_final segment=%s chars=%d",
+                "onsite_asr_final segment=%s chars=%d latency_ms=%.1f",
                 event.segment_id,
                 len(event.text),
+                (perf_counter() - started_at) * 1_000,
             )
             return event
 
@@ -467,6 +470,7 @@ class OnsiteExplainerBridge:
         if not pipeline.accept_audience_input(event):
             return None
 
+        started_at = perf_counter()
         try:
             turn = pipeline.process_next_turn(cancellation)
         except (AdapterConfigError, OSError):
@@ -475,15 +479,17 @@ class OnsiteExplainerBridge:
         else:
             if turn is not None:
                 _LOGGER.warning(
-                    "onsite_llm_final turn=%s chars=%d",
+                    "onsite_llm_final turn=%s chars=%d latency_ms=%.1f",
                     turn.turn_id,
                     len(turn.answer_text),
+                    (perf_counter() - started_at) * 1_000,
                 )
             return turn
 
     def synthesize(
         self, text: str, cancellation: CancellationToken
     ) -> tuple[Pcm16leChunk, ...] | None:
+        started_at = perf_counter()
         try:
             if isinstance(self.tts, StreamingTtsAdapter):
                 return self.tts.stream_pcm16le(
@@ -514,7 +520,9 @@ class OnsiteExplainerBridge:
             return None
         else:
             _LOGGER.warning(
-                "onsite_tts_complete pcm_bytes=%d", len(pcm16le)
+                "onsite_tts_complete pcm_bytes=%d latency_ms=%.1f",
+                len(pcm16le),
+                (perf_counter() - started_at) * 1_000,
             )
             return chunks
 

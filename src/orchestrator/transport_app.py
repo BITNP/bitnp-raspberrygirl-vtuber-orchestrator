@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 
 from orchestrator.config import OrchestratorConfig, load_config_from_env
@@ -64,6 +65,11 @@ def _onsite_bridge_enabled(config: OrchestratorConfig) -> bool:
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
     try:
         asyncio.run(run_transport())
 
