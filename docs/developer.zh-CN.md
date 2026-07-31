@@ -75,6 +75,12 @@ bash scripts/verify_workspace.sh --sibling-root ..
 
 `verify_workspace.sh` 只组合 schema、topology 和 Frontend contract gate，不替代任何仓库的本地测试。各服务的本地命令由其用户文档维护。
 
+## 本机回环联调
+
+本机回环只用于同一台机器上的开发联调，和现场/LAN 部署是两套互斥配置。它使用未加密的 `ws://localhost`，因此所有监听与通告地址都必须是 loopback；不得把该配置暴露到局域网。完整变量、启动顺序和故障对照见[本机回环联调指南](local-loopback.zh-CN.md)。
+
+服务进程不会自行读取 `.env`。开发时从每个服务仓库运行 `uv run --env-file .env <command>`；systemd 部署则通过 `EnvironmentFile` 注入变量。
+
 ## 部署
 
 `orchestrator-transport` 是中心进程，监听认证 WSS 控制连接和 UDP RTP。生产环境使用 `/control` WSS endpoint、`TRUSTED_LAN_TOKEN`、仓库外预配的 TLS 证书、一个只读 PEM CA bundle 及私有 LAN 网络规则。Orchestrator、Mic、Sound 和 Comments 都设置 `ORCHESTRATOR_TLS_CA_PATH` 指向该 bundle；它可包含内部根证书和中间证书。Orchestrator 用它校验自托管 ASR、LLM、TTS 的 HTTPS endpoint，Mic、Sound、Comments 用它校验 Orchestrator WSS 证书。主机系统信任库可作为已安装相同 CA 时的替代，但不是部署契约。Mic 与 Sound 使用同一个 session ID 和 stream ID，且只连接 Orchestrator。具体挂载和环境文件见 [部署资产](../deploy/README.md)。
