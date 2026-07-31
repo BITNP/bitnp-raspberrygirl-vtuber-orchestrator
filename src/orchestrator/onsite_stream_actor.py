@@ -57,6 +57,9 @@ class OnsiteStages(Protocol):
         ...
 
 
+_RTP_FRAME_DURATION_SECONDS = 0.020
+
+
 @dataclass(frozen=True, slots=True)
 class _EndpointItem:
 
@@ -404,6 +407,13 @@ class OnsiteStreamActor:
                     await self.stages.output(self.stream, item.epoch, packet)
 
                     self._record_correlation("rtp_egress", item.correlation, None)
+
+                    # RTP is a real-time transport boundary, not a bulk UDP
+                    # transfer.  Sending an entire synthesized answer in one
+                    # event-loop turn overflows Sound's socket/playback queues
+                    # and truncates the audible tail.  Cancellation cancels the
+                    # chunk task, so this pacing never delays barge-in.
+                    await asyncio.sleep(_RTP_FRAME_DURATION_SECONDS)
 
     def _correlation(
         self, endpoint: EndpointedUtterance, epoch: CancellationEpoch
