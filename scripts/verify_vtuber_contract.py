@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
         description="Verify the frontend contract without Godot."
     )
 
-    parser.add_argument("--frontend-path", type=Path, required=True)
+    _ = parser.add_argument("--frontend-path", type=Path, required=True)
 
     return parser.parse_args()
 
@@ -211,6 +211,14 @@ def main() -> int:
         or "application/run/orchestrator_ws_url" not in client
     ):
         print("Orchestrator WebSocket setting is missing")
+
+        return 1
+
+    if (
+        "run/orchestrator_tls_ca_path" not in project
+        or "application/run/orchestrator_tls_ca_path" not in client
+    ):
+        print("Orchestrator TLS CA setting is missing")
 
         return 1
 

@@ -87,11 +87,13 @@ def test_documentation_tree_and_protocol_ownership_contract() -> None:
     assert all(
         path
         in {
-            ".gitignore",
-            "README.md",
-            "scripts/vtuber_control_client.gd",
-            "raspberry_girl.tscn",
-            "tests/protocol_smoke.gd",
+                ".gitignore",
+                "README.md",
+                "project.godot",
+                "scripts/vtuber_control_client.gd",
+                "raspberry_girl.tscn",
+                "tests/protocol_smoke.gd",
+                "tests/fixtures/frontend_test_ca.pem",
             "tests/fixtures/vtuber_control_commands.json",
             "tests/fixtures/vtuber_control_invalid.json",
         }
