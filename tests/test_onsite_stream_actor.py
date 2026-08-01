@@ -117,6 +117,8 @@ class _StreamingStages(_Stages):
 
     release_second_chunk: threading.Event = field(default_factory=threading.Event)
 
+    fail_after_first: bool = False
+
     def stream_synthesize(
         self, turn: TurnResult, cancellation: CancellationToken
     ) -> Iterator[Pcm16leChunk]:
@@ -126,6 +128,9 @@ class _StreamingStages(_Stages):
             self.streamed.append(1)
             yield Pcm16leChunk(b"\x10\x20" * 320)
             _ = self.release_second_chunk.wait()
+            if self.fail_after_first:
+                message = "stream failed"
+                raise OSError(message)
             self.streamed.append(2)
             yield Pcm16leChunk(b"\x30\x40" * 320)
 
@@ -182,6 +187,25 @@ async def _streaming_tts_proof() -> None:
         CancellationEpoch(0),
         CancellationEpoch(0),
     ]
+
+
+def test_actor_ends_partial_stream_without_marking_failed_tts_complete() -> None:
+    asyncio.run(_partial_stream_failure_proof())
+
+
+async def _partial_stream_failure_proof() -> None:
+    stages = _StreamingStages(fail_after_first=True)
+    stream = StreamKey("session", "stream")
+    actor = OnsiteStreamActor(stream, CancellationEpoch(0), stages)
+
+    actor.submit(_endpoint(stream), CancellationEpoch(0))
+    _ = await stages.first_packet.wait()
+    _ = stages.release_second_chunk.set()
+    await actor.wait_quiescent()
+
+    assert stages.streamed == [1]
+    assert stages.completed_pcm_bytes is None
+    assert [epoch for _, epoch, _ in stages.outputs] == [CancellationEpoch(0)]
 
 
 async def _semantic_gate_proof() -> None:

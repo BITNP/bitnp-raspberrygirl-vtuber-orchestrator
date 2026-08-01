@@ -481,6 +481,7 @@ class OnsiteStreamActor:
         output_epoch = item.epoch
         packetizer: TtsPcmRtpPacketizer | None = None
         total_bytes = 0
+        failed = False
         try:
             while not cancellation.cancelled:
                 chunk = await asyncio.to_thread(_next_chunk, stream)
@@ -524,7 +525,7 @@ class OnsiteStreamActor:
         except (OSError, ValueError):
             # A partial streaming response remains a valid audible prefix; end
             # it cleanly rather than abruptly flushing Sound.
-            pass
+            failed = True
         if cancellation.cancelled:
             return
         if packetizer is None:
@@ -553,6 +554,9 @@ class OnsiteStreamActor:
                 answer.answer_text[:240],
             )
         )
+        if failed:
+            self._record_correlation("tts_failure", item.correlation, None)
+            return
         completer = cast(
             "Callable[[TurnResult, int], None] | None",
             getattr(self.stages, "complete_stream", None),

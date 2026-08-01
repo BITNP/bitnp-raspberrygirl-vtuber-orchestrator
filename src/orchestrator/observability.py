@@ -14,6 +14,7 @@ type OnsiteStage = Literal[
     "asr_failure",
     "answer",
     "tts",
+    "tts_failure",
     "queue",
     "drop",
     "rtp_egress",
