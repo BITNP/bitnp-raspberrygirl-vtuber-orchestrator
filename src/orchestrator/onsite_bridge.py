@@ -506,12 +506,18 @@ class OnsiteExplainerBridge:
                 getattr(self.tts, "capability", "streaming_sse") == "streaming_sse"
                 and isinstance(self.tts, StreamingTtsAdapter)
             ):
-                return self.tts.stream_pcm16le(
-                    text=text,
-                    voice=self.voice,
-                    ref_audio=self.ref_audio,
-                    ref_text=self.ref_text,
-                    cancellation=cancellation,
+                # The legacy bridge contract remains complete-audio until the
+                # stream actor owns incremental TTS chunks.  Materialising at
+                # this boundary prevents a generator from being consumed once
+                # by completion bookkeeping and then again by RTP output.
+                return tuple(
+                    self.tts.stream_pcm16le(
+                        text=text,
+                        voice=self.voice,
+                        ref_audio=self.ref_audio,
+                        ref_text=self.ref_text,
+                        cancellation=cancellation,
+                    )
                 )
 
             response = self.tts.synthesize(
