@@ -5,7 +5,6 @@ import json
 import logging
 import ssl
 from dataclasses import dataclass, field
-from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, override
 from urllib.parse import unquote, urlsplit
@@ -32,11 +31,8 @@ from orchestrator.provider_streaming import (
     ProviderCancellationHandle,
     ProviderCapability,
     ProviderDeadlines,
-    ProviderRequest,
     ProviderResponseError,
-    post_sse,
 )
-from orchestrator.tls import build_tls_context
 from orchestrator.tts_rtp import Pcm16leChunk
 
 _LOGGER = logging.getLogger(__name__)
@@ -85,6 +81,9 @@ class VllmOmniSpeechPayload(TypedDict):
 
     voice: str
 
+
+class VllmOmniExtensionParameters(TypedDict):
+
     task_type: Literal["Base"]
 
     ref_audio: str
@@ -99,6 +98,8 @@ class HttpSpeechRequest:
     url: str
 
     json: VllmOmniSpeechPayload
+
+    extra_body: VllmOmniExtensionParameters
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +282,8 @@ class OpenAICompatibleASRAdapter:
                                     request.segment_id,
                                     request.seq,
                                 )
+                        case _:
+                            continue
                 if (
                     cancellation is None or not cancellation.cancelled
                 ) and not final_emitted:
@@ -360,6 +363,8 @@ class VllmOmniTTSAdapter:
                 "model": self.model.strip(),
                 "input": text,
                 "voice": voice,
+            },
+            extra_body={
                 "task_type": "Base",
                 "ref_audio": _portable_reference_audio(ref_audio),
                 "ref_text": ref_text,
@@ -382,16 +387,34 @@ class VllmOmniTTSAdapter:
             ref_text=ref_text,
         )
 
-        response = _post(
-            speech.url,
-            json.dumps(speech.json).encode(),
-            _headers(self.api_key, "application/json"),
-            cancellation,
-            self.ca_path,
-            self.timeout_seconds,
-        )
-
-        return SynthesizedAudio(data=response.data, media_type=response.media_type)
+        client = self._client()
+        release = _bind_cancellation(cancellation, client.close)
+        try:
+            response = client.audio.speech.create(
+                **speech.json,
+                response_format="wav",
+                extra_body=speech.extra_body,
+                timeout=self.timeout_seconds,
+            )
+            if cancellation is not None and cancellation.cancelled:
+                return SynthesizedAudio(data=b"", media_type="application/octet-stream")
+            return SynthesizedAudio(
+                data=response.content,
+                media_type="audio/wav",
+            )
+        except (
+            APIConnectionError,
+            APITimeoutError,
+            APIStatusError,
+            APIError,
+            httpx.HTTPError,
+        ) as error:
+            if cancellation is not None and cancellation.cancelled:
+                return SynthesizedAudio(data=b"", media_type="application/octet-stream")
+            raise _tts_provider_error(error) from error
+        finally:
+            release()
+            client.close()
 
     def stream_pcm16le(
         self,
@@ -409,43 +432,72 @@ class VllmOmniTTSAdapter:
             ref_audio=ref_audio,
             ref_text=ref_text,
         )
-        payload = dict(speech.json)
-        payload.update(
-            {
-                "stream": True,
-                "stream_format": "sse",
-                "response_format": "pcm",
-                "speed": 1.0,
-            }
-        )
-        done = False
-        resampler = _Pcm24khzTo16khzResampler()
-        for data in post_sse(
-            ProviderRequest(
-                speech.url,
-                json.dumps(payload).encode(),
-                _headers(self.api_key, "application/json"),
-                "tts",
-                self.ca_path,
-            ),
-            deadlines=ProviderDeadlines(
-                connect_seconds=5.0,
-                read_seconds=self.timeout_seconds,
-                total_seconds=self.timeout_seconds,
-            ),
-            cancellation=cancellation,
-        ):
+        client = self._client()
+        release = _bind_cancellation(cancellation, client.close)
+        response = None
+        try:
+            response = client.audio.speech.create(
+                **speech.json,
+                response_format="pcm",
+                speed=1.0,
+                stream_format="sse",
+                extra_body={**speech.extra_body, "stream": True},
+                timeout=self.timeout_seconds,
+            )
+            response_release = _bind_cancellation(cancellation, response.close)
+            try:
+                done = False
+                resampler = _Pcm24khzTo16khzResampler()
+                for line in response.iter_lines():
+                    if cancellation is not None and cancellation.cancelled:
+                        return
+                    data = _sse_data(line)
+                    if data is None:
+                        continue
+                    chunk = _normalize_tts_sse(data)
+                    if chunk is None:
+                        done = True
+                        break
+                    converted = resampler.push(chunk)
+                    if converted:
+                        yield Pcm16leChunk(converted)
+                if (cancellation is None or not cancellation.cancelled) and not done:
+                    raise ProviderResponseError(stage="tts", reason="missing_done")
+            finally:
+                response_release()
+        except (
+            APIConnectionError,
+            APITimeoutError,
+            APIStatusError,
+            APIError,
+            httpx.HTTPError,
+        ) as error:
             if cancellation is not None and cancellation.cancelled:
                 return
-            chunk = _normalize_tts_sse(data)
-            if chunk is None:
-                done = True
-                break
-            converted = resampler.push(chunk)
-            if converted:
-                yield Pcm16leChunk(converted)
-        if (cancellation is None or not cancellation.cancelled) and not done:
-            raise ProviderResponseError(stage="tts", reason="missing_done")
+            raise _tts_provider_error(error) from error
+        finally:
+            if response is not None:
+                response.close()
+            release()
+            client.close()
+
+    def _client(self) -> OpenAI:
+        verify: bool | ssl.SSLContext = (
+            True
+            if self.ca_path is None
+            else ssl.create_default_context(cafile=self.ca_path)
+        )
+        return OpenAI(
+            api_key=self.api_key or "not-needed-for-vllm-omni",
+            base_url=f"{self.endpoint.rstrip('/')}/",
+            timeout=self.timeout_seconds,
+            max_retries=0,
+            http_client=httpx.Client(
+                verify=verify,
+                timeout=self.timeout_seconds,
+                trust_env=False,
+            ),
+        )
 
 
 def _require_endpoint_and_model(endpoint: str, model: str) -> None:
@@ -454,15 +506,6 @@ def _require_endpoint_and_model(endpoint: str, model: str) -> None:
 
     if model.strip() == "":
         raise MediaAdapterConfigError(field_name="model")
-
-
-def _headers(api_key: str | None, content_type: str) -> dict[str, str]:
-    headers = {"Content-Type": content_type}
-
-    if api_key is not None and api_key.strip() != "":
-        headers["Authorization"] = f"Bearer {api_key.strip()}"
-
-    return headers
 
 
 def _bind_cancellation(
@@ -484,6 +527,16 @@ def _asr_provider_error(
     if isinstance(error, APIConnectionError):
         return ProviderResponseError(stage="asr", reason="connect")
     return ProviderResponseError(stage="asr", reason="response")
+
+
+def _tts_provider_error(error: APIError | httpx.HTTPError) -> ProviderResponseError:
+    if isinstance(error, APIStatusError):
+        return ProviderResponseError(stage="tts", reason=f"status_{error.status_code}")
+    if isinstance(error, (APITimeoutError, httpx.TimeoutException)):
+        return ProviderResponseError(stage="tts", reason="read")
+    if isinstance(error, APIConnectionError):
+        return ProviderResponseError(stage="tts", reason="connect")
+    return ProviderResponseError(stage="tts", reason="response")
 
 
 def _portable_reference_audio(ref_audio: str) -> str:
@@ -541,6 +594,12 @@ def _normalize_tts_sse(data: str) -> bytes | None:
             raise ProviderResponseError(stage="tts", reason="event")
 
 
+def _sse_data(line: str) -> str | None:
+    if line == "" or not line.startswith("data: "):
+        return None
+    return line.removeprefix("data: ")
+
+
 class _Pcm24khzTo16khzResampler:
     """Linear 24 kHz → 16 kHz PCM16LE resampler preserving SSE boundaries.
 
@@ -585,66 +644,3 @@ class _Pcm24khzTo16khzResampler:
             del self._samples[:discard]
             self._sample_offset += discard
         return bytes(output)
-
-
-@dataclass(frozen=True, slots=True)
-class _HttpResponse:
-    data: bytes
-
-    media_type: str
-
-
-def _post(  # noqa: PLR0913
-    url: str,
-    body: bytes,
-    headers: dict[str, str],
-    cancellation: ProviderCancellationHandle | None,
-    ca_path: Path | None,
-    timeout_seconds: float = 30.0,
-) -> _HttpResponse:
-    parsed = urlsplit(url)
-
-    path = parsed.path if parsed.path != "" else "/"
-
-    if parsed.query != "":
-        path = f"{path}?{parsed.query}"
-
-    if parsed.scheme == "http":
-        connection: HTTPConnection | HTTPSConnection = HTTPConnection(
-            parsed.netloc,
-            timeout=timeout_seconds,
-        )
-
-    elif parsed.scheme == "https":
-        context = build_tls_context(ca_path)
-        if context is None:
-            connection = HTTPSConnection(parsed.netloc, timeout=timeout_seconds)
-        else:
-            connection = HTTPSConnection(
-                parsed.netloc, timeout=timeout_seconds, context=context
-            )
-
-    else:
-        raise MediaAdapterConfigError(field_name="endpoint")
-
-    release = None if cancellation is None else cancellation.bind(connection.close)
-
-    try:
-        if cancellation is not None and cancellation.cancelled:
-            return _HttpResponse(data=b"", media_type="application/octet-stream")
-
-        connection.request("POST", path, body=body, headers=headers)
-
-        response = connection.getresponse()
-
-        content_type = response.getheader("Content-Type", "application/octet-stream")
-
-        media_type = content_type.split(";", 1)[0]
-
-        return _HttpResponse(data=response.read(), media_type=media_type)
-
-    finally:
-        if release is not None:
-            release()
-
-        connection.close()

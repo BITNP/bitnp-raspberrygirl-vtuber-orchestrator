@@ -482,7 +482,10 @@ class _BackpressureStages:
 
         _ = (turn, cancellation)
 
-        return tuple(Pcm16leChunk(b"\x10\x20") for _ in range(17))
+        # Each queued item must be a complete RTP frame.  Tiny fragments delay
+        # the first egress until packetizer.finish(), so this backpressure test
+        # can wait forever for its deliberately blocked output hook.
+        return tuple(Pcm16leChunk(b"\x10\x20" * 320) for _ in range(17))
 
     def complete(self, turn: TurnResult, chunks: tuple[Pcm16leChunk, ...]) -> None:
 

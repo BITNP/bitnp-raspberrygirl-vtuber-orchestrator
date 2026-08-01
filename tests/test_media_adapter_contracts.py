@@ -25,27 +25,6 @@ def ca_path(tmp_path: Path) -> Path:
     return path
 
 
-class _TtsResponse:
-    def getheader(self, _name: str, _default: str) -> str:
-        return "audio/wav"
-
-    def read(self) -> bytes:
-        return b"audio"
-
-
-class _TtsConnection:
-    def request(
-        self, _method: str, _path: str, *, body: bytes, headers: dict[str, str]
-    ) -> None:
-        _ = (body, headers)
-
-    def getresponse(self) -> _TtsResponse:
-        return _TtsResponse()
-
-    def close(self) -> None:
-        return
-
-
 def test_default_mock_media_providers_need_no_credentials_or_network() -> None:
     # Given: the normal replay environment has no provider configuration.
 
@@ -170,6 +149,8 @@ def test_vllm_omni_builds_opt_in_fake_local_speech_request() -> None:
         "model": "vllm-omni",
         "input": "欢迎来到 BitNet 讲解。",
         "voice": "raspberry",
+    }
+    assert request.extra_body == {
         "task_type": "Base",
         "ref_audio": "https://media.example.test/raspberry.wav",
         "ref_text": "参考音色文本",
@@ -197,7 +178,7 @@ def test_vllm_omni_encodes_local_reference_path_as_data_url(tmp_path: Path) -> N
 
     # Then: the provider receives portable audio bytes, not a host-local path.
 
-    assert request.json["ref_audio"] == _data_url(reference.read_bytes())
+    assert request.extra_body["ref_audio"] == _data_url(reference.read_bytes())
 
 
 def test_vllm_omni_encodes_file_uri_reference_as_data_url(tmp_path: Path) -> None:
@@ -221,7 +202,7 @@ def test_vllm_omni_encodes_file_uri_reference_as_data_url(tmp_path: Path) -> Non
 
     # Then: the provider receives a data URL accepted by the local Qwen server.
 
-    assert request.json["ref_audio"] == _data_url(reference.read_bytes())
+    assert request.extra_body["ref_audio"] == _data_url(reference.read_bytes())
 
 
 def test_vllm_omni_preserves_existing_reference_data_url() -> None:
@@ -244,7 +225,7 @@ def test_vllm_omni_preserves_existing_reference_data_url() -> None:
 
     # Then: no second encoding corrupts the existing data URL.
 
-    assert request.json["ref_audio"] == ref_audio
+    assert request.extra_body["ref_audio"] == ref_audio
 
 
 def test_media_adapters_retain_configured_ca_path_for_provider_requests(
@@ -270,77 +251,6 @@ def test_media_adapters_retain_configured_ca_path_for_provider_requests(
 
     assert asr.ca_path == ca_path
     assert tts.ca_path == ca_path
-
-
-def test_vllm_omni_https_connection_receives_verified_configured_ca_context(
-    monkeypatch: pytest.MonkeyPatch, ca_path: Path, tmp_path: Path
-) -> None:
-    # Given: a secure vLLM-Omni endpoint and configured local CA bundle.
-
-
-    contexts: list[ssl.SSLContext] = []
-
-    def connect(
-        _host: str, *, timeout: int, context: ssl.SSLContext
-    ) -> _TtsConnection:
-        _ = timeout
-        contexts.append(context)
-        return _TtsConnection()
-
-    monkeypatch.setattr(media_adapters, "HTTPSConnection", connect)
-
-    reference = tmp_path / "voice.wav"
-    _ = reference.write_bytes(b"RIFFvoice")
-
-    # When: the production TTS adapter sends its speech request.
-
-    audio = VllmOmniTTSAdapter(
-        endpoint="https://tts.example.test/v1",
-        model="tts-model",
-        ca_path=ca_path,
-    ).synthesize(
-        text="你好", voice="raspberry", ref_audio=reference.as_uri(), ref_text="参考"
-    )
-
-    # Then: HTTPSConnection receives the existing verified CA-based context.
-
-    assert audio.data == b"audio"
-    assert contexts[0].verify_mode == ssl.CERT_REQUIRED
-    assert contexts[0].check_hostname is True
-
-
-def test_vllm_omni_http_connection_omits_tls_context_even_with_configured_ca_bundle(
-    monkeypatch: pytest.MonkeyPatch, ca_path: Path, tmp_path: Path
-) -> None:
-    # Given: a plaintext vLLM-Omni endpoint and configured local CA bundle.
-
-
-    connections: list[_TtsConnection] = []
-
-    def connect(_host: str, *, timeout: int) -> _TtsConnection:
-        _ = timeout
-        connection = _TtsConnection()
-        connections.append(connection)
-        return connection
-
-    monkeypatch.setattr(media_adapters, "HTTPConnection", connect)
-
-    reference = tmp_path / "voice.wav"
-    _ = reference.write_bytes(b"RIFFvoice")
-
-    # When: the production TTS adapter sends its speech request.
-
-    _ = VllmOmniTTSAdapter(
-        endpoint="http://tts.example.test/v1",
-        model="tts-model",
-        ca_path=ca_path,
-    ).synthesize(
-        text="你好", voice="raspberry", ref_audio=reference.as_uri(), ref_text="参考"
-    )
-
-    # Then: HTTP uses its original constructor shape without TLS context.
-
-    assert len(connections) == 1
 
 
 @pytest.mark.parametrize(
