@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import Final, Protocol, cast
@@ -15,7 +14,6 @@ _INSTRUCTION: Final = (
 
 @dataclass(frozen=True, slots=True)
 class AsrGateRequest:
-
     transcript: str
 
     active_answer_excerpt: str = ""
@@ -26,14 +24,11 @@ class AsrGateRequest:
 
 
 class AsrGateProvider(Protocol):
-
-    def __call__(self, request: AsrGateRequest) -> str:
-        ...
+    def __call__(self, request: AsrGateRequest) -> str: ...
 
 
 @unique
 class AsrGateDecision(StrEnum):
-
     ACCEPT = "accept"
 
     DISCARD = "discard"
@@ -43,7 +38,6 @@ class AsrGateDecision(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class AsrSemanticGate:
-
     provider: AsrGateProvider
 
     def evaluate(
@@ -59,16 +53,15 @@ class AsrSemanticGate:
             active_answer_excerpt=active_answer_excerpt,
             is_playing=is_playing,
         )
-        if not isinstance(value, dict) or set(value) != {"decision"}:
+        if not isinstance(value, dict):
             return AsrGateDecision.DISCARD
-        decision = cast("dict[str, object]", value)["decision"]
+        parsed = cast("dict[str, object]", value)
+        if set(parsed) != {"decision"}:
+            return AsrGateDecision.DISCARD
+        decision = parsed["decision"]
         match decision:
             case "accept":
-                return (
-                    AsrGateDecision.DISCARD
-                    if is_playing
-                    else AsrGateDecision.ACCEPT
-                )
+                return AsrGateDecision.DISCARD if is_playing else AsrGateDecision.ACCEPT
 
             case "interrupt" if is_playing:
                 return AsrGateDecision.INTERRUPT

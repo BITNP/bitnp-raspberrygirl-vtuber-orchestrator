@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from orchestrator.config import OrchestratorConfig, load_config_from_env
 from orchestrator.ids import SessionId
@@ -13,6 +13,9 @@ from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 from orchestrator.transport_config import load_transport_config_from_env
 from orchestrator.transport_runtime import TransportRuntime
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 async def run_transport() -> None:

@@ -8,11 +8,13 @@ import threading
 import wave
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, override
 
 from sound.receive import ReceiveRuntime
 from sound.receive_config import SoundReceiveConfig
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from orchestrator.media_adapters import OpenAICompatibleASRAdapter, VllmOmniTTSAdapter
 from orchestrator.modes import AdaptiveAgentPolicy
@@ -347,7 +349,7 @@ def test_fake_local_provider_non_success_drops_mic_without_raw_fallback() -> Non
 def test_qwen_shaped_tts_response_becomes_canonical_generated_rtp(
     tmp_path: Path,
 ) -> None:
-    # Given: the local Qwen server requires portable reference audio and emits 24 kHz WAV.
+    # Given: local Qwen requires portable reference audio and emits 24 kHz WAV.
 
 
     reference = tmp_path / "voice.wav"
@@ -375,7 +377,9 @@ def test_qwen_shaped_tts_response_becomes_canonical_generated_rtp(
     assert generated[0] != mic_packet
 
 
-def _bridge(endpoint: str, *, ref_audio: str = "data:audio/wav;base64,UklGRg==") -> OnsiteExplainerBridge:
+def _bridge(
+    endpoint: str, *, ref_audio: str = "data:audio/wav;base64,UklGRg=="
+) -> OnsiteExplainerBridge:
 
     adapters = PipelineAdapters(
         mode_policy=AdaptiveAgentPolicy(),

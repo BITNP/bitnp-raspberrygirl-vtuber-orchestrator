@@ -115,12 +115,14 @@ class TransportControlDispatch:
 
         self._output_fence: SchedulerOutputFence | None = None
 
-    async def register(
+    async def register(  # noqa: C901, PLR0912
         self, raw_message: str, peer_ip: str, connection: ControlPeer
     ) -> None:
         event = parse_control_event(raw_message)
 
-        _LOGGER.debug("control_register event=%s peer=%s", type(event).__name__, peer_ip)
+        _LOGGER.debug(
+            "control_register event=%s peer=%s", type(event).__name__, peer_ip
+        )
 
         self._hub.register_control(event, peer_ip, _connection_id(connection))
 
@@ -525,7 +527,7 @@ def _source_ready_envelope(
     )
 
 
-def _stream_command_envelope(
+def _stream_command_envelope(  # noqa: PLR0913
     stream: StreamKey,
     ssrc: int,
     sink: _SinkPeer,

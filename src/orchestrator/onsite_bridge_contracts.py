@@ -171,7 +171,9 @@ def _interpolated_sample(payload: bytes, output_index: int) -> int:
 def _pcm16le_sample(payload: bytes, sample_index: int) -> int:
     offset = sample_index * _PCM16_BYTES
 
-    return int.from_bytes(payload[offset : offset + _PCM16_BYTES], "little", signed=True)
+    return int.from_bytes(
+        payload[offset : offset + _PCM16_BYTES], "little", signed=True
+    )
 
 
 def _sample_to_pcm16le(sample: int) -> bytes:
