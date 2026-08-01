@@ -486,19 +486,29 @@ class OnsiteExplainerBridge:
         )
 
         started_at = perf_counter()
-        try:
-            event = self.asr.transcribe(
-                audio=audio,
-                filename=filename,
-                received_at_ms=sequence * 20,
-                segment_id=segment_id or f"asr-onsite-{sequence:04d}",
-                seq=sequence,
-                cancellation=cancellation,
-            )
-        except (MediaAdapterConfigError, OSError):
-            _LOGGER.exception("onsite_asr_failed segment=%s", segment_id)
-            return None
-        else:
+        for attempt in range(2):
+            try:
+                event = self.asr.transcribe(
+                    audio=audio,
+                    filename=filename,
+                    received_at_ms=sequence * 20,
+                    segment_id=segment_id or f"asr-onsite-{sequence:04d}",
+                    seq=sequence,
+                    cancellation=cancellation,
+                )
+            except MediaAdapterConfigError:
+                _LOGGER.exception("onsite_asr_permanent_failure segment=%s", segment_id)
+                return None
+            except OSError:
+                if cancellation is not None and cancellation.cancelled:
+                    return None
+                if attempt == 1:
+                    _LOGGER.exception("onsite_asr_failed segment=%s", segment_id)
+                    return None
+                _LOGGER.warning(
+                    "onsite_asr_retry segment=%s attempt=%d", segment_id, attempt + 1
+                )
+                continue
             if event is None:
                 _LOGGER.debug("onsite_asr_empty segment=%s", segment_id)
                 return None
@@ -509,6 +519,7 @@ class OnsiteExplainerBridge:
                 (perf_counter() - started_at) * 1_000,
             )
             return event
+        return None
 
     def answer(
         self,
@@ -526,12 +537,20 @@ class OnsiteExplainerBridge:
         )
 
         started_at = perf_counter()
-        try:
-            turn = pipeline.process_next_turn(cancellation)
-        except (AdapterConfigError, OSError):
-            _LOGGER.exception("onsite_llm_failed")
-            return None
-        else:
+        for attempt in range(2):
+            try:
+                turn = pipeline.process_next_turn(cancellation)
+            except AdapterConfigError:
+                _LOGGER.exception("onsite_llm_permanent_failure")
+                return None
+            except OSError:
+                if cancellation.cancelled:
+                    return None
+                if attempt == 1:
+                    _LOGGER.exception("onsite_llm_failed")
+                    return None
+                _LOGGER.warning("onsite_llm_retry attempt=%d", attempt + 1)
+                continue
             if turn is not None:
                 _LOGGER.debug(
                     "onsite_llm_final turn=%s chars=%d latency_ms=%.1f",
@@ -540,6 +559,7 @@ class OnsiteExplainerBridge:
                     (perf_counter() - started_at) * 1_000,
                 )
             return turn
+        return None
 
     def gate(
         self,
@@ -577,40 +597,47 @@ class OnsiteExplainerBridge:
         _LOGGER.debug(
             "onsite_tts_request text_chars=%d voice=%s", len(text), self.voice
         )
-        try:
-            response = self.tts.synthesize(
-                text=text,
-                voice=self.voice,
-                ref_audio=self.ref_audio,
-                ref_text=self.ref_text,
-                cancellation=cancellation,
-            )
+        for attempt in range(2):
+            try:
+                response = self.tts.synthesize(
+                    text=text,
+                    voice=self.voice,
+                    ref_audio=self.ref_audio,
+                    ref_text=self.ref_text,
+                    cancellation=cancellation,
+                )
 
-            l16 = l16_from_wav(response)
+                l16 = l16_from_wav(response)
 
-            pcm16le = b"".join(
-                l16[offset : offset + 2][::-1] for offset in range(0, len(l16), 2)
-            )
-
-            chunks = (Pcm16leChunk(pcm16le),)
-        except (MediaAdapterConfigError, OnsiteBridgeMediaError, OSError, wave.Error):
-            _LOGGER.exception("onsite_tts_failed")
-            return None
-        else:
+                pcm16le = b"".join(
+                    l16[offset : offset + 2][::-1] for offset in range(0, len(l16), 2)
+                )
+                chunks = (Pcm16leChunk(pcm16le),)
+            except (MediaAdapterConfigError, OnsiteBridgeMediaError, wave.Error):
+                _LOGGER.exception("onsite_tts_permanent_failure")
+                return None
+            except OSError:
+                if cancellation.cancelled:
+                    return None
+                if attempt == 1:
+                    _LOGGER.exception("onsite_tts_failed")
+                    return None
+                _LOGGER.warning("onsite_tts_retry attempt=%d", attempt + 1)
+                continue
             _LOGGER.debug(
                 "onsite_tts_complete pcm_bytes=%d latency_ms=%.1f",
                 len(pcm16le),
                 (perf_counter() - started_at) * 1_000,
             )
             return chunks
+        return None
 
     def stream_synthesize(
         self, text: str, cancellation: CancellationToken
     ) -> Iterator[Pcm16leChunk] | None:
-        if (
-            getattr(self.tts, "capability", "final_only") != "streaming_sse"
-            or not isinstance(self.tts, StreamingTtsAdapter)
-        ):
+        if getattr(
+            self.tts, "capability", "final_only"
+        ) != "streaming_sse" or not isinstance(self.tts, StreamingTtsAdapter):
             return None
         return self.tts.stream_pcm16le(
             text=text,
