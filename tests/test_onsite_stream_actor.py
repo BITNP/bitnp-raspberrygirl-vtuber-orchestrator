@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
 from orchestrator.asr_semantic_gate import AsrGateDecision
 from orchestrator.ids import SegmentId as PipelineSegmentId
@@ -21,6 +21,8 @@ from orchestrator.streaming_endpoint import EndpointedUtterance, EndpointReason
 from orchestrator.tts_rtp import Pcm16leChunk
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from orchestrator.llm import CancellationToken
 
 
@@ -94,6 +96,7 @@ class _DiscardingGateStages(_Stages):
         self.gate_calls.append((event.text, active_answer_excerpt, is_playing))
         return AsrGateDecision.DISCARD
 
+    @override
     def answer(
         self, event: ASRAudienceEvent, cancellation: CancellationToken
     ) -> TurnResult:
@@ -103,6 +106,51 @@ class _DiscardingGateStages(_Stages):
         raise AssertionError(message)
 
 
+@dataclass(slots=True)
+class _StreamingStages(_Stages):
+
+    streamed: list[int] = field(default_factory=list)
+
+    completed_pcm_bytes: int | None = None
+
+    first_packet: asyncio.Event = field(default_factory=asyncio.Event)
+
+    release_second_chunk: threading.Event = field(default_factory=threading.Event)
+
+    def stream_synthesize(
+        self, turn: TurnResult, cancellation: CancellationToken
+    ) -> Iterator[Pcm16leChunk]:
+        _ = (turn, cancellation)
+
+        def chunks() -> Iterator[Pcm16leChunk]:
+            self.streamed.append(1)
+            yield Pcm16leChunk(b"\x10\x20" * 320)
+            _ = self.release_second_chunk.wait()
+            self.streamed.append(2)
+            yield Pcm16leChunk(b"\x30\x40" * 320)
+
+        return chunks()
+
+    @override
+    def synthesize(
+        self, turn: TurnResult, cancellation: CancellationToken
+    ) -> tuple[Pcm16leChunk, ...]:
+        _ = (turn, cancellation)
+        message = "streaming TTS must not call final synthesis"
+        raise AssertionError(message)
+
+    def complete_stream(self, turn: TurnResult, pcm_bytes: int) -> None:
+        _ = turn
+        self.completed_pcm_bytes = pcm_bytes
+
+    @override
+    async def output(
+        self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
+    ) -> None:
+        self.outputs.append((stream, epoch, packet))
+        self.first_packet.set()
+
+
 def test_actor_tags_generated_rtp_with_admission_epoch() -> None:
 
     asyncio.run(_epoch_proof())
@@ -110,6 +158,30 @@ def test_actor_tags_generated_rtp_with_admission_epoch() -> None:
 
 def test_actor_drops_asr_final_when_semantic_gate_rejects_it() -> None:
     asyncio.run(_semantic_gate_proof())
+
+
+def test_actor_emits_streaming_tts_chunks_without_materializing_clip() -> None:
+    asyncio.run(_streaming_tts_proof())
+
+
+async def _streaming_tts_proof() -> None:
+    stages = _StreamingStages()
+    stream = StreamKey("session", "stream")
+    actor = OnsiteStreamActor(stream, CancellationEpoch(0), stages)
+
+    actor.submit(_endpoint(stream), CancellationEpoch(0))
+
+    _ = await stages.first_packet.wait()
+    assert stages.streamed == [1]
+    _ = stages.release_second_chunk.set()
+    await actor.wait_quiescent()
+
+    assert stages.streamed == [1, 2]
+    assert stages.completed_pcm_bytes == 1_280
+    assert [epoch for _, epoch, _ in stages.outputs] == [
+        CancellationEpoch(0),
+        CancellationEpoch(0),
+    ]
 
 
 async def _semantic_gate_proof() -> None:

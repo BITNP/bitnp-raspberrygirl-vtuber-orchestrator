@@ -39,38 +39,15 @@ class OnsiteStages(Protocol):
         self, event: ASRAudienceEvent, cancellation: CancellationToken
     ) -> TurnResult | None: ...
 
-    def gate(
-        self,
-        event: ASRAudienceEvent,
-        *,
-        active_answer_excerpt: str,
-        is_playing: bool,
-    ) -> AsrGateDecision: ...
-
-    async def prepare_replacement(
-        self, stream: StreamKey, segment_id: SegmentId
-    ) -> CancellationEpoch | None: ...
-
     def synthesize(
         self, turn: TurnResult, cancellation: CancellationToken
     ) -> tuple[Pcm16leChunk, ...] | None: ...
-
-    def stream_synthesize(
-        self, turn: TurnResult, cancellation: CancellationToken
-    ) -> Iterator[Pcm16leChunk] | None: ...
-
-    def complete_stream(self, turn: TurnResult, pcm_bytes: int) -> None: ...
 
     def complete(self, turn: TurnResult, chunks: tuple[Pcm16leChunk, ...]) -> None: ...
 
     async def output(
         self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
     ) -> None: ...
-
-    async def finish_output(
-        self, stream: StreamKey, epoch: CancellationEpoch
-    ) -> None: ...
-
 
 _RTP_FRAME_DURATION_SECONDS = 0.020
 

@@ -697,7 +697,6 @@ class _BridgeStages(OnsiteStages):
     ) -> TurnResult | None:
         return self.bridge.answer(self.pipeline, event, cancellation)
 
-    @override
     def gate(
         self,
         event: ASRAudienceEvent,
@@ -714,7 +713,6 @@ class _BridgeStages(OnsiteStages):
     def authorize_output(self, stream: StreamKey, epoch: CancellationEpoch) -> bool:
         return self.bridge.authorize_output(stream, epoch)
 
-    @override
     async def prepare_replacement(
         self, stream: StreamKey, segment_id: SegmentId
     ) -> CancellationEpoch | None:
@@ -726,7 +724,6 @@ class _BridgeStages(OnsiteStages):
     ) -> tuple[Pcm16leChunk, ...] | None:
         return self.bridge.synthesize(turn.answer_text, cancellation)
 
-    @override
     def stream_synthesize(
         self, turn: TurnResult, cancellation: CancellationToken
     ) -> Iterator[Pcm16leChunk] | None:
@@ -736,7 +733,6 @@ class _BridgeStages(OnsiteStages):
     def complete(self, turn: TurnResult, chunks: tuple[Pcm16leChunk, ...]) -> None:
         self.bridge.complete(self.pipeline, turn, chunks)
 
-    @override
     def complete_stream(self, turn: TurnResult, pcm_bytes: int) -> None:
         self.bridge.complete_stream(self.pipeline, turn, pcm_bytes)
 
@@ -746,7 +742,6 @@ class _BridgeStages(OnsiteStages):
     ) -> None:
         await self.bridge.output(stream, epoch, packet)
 
-    @override
     async def finish_output(self, stream: StreamKey, epoch: CancellationEpoch) -> None:
         await self.bridge.output_finished(stream, epoch)
 
