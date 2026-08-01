@@ -135,6 +135,8 @@ class OnsiteStreamActor:
     # enough: they include VAD noise and blank ASR results.
     _active_answer_cancellation: CancellationToken | None = None
 
+    _authorized_output_epochs: set[CancellationEpoch] = field(default_factory=set)
+
     @property
     def drop_counts(self) -> PipelineDropCounts:
         return self._drops
@@ -318,18 +320,6 @@ class OnsiteStreamActor:
 
             if item.epoch == self.epoch and event is not None:
                 correlation = self._correlation(item.endpoint, item.epoch)
-
-                authorizer = cast(
-                    "Callable[[StreamKey, CancellationEpoch], bool] | None",
-                    getattr(self.stages, "authorize_output", None),
-                )
-
-                if authorizer is not None:
-                    authorized = authorizer(self.stream, item.epoch)
-
-                    if authorized is False:
-                        continue
-
                 self._record_correlation("asr_final", correlation, latency_ms)
 
                 self._append_answer(_AnswerItem(item.epoch, event, correlation))
@@ -437,6 +427,8 @@ class OnsiteStreamActor:
                     wait_seconds = next_packet_deadline - loop.time()
                     if wait_seconds > 0:
                         await asyncio.sleep(wait_seconds)
+                    if not self._authorize_output(item.epoch):
+                        continue
                     await self.stages.output(self.stream, item.epoch, packet)
 
                     self._record_correlation("rtp_egress", item.correlation, None)
@@ -452,6 +444,18 @@ class OnsiteStreamActor:
                 finisher = getattr(self.stages, "finish_output", None)
                 if finisher is not None:
                     await finisher(self.stream, item.epoch)
+
+    def _authorize_output(self, epoch: CancellationEpoch) -> bool:
+        if epoch in self._authorized_output_epochs:
+            return True
+        authorizer = cast(
+            "Callable[[StreamKey, CancellationEpoch], bool] | None",
+            getattr(self.stages, "authorize_output", None),
+        )
+        if authorizer is not None and not authorizer(self.stream, epoch):
+            return False
+        self._authorized_output_epochs.add(epoch)
+        return True
 
     def _correlation(
         self, endpoint: EndpointedUtterance, epoch: CancellationEpoch
