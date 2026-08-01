@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import deque
 from contextlib import suppress
@@ -52,6 +53,8 @@ class OnsiteStages(Protocol):
 _RTP_FRAME_DURATION_SECONDS = 0.020
 
 _PCM_FRAME_BYTES = 640
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _next_chunk(stream: Iterator[Pcm16leChunk]) -> Pcm16leChunk | None:
@@ -481,7 +484,6 @@ class OnsiteStreamActor:
         output_epoch = item.epoch
         packetizer: TtsPcmRtpPacketizer | None = None
         total_bytes = 0
-        failed = False
         try:
             while not cancellation.cancelled:
                 chunk = await asyncio.to_thread(_next_chunk, stream)
@@ -523,9 +525,21 @@ class OnsiteStreamActor:
                     )
                 )
         except (OSError, ValueError):
-            # A partial streaming response remains a valid audible prefix; end
-            # it cleanly rather than abruptly flushing Sound.
-            failed = True
+            # Provider failures are terminal for this turn.  Do not synthesize
+            # a recovery response or convert the failed stream into a normal
+            # completion; retain only the structured error log.
+            _LOGGER.exception(
+                "onsite_tts_stream_failure stream=%s segment=%s",
+                self.stream,
+                answer.segment_id,
+            )
+            self._chunks = deque(
+                queued
+                for queued in self._chunks
+                if queued.correlation != item.correlation
+            )
+            self._record_correlation("tts_failure", item.correlation, None)
+            return
         if cancellation.cancelled:
             return
         if packetizer is None:
@@ -554,9 +568,6 @@ class OnsiteStreamActor:
                 answer.answer_text[:240],
             )
         )
-        if failed:
-            self._record_correlation("tts_failure", item.correlation, None)
-            return
         completer = cast(
             "Callable[[TurnResult, int], None] | None",
             getattr(self.stages, "complete_stream", None),

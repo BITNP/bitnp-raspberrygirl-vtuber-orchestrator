@@ -455,7 +455,9 @@ async def _stage_mailbox_drop_count_proof() -> None:
 
     _ = await asyncio.to_thread(stages.all_asr_finished.wait)
 
-    assert actor.drop_counts.answer_turns == 1
+    # The blocked first answer is active; each of the three later ASR finals
+    # replaces the pending answer, so two pending turns are superseded.
+    assert actor.drop_counts.answer_turns == 2
 
     _ = stages.release_answer.set()
 
