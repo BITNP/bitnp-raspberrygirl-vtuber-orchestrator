@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -19,10 +18,10 @@ if TYPE_CHECKING:
 from orchestrator.media_adapters import OpenAICompatibleASRAdapter, VllmOmniTTSAdapter
 from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
-from orchestrator.openai_llm_runtime import OpenAICompatibleLLMRuntimeAdapter
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
 from orchestrator.pipeline_contracts import PipelineConfig
 from orchestrator.retrieval import RetrievalFixtureProvider
+from tests.openai_llm_test_helper import OpenAICompatibleLLMRuntimeAdapter
 
 if TYPE_CHECKING:
     import ssl
@@ -38,7 +37,6 @@ _SAMPLE_RATE: Final = 16_000
 
 @dataclass(slots=True)
 class _FakeProvider:
-
     mode: _Mode
 
     _server: ThreadingHTTPServer = field(init=False)
@@ -71,7 +69,6 @@ class _FakeProvider:
 
 
 class _ProviderHandler(BaseHTTPRequestHandler):
-
     mode: ClassVar[_Mode]
 
     speech_bodies: ClassVar[list[bytes]] = []
@@ -161,7 +158,6 @@ class _ProviderHandler(BaseHTTPRequestHandler):
 
 @dataclass(slots=True)
 class _Binding:
-
     handler: Callable[[bytes], None] | None = None
 
     @property
@@ -186,7 +182,6 @@ class _Binding:
 
 @dataclass(frozen=True, slots=True)
 class _Binder:
-
     binding: _Binding
 
     async def bind(self, host: str, port: int) -> _Binding:
@@ -198,7 +193,6 @@ class _Binder:
 
 @dataclass(slots=True)
 class _Control:
-
     command: str
 
     packet: bytes
@@ -231,7 +225,6 @@ class _Control:
 
 @dataclass(frozen=True, slots=True)
 class _Connector:
-
     control: _Control
 
     async def connect(
@@ -249,7 +242,6 @@ class _Connector:
 
 @dataclass(slots=True)
 class _Playback:
-
     frames: list[L16PlaybackFrame] = field(default_factory=list)
 
     def write(self, frame: L16PlaybackFrame) -> None:
@@ -272,7 +264,6 @@ def test_fake_local_provider_chain_generates_sound_queued_then_playing() -> None
 
 async def _assert_full_chain() -> None:
     # Given: fake-local providers and a real Sound runtime.
-
 
     with _FakeProvider("success") as endpoint:
         bridge = _bridge(endpoint)
@@ -333,7 +324,6 @@ async def _assert_full_chain() -> None:
 def test_fake_local_provider_non_success_drops_mic_without_raw_fallback() -> None:
     # Given: a fake-local ASR provider that returns a non-2xx response.
 
-
     with _FakeProvider("asr_failure") as endpoint:
         bridge = _bridge(endpoint)
 
@@ -350,7 +340,6 @@ def test_qwen_shaped_tts_response_becomes_canonical_generated_rtp(
     tmp_path: Path,
 ) -> None:
     # Given: local Qwen requires portable reference audio and emits 24 kHz WAV.
-
 
     reference = tmp_path / "voice.wav"
     _ = reference.write_bytes(b"RIFFvoice")

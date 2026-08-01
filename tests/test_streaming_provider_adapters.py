@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -24,7 +23,6 @@ from orchestrator.media_adapters import (
     ASRStreamRequest,
     OpenAICompatibleASRAdapter,
 )
-from orchestrator.openai_llm_runtime import OpenAICompatibleLLMRuntimeAdapter
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.provider_streaming import (
     ProviderDeadlines,
@@ -32,6 +30,7 @@ from orchestrator.provider_streaming import (
     ProviderResponseError,
     post_bytes,
 )
+from tests.openai_llm_test_helper import OpenAICompatibleLLMRuntimeAdapter
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -47,7 +46,6 @@ def _sse_data(payload: dict[str, str]) -> str:
 
 @dataclass(slots=True)
 class _FakeStreamingServer:
-
     mode: _StreamMode
 
     entered_block: threading.Event = field(default_factory=threading.Event)
@@ -88,7 +86,6 @@ class _FakeStreamingServer:
 
 
 class _StreamingHandler(BaseHTTPRequestHandler):
-
     mode: ClassVar[_StreamMode]
 
     entered_block: ClassVar[threading.Event]
@@ -224,12 +221,9 @@ def test_provider_https_connection_receives_verified_configured_ca_context(
 ) -> None:
     # Given: a provider HTTPS endpoint and configured local CA bundle.
 
-
     arguments: list[dict[str, ssl.SSLContext | float]] = []
 
-    def connect(
-        *_args: str, **kwargs: ssl.SSLContext | float
-    ) -> _ProviderConnection:
+    def connect(*_args: str, **kwargs: ssl.SSLContext | float) -> _ProviderConnection:
         arguments.append(kwargs)
         return _ProviderConnection()
 
@@ -262,7 +256,6 @@ def test_provider_http_connection_omits_tls_context_even_with_configured_ca_bund
 ) -> None:
     # Given: a plaintext provider endpoint and configured local CA bundle.
 
-
     arguments: list[dict[str, float]] = []
 
     def connect(*_args: str, **kwargs: float) -> _ProviderConnection:
@@ -294,7 +287,6 @@ def test_provider_https_connection_omits_context_without_configured_ca_bundle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: a secure provider endpoint without custom CA configuration.
-
 
     arguments: list[dict[str, float]] = []
 
@@ -334,7 +326,6 @@ def _deadlines(*, read_seconds: float = 1.0) -> ProviderDeadlines:
 def test_streaming_asr_normalizes_partial_then_final_events() -> None:
     # Given: a fake OpenAI-compatible ASR server producing provider SSE events.
 
-
     server = _FakeStreamingServer(mode="asr")
 
     # When: a streaming-capable adapter transcribes an endpointed utterance.
@@ -359,7 +350,6 @@ def test_streaming_asr_normalizes_partial_then_final_events() -> None:
 
 def test_streaming_llm_emits_sse_tokens_in_provider_order() -> None:
     # Given: a fake chat-completions stream with two ordered deltas.
-
 
     server = _FakeStreamingServer(mode="llm")
 
@@ -388,7 +378,6 @@ def test_streaming_llm_emits_sse_tokens_in_provider_order() -> None:
 def test_final_only_asr_does_not_claim_streaming() -> None:
     # Given: the default OpenAI-compatible ASR adapter capability.
 
-
     adapter = OpenAICompatibleASRAdapter(
         endpoint="http://127.0.0.1:8000/v1",
         model="local-asr",
@@ -405,7 +394,6 @@ def test_final_only_asr_does_not_claim_streaming() -> None:
 
 def test_final_only_asr_cancellation_closes_in_flight_response_without_final() -> None:
     # Given: an ASR final response blocked before it can return stale transcript text.
-
 
     server = _FakeStreamingServer(mode="final_block")
 
@@ -457,7 +445,6 @@ def test_streaming_providers_reject_non_success_or_malformed_events(
 ) -> None:
     # Given: a fake provider that fails before producing a valid event.
 
-
     server = _FakeStreamingServer(mode=mode)
 
     # When / Then: both provider boundaries expose a typed provider failure.
@@ -477,7 +464,6 @@ def test_streaming_providers_reject_non_success_or_malformed_events(
 def test_streaming_llm_honors_read_deadline_without_time_based_test_sleep() -> None:
     # Given: a server that establishes a stream but sends no readable event line.
 
-
     server = _FakeStreamingServer(mode="block")
 
     # When / Then: the adapter raises its typed read deadline outcome.
@@ -496,7 +482,6 @@ def test_streaming_llm_honors_read_deadline_without_time_based_test_sleep() -> N
 
 def test_streaming_llm_cancellation_closes_mid_read_without_stale_tokens() -> None:
     # Given: a stream that has yielded one token and is blocked before its next token.
-
 
     server = _FakeStreamingServer(mode="block")
 

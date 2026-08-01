@@ -15,9 +15,9 @@ from orchestrator.llm import (
     VllmOmniTTSAdapter,
 )
 from orchestrator.media_adapters import ASRStreamRequest
-from orchestrator.openai_llm_runtime import OpenAICompatibleLLMRuntimeAdapter
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.provider_streaming import ProviderResponseError
+from tests.openai_llm_test_helper import OpenAICompatibleLLMRuntimeAdapter
 from tests.private_ca import (
     PrivateCA,
     PrivateHttpsServer,
@@ -214,16 +214,20 @@ def _request_http_provider(
                 seq=1,
             )
         case "tts":
-            return VllmOmniTTSAdapter(
-                endpoint=endpoint,
-                model="local-tts",
-                ca_path=ca_path,
-            ).synthesize(
-                text="hello",
-                voice="raspberry",
-                ref_audio="file:///voice.wav",
-                ref_text="reference",
-            ).data
+            return (
+                VllmOmniTTSAdapter(
+                    endpoint=endpoint,
+                    model="local-tts",
+                    ca_path=ca_path,
+                )
+                .synthesize(
+                    text="hello",
+                    voice="raspberry",
+                    ref_audio="file:///voice.wav",
+                    ref_text="reference",
+                )
+                .data
+            )
 
 
 def _https_failure_target(

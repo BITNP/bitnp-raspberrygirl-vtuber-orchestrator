@@ -341,8 +341,7 @@ class OnsiteExplainerBridge:
             return await self._ingest_legacy_keyed_batch(stream, packet)
 
         async with self._processing_lock:
-            return await asyncio.to_thread(
-                self._process_utterance,
+            return await self._process_utterance_async(
                 _LegacyTurn(
                     packet[RTP_HEADER_BYTES:],
                     1,
@@ -387,8 +386,7 @@ class OnsiteExplainerBridge:
         self._legacy_keyed_sequences[stream] = sequence
 
         async with self._processing_lock:
-            return await asyncio.to_thread(
-                self._process_utterance,
+            return await self._process_utterance_async(
                 _LegacyTurn(
                     utterance,
                     sequence,
@@ -416,8 +414,7 @@ class OnsiteExplainerBridge:
         utterance_sequence = self._utterance_sequence
 
         async with self._processing_lock:
-            return await asyncio.to_thread(
-                self._process_utterance,
+            return await self._process_utterance_async(
                 _LegacyTurn(
                     utterance,
                     utterance_sequence,
@@ -428,20 +425,28 @@ class OnsiteExplainerBridge:
                 ),
             )
 
-    def _process_utterance(self, work: _LegacyTurn) -> bytes | tuple[bytes, ...] | None:
+    async def _process_utterance_async(
+        self, work: _LegacyTurn
+    ) -> bytes | tuple[bytes, ...] | None:
         cancellation = CancellationToken()
 
-        event = self.transcribe_endpoint(
-            work.utterance, work.sequence, work.segment_id, cancellation
+        event = await asyncio.to_thread(
+            self.transcribe_endpoint,
+            work.utterance,
+            work.sequence,
+            work.segment_id,
+            cancellation,
         )
 
         generated: bytes | tuple[bytes, ...] | None = None
 
         if event is not None and event.text.strip() != "":
-            turn = self.answer(work.pipeline, event, cancellation)
+            turn = await self.answer_async(work.pipeline, event, cancellation)
 
             if turn is not None and turn.answer_text.strip() != "":
-                chunks = self.synthesize(turn.answer_text, cancellation)
+                chunks = await asyncio.to_thread(
+                    self.synthesize, turn.answer_text, cancellation
+                )
 
                 if chunks:
                     self.complete(work.pipeline, turn, chunks)
@@ -520,7 +525,7 @@ class OnsiteExplainerBridge:
             return event
         return None
 
-    def answer(
+    async def answer_async(
         self,
         pipeline: OrchestratorTurnPipeline,
         event: ASRAudienceEvent,
@@ -528,17 +533,15 @@ class OnsiteExplainerBridge:
     ) -> TurnResult | None:
         if not pipeline.accept_audience_input(event):
             return None
-
         _LOGGER.debug(
             "onsite_llm_request segment=%s transcript_chars=%d",
             event.segment_id,
             len(event.text),
         )
-
         started_at = perf_counter()
         for attempt in range(2):
             try:
-                turn = pipeline.process_next_turn(cancellation)
+                turn = await pipeline.process_next_turn_async(cancellation)
             except AdapterConfigError:
                 _LOGGER.exception("onsite_llm_permanent_failure")
                 return None
@@ -559,24 +562,6 @@ class OnsiteExplainerBridge:
                 )
             return turn
         return None
-
-    async def answer_async(
-        self,
-        pipeline: OrchestratorTurnPipeline,
-        event: ASRAudienceEvent,
-        cancellation: CancellationToken,
-    ) -> TurnResult | None:
-        if not pipeline.accept_audience_input(event):
-            return None
-        try:
-            return await pipeline.process_next_turn_async(cancellation)
-        except AdapterConfigError:
-            _LOGGER.exception("onsite_llm_permanent_failure")
-            return None
-        except OSError:
-            if not cancellation.cancelled:
-                _LOGGER.exception("onsite_llm_failed")
-            return None
 
     def gate(
         self,

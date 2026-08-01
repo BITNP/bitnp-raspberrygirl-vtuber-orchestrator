@@ -9,11 +9,10 @@ from typing import ClassVar, override
 
 import httpx
 
+from orchestrator.asr_semantic_gate import AsrGateDecision, AsyncAsrSemanticGate
 from orchestrator.llm import LLMFinal, LLMPrompt, LLMRequest
-from orchestrator.openai_llm_runtime import (
-    AsyncOpenAICompatibleLLMRuntime,
-    OpenAICompatibleLLMRuntimeAdapter,
-)
+from orchestrator.openai_llm_runtime import AsyncOpenAICompatibleLLMRuntime
+from tests.openai_llm_test_helper import OpenAICompatibleLLMRuntimeAdapter
 
 
 @dataclass(slots=True)
@@ -180,3 +179,32 @@ def test_async_runtime_uses_documented_gate_and_streaming_parameters() -> None:
     assert captured[0]["reasoning_effort"] == "none"
     assert captured[1]["stream"] is True
     assert events[-1] == LLMFinal(text="hello world", used_fallback=False)
+
+
+def test_async_gate_discards_rejected_parameters_and_closes_shared_client() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        return httpx.Response(400, json={"error": {"message": "unsupported"}})
+
+    async def run() -> tuple[object, bool]:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        runtime = AsyncOpenAICompatibleLLMRuntime(
+            endpoint="https://example.test/v1",
+            model="test-model",
+            api_key="test-key",
+            http_client=client,
+        )
+
+        async def provider(request: object) -> str:
+            _ = request
+            return await runtime.complete_gate(LLMRequest(LLMPrompt("gate", "input")))
+
+        gate = AsyncAsrSemanticGate(provider)
+        decision = await gate.evaluate("请继续")
+        await runtime.aclose()
+        return decision, client.is_closed
+
+    decision, closed = asyncio.run(run())
+
+    assert decision is AsrGateDecision.DISCARD
+    assert closed

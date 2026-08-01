@@ -1,10 +1,14 @@
+import asyncio
 
-from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
+from orchestrator.asr_semantic_gate import (
+    AsrGateDecision,
+    AsrSemanticGate,
+    AsyncAsrSemanticGate,
+)
 
 
 def test_gate_accepts_only_closed_structured_accept_decision() -> None:
     # Given: a Chinese semantic gate with a valid closed response.
-
 
     gate = AsrSemanticGate(lambda request: '{"decision":"accept"}')
 
@@ -19,7 +23,6 @@ def test_gate_accepts_only_closed_structured_accept_decision() -> None:
 
 def test_gate_discards_malformed_timeout_and_unknown_decisions() -> None:
     # Given: malformed, unavailable, and unrecognized model responses.
-
 
     responses = (
         "not json",
@@ -51,10 +54,31 @@ def test_gate_only_allows_interrupt_while_audio_is_playing() -> None:
     gate = AsrSemanticGate(lambda request: '{"decision":"interrupt"}')
 
     assert gate.evaluate("请停一下") is AsrGateDecision.DISCARD
-    assert (
-        gate.evaluate("请停一下", is_playing=True)
-        is AsrGateDecision.INTERRUPT
-    )
+    assert gate.evaluate("请停一下", is_playing=True) is AsrGateDecision.INTERRUPT
+
+
+def test_async_gate_fails_closed_for_non_json_timeout_and_parameter_rejection() -> None:
+    async def run() -> tuple[AsrGateDecision, ...]:
+        async def response(value: str | BaseException) -> str:
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        values: tuple[str | BaseException, ...] = (
+            "not json",
+            TimeoutError(),
+            OSError("unsupported reasoning_effort"),
+        )
+        return tuple(
+            [
+                await AsyncAsrSemanticGate(
+                    lambda request, value=value: response(value)
+                ).evaluate("继续")
+                for value in values
+            ]
+        )
+
+    assert asyncio.run(run()) == (AsrGateDecision.DISCARD,) * 3
 
 
 def _response_or_raise(response: str | TimeoutError) -> str:
