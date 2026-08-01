@@ -348,7 +348,11 @@ class OnsiteStreamActor:
             if item.epoch == self.epoch and event is not None:
                 correlation = self._correlation(item.endpoint, item.epoch)
                 self._record_correlation("asr_final", correlation, latency_ms)
-                decision = self._gate(event)
+                # The semantic gate may issue a synchronous LLM request.  It
+                # is an interactive control-lane operation, never part of the
+                # realtime RTP clock: running it on this event loop would
+                # postpone 20 ms egress frames for the entire request.
+                decision = await asyncio.to_thread(self._gate, event)
                 if decision is AsrGateDecision.DISCARD:
                     self._record_details(
                         "drop", correlation, StageDetails(drop_count=1)

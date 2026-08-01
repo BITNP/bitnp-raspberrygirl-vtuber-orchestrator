@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import TYPE_CHECKING, override
 
 from orchestrator.asr_semantic_gate import AsrGateDecision
@@ -156,6 +157,46 @@ class _StreamingStages(_Stages):
         self.first_packet.set()
 
 
+@dataclass(slots=True)
+class _SlowSecondGateStages(_Stages):
+
+    first_packet: asyncio.Event = field(default_factory=asyncio.Event)
+
+    output_times: list[float] = field(default_factory=list)
+
+    gate_calls: int = 0
+
+    def gate(
+        self,
+        event: ASRAudienceEvent,
+        *,
+        active_answer_excerpt: str,
+        is_playing: bool,
+    ) -> AsrGateDecision:
+        _ = (event, active_answer_excerpt, is_playing)
+        self.gate_calls += 1
+        if self.gate_calls == 2:
+            # Represents a synchronous semantic-gate LLM request.
+            _ = threading.Event().wait(0.150)
+            return AsrGateDecision.DISCARD
+        return AsrGateDecision.ACCEPT
+
+    @override
+    def synthesize(
+        self, turn: TurnResult, cancellation: CancellationToken
+    ) -> tuple[Pcm16leChunk, ...]:
+        _ = (turn, cancellation)
+        return tuple(Pcm16leChunk(b"\x10\x20" * 320) for _ in range(20))
+
+    @override
+    async def output(
+        self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
+    ) -> None:
+        self.outputs.append((stream, epoch, packet))
+        self.output_times.append(monotonic())
+        self.first_packet.set()
+
+
 def test_actor_tags_generated_rtp_with_admission_epoch() -> None:
 
     asyncio.run(_epoch_proof())
@@ -167,6 +208,31 @@ def test_actor_drops_asr_final_when_semantic_gate_rejects_it() -> None:
 
 def test_actor_emits_streaming_tts_chunks_without_materializing_clip() -> None:
     asyncio.run(_streaming_tts_proof())
+
+
+def test_actor_keeps_rtp_clock_running_while_semantic_gate_blocks() -> None:
+    asyncio.run(_semantic_gate_does_not_block_rtp_proof())
+
+
+async def _semantic_gate_does_not_block_rtp_proof() -> None:
+    stages = _SlowSecondGateStages()
+    stream = StreamKey("session", "stream")
+    actor = OnsiteStreamActor(stream, CancellationEpoch(0), stages)
+
+    actor.submit(_endpoint(stream), CancellationEpoch(0))
+    _ = await stages.first_packet.wait()
+    actor.submit(_endpoint(stream), CancellationEpoch(0))
+    await actor.wait_quiescent()
+
+    assert stages.gate_calls == 2
+    gaps = [
+        later - earlier
+        for earlier, later in zip(
+            stages.output_times, stages.output_times[1:], strict=False
+        )
+    ]
+    # A 150 ms gate request must not create a corresponding RTP hole.
+    assert max(gaps) < 0.100
 
 
 async def _streaming_tts_proof() -> None:
