@@ -21,7 +21,7 @@ from orchestrator.transport_hub import RtpHub
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
+    from orchestrator.streaming_contracts import CancellationEpoch, SegmentId, StreamKey
 
 
 if TYPE_CHECKING:
@@ -80,6 +80,17 @@ class FakeOnsiteExplainerBridge:
 
     def set_output_authorizer(
         self, callback: Callable[[StreamKey, CancellationEpoch], bool]
+    ) -> None:
+        _ = callback
+
+    def set_output_finished_callback(
+        self, callback: Callable[[StreamKey, CancellationEpoch], Awaitable[None]]
+    ) -> None:
+        _ = callback
+
+    def set_replacement_callback(
+        self,
+        callback: Callable[[StreamKey, SegmentId], Awaitable[CancellationEpoch | None]],
     ) -> None:
         _ = callback
 
