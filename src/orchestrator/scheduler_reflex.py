@@ -48,6 +48,8 @@ class OutputLease:
 @dataclass(frozen=True, slots=True)
 class _PendingReplacement:
 
+    previous: OutputLease
+
     lease: OutputLease
 
     flush: StreamFlush
@@ -118,16 +120,18 @@ class SchedulerOutputFence:
     ) -> tuple[OutputLease, StreamFlush]:
         active = self._leases[stream]
 
-        replacement = self.activate(
+        generation = active.generation + 1
+        replacement = OutputLease(
             stream=stream,
+            turn_id=self._start_turn(correlation),
             segment_id=segment_id,
+            cancellation_epoch=CancellationEpoch(generation),
+            generation=generation,
             target_generated_ssrc=GeneratedSsrc(
-                generated_ssrc(
-                    stream, CancellationEpoch(int(active.cancellation_epoch) + 1)
-                )
+                generated_ssrc(stream, CancellationEpoch(generation))
             ),
-            correlation=correlation,
         )
+        self._last_generation[stream] = generation
 
         self._flush_sequence += 1
 
@@ -143,7 +147,11 @@ class SchedulerOutputFence:
             correlation=correlation,
         )
 
-        self._pending[stream] = _PendingReplacement(replacement, flush)
+        # Retain the old lease until Sound has acknowledged the flush.  This is
+        # the continuity boundary: deep work is cancelled immediately, but the
+        # audience keeps hearing the already-buffered old response until a new
+        # first frame is ready and Sound has committed the replacement.
+        self._pending[stream] = _PendingReplacement(active, replacement, flush)
 
         return replacement, flush
 
@@ -155,6 +163,7 @@ class SchedulerOutputFence:
         ):
             return False
 
+        self._leases[acknowledgement.stream] = pending.lease
         del self._pending[acknowledgement.stream]
 
         return True
@@ -162,11 +171,13 @@ class SchedulerOutputFence:
     def can_emit(self, stream: StreamKey, epoch: CancellationEpoch) -> bool:
         lease = self._leases.get(stream)
 
-        return (
-            lease is not None
-            and stream not in self._pending
-            and epoch == lease.cancellation_epoch
-            and str(lease.turn_id) == str(self._scheduler.snapshot.active_turn_id)
+        if lease is None:
+            return False
+        pending = self._pending.get(stream)
+        if pending is not None:
+            return epoch == pending.previous.cancellation_epoch
+        return epoch == lease.cancellation_epoch and str(lease.turn_id) == str(
+            self._scheduler.snapshot.active_turn_id
         )
 
     def finish(

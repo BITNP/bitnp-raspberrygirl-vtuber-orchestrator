@@ -133,11 +133,12 @@ def test_output_fence_correlates_flush_epoch_41_and_never_resumes_stale_audio() 
         correlation=EnvelopeCorrelation("trace-1", "session-1", 42),
     )
 
-    # Then: each Sound acknowledgement is epoch-correlated.
-    # Stale epoch 41 cannot emit.
+    # Then: each Sound acknowledgement is epoch-correlated.  Until Sound has
+    # committed the replacement, the prior audible epoch remains eligible so
+    # an interrupt cannot create a silence before new audio is ready.
     assert epoch_42.cancellation_epoch == CancellationEpoch(42)
     assert flush_42.cancellation_epoch == CancellationEpoch(42)
-    assert fence.can_emit(stream, CancellationEpoch(41)) is False
+    assert fence.can_emit(stream, CancellationEpoch(41)) is True
     assert fence.can_emit(stream, CancellationEpoch(42)) is False
     assert fence.acknowledge(FlushAcknowledgement.from_flush(flush_42)) is True
     assert fence.can_emit(stream, CancellationEpoch(42)) is True
