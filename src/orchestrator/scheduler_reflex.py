@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -31,7 +30,6 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class OutputLease:
-
     stream: StreamKey
 
     turn_id: TurnId
@@ -47,7 +45,6 @@ class OutputLease:
 
 @dataclass(frozen=True, slots=True)
 class _PendingReplacement:
-
     previous: OutputLease
 
     lease: OutputLease
@@ -56,13 +53,11 @@ class _PendingReplacement:
 
 
 @dataclass(frozen=True, slots=True)
-class SchedulerReflexRejectionError(Exception):
-    ...
+class SchedulerReflexRejectionError(Exception): ...
 
 
 @final
 class SchedulerOutputFence:
-
     def __init__(self, scheduler: SessionScheduler) -> None:
         self._scheduler = scheduler
 
@@ -167,6 +162,10 @@ class SchedulerOutputFence:
         del self._pending[acknowledgement.stream]
 
         return True
+
+    def abandon_replacement(self, stream: StreamKey) -> bool:
+        """Keep the current lease when a prepared replacement cannot be admitted."""
+        return self._pending.pop(stream, None) is not None
 
     def can_emit(self, stream: StreamKey, epoch: CancellationEpoch) -> bool:
         lease = self._leases.get(stream)

@@ -1,8 +1,8 @@
-
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from time import monotonic
 from typing import TYPE_CHECKING, Protocol, final, override
 
 from orchestrator.streaming_contracts import (
@@ -46,53 +46,46 @@ RTP_PAYLOAD_TYPE = 96
 
 
 class DatagramSender(Protocol):
+    def sendto(self, data: bytes, addr: PeerAddress) -> None: ...
 
-    def sendto(self, data: bytes, addr: PeerAddress) -> None:
-        ...
-
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
 
 class OnsiteBridge(Protocol):
-
     def set_output_callback(
         self,
         callback: Callable[[StreamKey, CancellationEpoch, bytes], Awaitable[None]],
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def set_output_finished_callback(
         self, callback: Callable[[StreamKey, CancellationEpoch], Awaitable[None]]
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def set_output_authorizer(
         self,
         callback: Callable[[StreamKey, CancellationEpoch], bool],
-    ) -> None:
-        ...
+    ) -> None: ...
+
+    def set_replacement_callback(
+        self,
+        callback: Callable[[StreamKey, SegmentId], Awaitable[CancellationEpoch | None]],
+    ) -> None: ...
 
     def submit_mic_rtp(
         self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def invalidate_stream(
         self, stream: StreamKey, next_epoch: CancellationEpoch
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    def disconnect_stream(self, stream: StreamKey) -> None:
-        ...
+    def disconnect_stream(self, stream: StreamKey) -> None: ...
 
-    async def wait_quiescent(self) -> None:
-        ...
+    async def wait_quiescent(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class RouteKey:
-
     session_id: str
 
     stream_id: str
@@ -106,7 +99,6 @@ class RouteKey:
 
 @dataclass(frozen=True, slots=True)
 class PendingSource:
-
     stream: StreamKey
 
     ssrc: int
@@ -116,7 +108,6 @@ class PendingSource:
 
 @dataclass(frozen=True, slots=True)
 class DuplicateRouteError(Exception):
-
     stream: StreamKey
 
     @override
@@ -126,7 +117,6 @@ class DuplicateRouteError(Exception):
 
 @final
 class RtpHub:
-
     def __init__(
         self,
         transport: DatagramSender | None = None,
@@ -157,10 +147,23 @@ class RtpHub:
 
         self._route_generations: dict[StreamKey, int] = {}
 
-        self._output_command_callback: Callable[[StreamKey, int], Awaitable[None]] | None = None
+        self._output_command_callback: (
+            Callable[[StreamKey, int], Awaitable[None]] | None
+        ) = None
+
+        self._output_command_tasks: set[asyncio.Future[None]] = set()
+
+        self._replacement_flush_callback: (
+            Callable[[StreamFlush], Awaitable[None]] | None
+        ) = None
+
+        self._replacement_admit_callback: (
+            Callable[[StreamFlush], Awaitable[bool]] | None
+        ) = None
 
         if onsite_bridge is not None:
             onsite_bridge.set_output_callback(self.deliver_generated_rtp)
+            onsite_bridge.set_replacement_callback(self.begin_onsite_replacement)
 
     def set_output_finished_callback(
         self, callback: Callable[[StreamKey, CancellationEpoch], Awaitable[None]]
@@ -173,6 +176,52 @@ class RtpHub:
         self, callback: Callable[[StreamKey, int], Awaitable[None]]
     ) -> None:
         self._output_command_callback = callback
+
+    def set_replacement_callbacks(
+        self,
+        request_flush: Callable[[StreamFlush], Awaitable[None]],
+        admit_replacement: Callable[[StreamFlush], Awaitable[bool]],
+    ) -> None:
+        self._replacement_flush_callback = request_flush
+        self._replacement_admit_callback = admit_replacement
+
+    async def begin_onsite_replacement(
+        self, stream: StreamKey, segment_id: SegmentId
+    ) -> CancellationEpoch | None:
+        """Prepare a replacement only after its first audio frame is available.
+
+        The old lease remains eligible until Sound acknowledges the flush.  The
+        caller holds the new frame locally while this method waits, so no new
+        RTP can be dropped into the pending-fence gap.
+        """
+        output_fence = self._output_fence
+        correlation = self._correlations.get(stream)
+        request_flush = self._replacement_flush_callback
+        admit_replacement = self._replacement_admit_callback
+        if (
+            output_fence is None
+            or correlation is None
+            or request_flush is None
+            or admit_replacement is None
+        ):
+            return None
+        try:
+            replacement, flush = output_fence.interrupt(
+                stream=stream, segment_id=segment_id, correlation=correlation
+            )
+        except (KeyError, RuntimeError):
+            return None
+        await request_flush(flush)
+        deadline = monotonic() + 3.0
+        while monotonic() < deadline:
+            if output_fence.can_emit(stream, replacement.cancellation_epoch):
+                if await admit_replacement(flush):
+                    return replacement.cancellation_epoch
+                _ = output_fence.abandon_replacement(stream)
+                return None
+            await asyncio.sleep(0.01)
+        _ = output_fence.abandon_replacement(stream)
+        return None
 
     def attach_transport(self, transport: DatagramSender) -> None:
         self._transport = transport
@@ -211,9 +260,11 @@ class RtpHub:
 
         callback = self._output_command_callback
         if callback is not None:
-            asyncio.get_running_loop().create_task(
+            task = asyncio.ensure_future(
                 callback(stream, int(lease.cancellation_epoch))
             )
+            self._output_command_tasks.add(task)
+            task.add_done_callback(self._output_command_tasks.discard)
 
         return lease.cancellation_epoch == epoch
 
@@ -417,7 +468,9 @@ class RtpHub:
 
     def advance_onsite_epoch(self, stream: StreamKey, epoch: int) -> None:
         """Retire a consumed output actor while preserving the live RTP route."""
-        if self._onsite_bridge is None or epoch <= self._route_generations.get(stream, 0):
+        if self._onsite_bridge is None or epoch <= self._route_generations.get(
+            stream, 0
+        ):
             return
 
         self._route_generations[stream] = epoch

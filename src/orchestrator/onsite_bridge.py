@@ -48,7 +48,7 @@ from orchestrator.pipeline_contracts import (
 )
 from orchestrator.provider_streaming import ProviderDeadlines
 from orchestrator.retrieval import RetrievalFixtureProvider
-from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
+from orchestrator.streaming_contracts import CancellationEpoch, SegmentId, StreamKey
 from orchestrator.streaming_endpoint import (
     EndpointedUtterance,
     PartialUtterance,
@@ -81,6 +81,10 @@ type OnsiteOutputFinished = Callable[[StreamKey, CancellationEpoch], Awaitable[N
 
 type OnsiteOutputAuthorization = Callable[[StreamKey, CancellationEpoch], bool]
 
+type OnsiteReplacement = Callable[
+    [StreamKey, SegmentId], Awaitable[CancellationEpoch | None]
+]
+
 
 async def _discard_output(
     stream: StreamKey, epoch: CancellationEpoch, packet: bytes
@@ -96,6 +100,13 @@ def _allow_output(stream: StreamKey, epoch: CancellationEpoch) -> bool:
     _ = (stream, epoch)
 
     return True
+
+
+async def _discard_replacement(
+    stream: StreamKey, segment_id: SegmentId
+) -> CancellationEpoch | None:
+    _ = (stream, segment_id)
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +203,8 @@ class OnsiteExplainerBridge:
 
     output_finished: OnsiteOutputFinished = field(default=_discard_finished)
 
+    begin_replacement: OnsiteReplacement = field(default=_discard_replacement)
+
     authorize_output: OnsiteOutputAuthorization = field(default=_allow_output)
 
     observability: OnsiteObservability | None = None
@@ -205,6 +218,9 @@ class OnsiteExplainerBridge:
     def set_output_authorizer(self, callback: OnsiteOutputAuthorization) -> None:
         """Install the transport's scheduler-owned output admission callback."""
         self.authorize_output = callback
+
+    def set_replacement_callback(self, callback: OnsiteReplacement) -> None:
+        self.begin_replacement = callback
 
     def set_observability(self, observability: OnsiteObservability) -> None:
         self.observability = observability
@@ -547,6 +563,11 @@ class OnsiteExplainerBridge:
         )
         return decision
 
+    async def prepare_replacement(
+        self, stream: StreamKey, segment_id: SegmentId
+    ) -> CancellationEpoch | None:
+        return await self.begin_replacement(stream, segment_id)
+
     def synthesize(
         self, text: str, cancellation: CancellationToken
     ) -> tuple[Pcm16leChunk, ...] | None:
@@ -555,10 +576,9 @@ class OnsiteExplainerBridge:
             "onsite_tts_request text_chars=%d voice=%s", len(text), self.voice
         )
         try:
-            if (
-                getattr(self.tts, "capability", "streaming_sse") == "streaming_sse"
-                and isinstance(self.tts, StreamingTtsAdapter)
-            ):
+            if getattr(
+                self.tts, "capability", "streaming_sse"
+            ) == "streaming_sse" and isinstance(self.tts, StreamingTtsAdapter):
                 # The legacy bridge contract remains complete-audio until the
                 # stream actor owns incremental TTS chunks.  Materialising at
                 # this boundary prevents a generator from being consumed once
@@ -680,6 +700,12 @@ class _BridgeStages(OnsiteStages):
 
     def authorize_output(self, stream: StreamKey, epoch: CancellationEpoch) -> bool:
         return self.bridge.authorize_output(stream, epoch)
+
+    @override
+    async def prepare_replacement(
+        self, stream: StreamKey, segment_id: SegmentId
+    ) -> CancellationEpoch | None:
+        return await self.bridge.prepare_replacement(stream, segment_id)
 
     @override
     def synthesize(

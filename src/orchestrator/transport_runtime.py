@@ -39,7 +39,14 @@ if TYPE_CHECKING:
     from orchestrator.observability import OnsiteObservability
     from orchestrator.scheduler_reflex import SchedulerOutputFence
     from orchestrator.scheduler_runtime import SessionRuntime
-    from orchestrator.streaming_contracts import FlushClock, FlushFailure, StreamFlush
+    from orchestrator.streaming_contracts import (
+        CancellationEpoch,
+        FlushClock,
+        FlushFailure,
+        SegmentId,
+        StreamFlush,
+        StreamKey,
+    )
 
 
 type DatagramListener = Callable[[str, int, RtpHub], Awaitable[DatagramSender]]
@@ -112,6 +119,10 @@ class TransportRuntime:
             self._control_dispatch.finish_generated_stream
         )
         self._hub.set_output_command_callback(self._control_dispatch.announce_output)
+        self._hub.set_replacement_callbacks(
+            self._control_dispatch.request_stream_flush,
+            self._control_dispatch.admit_replacement,
+        )
 
         self._datagram_transport: DatagramSender | None = None
 
@@ -176,6 +187,11 @@ class TransportRuntime:
 
     async def admit_replacement(self, flush: StreamFlush) -> bool:
         return await self._control_dispatch.admit_replacement(flush)
+
+    async def begin_onsite_replacement(
+        self, stream: StreamKey, segment_id: SegmentId
+    ) -> CancellationEpoch | None:
+        return await self._hub.begin_onsite_replacement(stream, segment_id)
 
     @property
     def flush_failures(self) -> tuple[FlushFailure, ...]:

@@ -122,6 +122,10 @@ def test_runtime_rejects_invalid_ack_and_missing_ack_timeout() -> None:
     asyncio.run(_rejection_proof())
 
 
+def test_runtime_holds_replacement_until_sound_acknowledges_flush() -> None:
+    asyncio.run(_delayed_replacement_proof())
+
+
 async def _matching_ack_proof() -> None:
     # Given: live Mic and Sound WSS sessions registered on one runtime-owned stream.
 
@@ -303,6 +307,56 @@ async def _rejection_proof() -> None:
     await _close_runtime(runtime, source, sink, tasks)
 
 
+async def _delayed_replacement_proof() -> None:
+    clock = _Clock()
+    runtime = TransportRuntime(
+        _config(),
+        datagram_listener=_datagram_listener,
+        control_listener=_control_listener,
+        clock=clock,
+    )
+    source, sink, tasks = await _registered_runtime(runtime)
+    fence = SchedulerOutputFence(
+        SessionScheduler(
+            session_id=SessionId("session-001"), turn_id_prefix="turn-reflex"
+        )
+    )
+    runtime.set_output_fence(fence)
+    stream = StreamKey(session_id="session-001", stream_id="stream-001")
+    correlation = EnvelopeCorrelation("trace-source-001", "session-001", 29)
+    active = fence.activate(
+        stream=stream,
+        segment_id=SegmentId("segment-active"),
+        target_generated_ssrc=GeneratedSsrc(0x1234_5678),
+        correlation=correlation,
+    )
+
+    # A replacement first frame is ready.  The async request must leave old
+    # audio eligible until the exact Sound acknowledgement arrives.
+    prepared = asyncio.create_task(
+        runtime.begin_onsite_replacement(stream, SegmentId("segment-new"))
+    )
+    await asyncio.sleep(0)
+    assert fence.can_emit(stream, active.cancellation_epoch) is True
+    assert not prepared.done()
+    flush = next(
+        _flush_from_message(message)
+        for message in sink.sent
+        if _envelope_value(message)["event_type"] == "media.stream.flush"
+    )
+
+    await sink.incoming.put(_acknowledgement(flush))
+    await asyncio.sleep(0)
+    replacement_epoch = await prepared
+
+    assert replacement_epoch == flush.cancellation_epoch
+    assert fence.can_emit(stream, active.cancellation_epoch) is False
+    assert fence.can_emit(stream, flush.cancellation_epoch) is True
+    assert _event_types(sink.sent).count("media.stream.command") == 2
+
+    await _close_runtime(runtime, source, sink, tasks)
+
+
 async def _registered_runtime(
     runtime: TransportRuntime,
 ) -> tuple[
@@ -409,6 +463,33 @@ def _acknowledgement(flush: StreamFlush, *, session_id: str = "session-001") -> 
             trace_id="trace-source-001",
             seq=29,
         )
+    )
+
+
+def _flush_from_message(message: str) -> StreamFlush:
+    envelope = _envelope_value(message)
+    data = envelope["data"]
+    assert isinstance(data, dict)
+    stream_id = data["stream_id"]
+    epoch = data["cancellation_epoch"]
+    request_id = data["request_id"]
+    target_ssrc = data["target_generated_ssrc"]
+    turn_id = envelope["turn_id"]
+    segment_id = envelope["segment_id"]
+    assert isinstance(stream_id, str)
+    assert isinstance(epoch, int)
+    assert isinstance(request_id, str)
+    assert isinstance(target_ssrc, int)
+    assert isinstance(turn_id, str)
+    assert isinstance(segment_id, str)
+    return StreamFlush(
+        stream=StreamKey("session-001", stream_id),
+        turn_id=TurnId(turn_id),
+        segment_id=SegmentId(segment_id),
+        cancellation_epoch=CancellationEpoch(epoch),
+        request_id=FlushRequestId(request_id),
+        target_generated_ssrc=GeneratedSsrc(target_ssrc),
+        correlation=EnvelopeCorrelation("trace-source-001", "session-001", 29),
     )
 
 

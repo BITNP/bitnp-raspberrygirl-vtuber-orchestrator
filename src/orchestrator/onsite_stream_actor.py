@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -16,7 +15,7 @@ from orchestrator.observability import (
     StageCorrelation,
     StageDetails,
 )
-from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
+from orchestrator.streaming_contracts import CancellationEpoch, SegmentId, StreamKey
 from orchestrator.streaming_pipeline_actors import (
     ENDPOINTED_UTTERANCE_CAPACITY,
     TTS_CHUNK_CAPACITY,
@@ -25,23 +24,20 @@ from orchestrator.streaming_pipeline_actors import (
 from orchestrator.tts_rtp import Pcm16leChunk, TtsPcmRtpPacketizer
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from orchestrator.pipeline_contracts import ASRAudienceEvent, TurnResult
     from orchestrator.streaming_endpoint import EndpointedUtterance
 
 
 class OnsiteStages(Protocol):
-
     def transcribe(
         self, endpoint: EndpointedUtterance, cancellation: CancellationToken
-    ) -> ASRAudienceEvent | None:
-        ...
+    ) -> ASRAudienceEvent | None: ...
 
     def answer(
         self, event: ASRAudienceEvent, cancellation: CancellationToken
-    ) -> TurnResult | None:
-        ...
+    ) -> TurnResult | None: ...
 
     def gate(
         self,
@@ -49,24 +45,25 @@ class OnsiteStages(Protocol):
         *,
         active_answer_excerpt: str,
         is_playing: bool,
-    ) -> AsrGateDecision:
-        ...
+    ) -> AsrGateDecision: ...
+
+    async def prepare_replacement(
+        self, stream: StreamKey, segment_id: SegmentId
+    ) -> CancellationEpoch | None: ...
 
     def synthesize(
         self, turn: TurnResult, cancellation: CancellationToken
-    ) -> tuple[Pcm16leChunk, ...] | None:
-        ...
+    ) -> tuple[Pcm16leChunk, ...] | None: ...
 
-    def complete(self, turn: TurnResult, chunks: tuple[Pcm16leChunk, ...]) -> None:
-        ...
+    def complete(self, turn: TurnResult, chunks: tuple[Pcm16leChunk, ...]) -> None: ...
 
     async def output(
         self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
-    ) -> None:
-        ...
+    ) -> None: ...
 
-    async def finish_output(self, stream: StreamKey, epoch: CancellationEpoch) -> None:
-        ...
+    async def finish_output(
+        self, stream: StreamKey, epoch: CancellationEpoch
+    ) -> None: ...
 
 
 _RTP_FRAME_DURATION_SECONDS = 0.020
@@ -74,7 +71,6 @@ _RTP_FRAME_DURATION_SECONDS = 0.020
 
 @dataclass(frozen=True, slots=True)
 class _EndpointItem:
-
     epoch: CancellationEpoch
 
     endpoint: EndpointedUtterance
@@ -82,17 +78,17 @@ class _EndpointItem:
 
 @dataclass(frozen=True, slots=True)
 class _AnswerItem:
-
     epoch: CancellationEpoch
 
     event: ASRAudienceEvent
 
     correlation: StageCorrelation
 
+    interrupts: bool = False
+
 
 @dataclass(frozen=True, slots=True)
 class _ChunkItem:
-
     epoch: CancellationEpoch
 
     chunk: Pcm16leChunk | None
@@ -106,15 +102,15 @@ class _ChunkItem:
 
 @dataclass(frozen=True, slots=True)
 class _SynthesizedAnswer:
-
     chunks: tuple[Pcm16leChunk, ...]
 
     answer_text: str
 
+    segment_id: SegmentId
+
 
 @dataclass(slots=True)
 class OnsiteStreamActor:
-
     stream: StreamKey
 
     epoch: CancellationEpoch
@@ -160,6 +156,8 @@ class OnsiteStreamActor:
     _active_answer_excerpt: str = ""
 
     _is_playing: bool = False
+
+    _output_epoch: CancellationEpoch | None = None
 
     @property
     def drop_counts(self) -> PipelineDropCounts:
@@ -265,7 +263,6 @@ class OnsiteStreamActor:
         self._answers.clear()
 
         if dropped_answers > 0:
-
             self._drops = PipelineDropCounts(
                 endpointed_utterances=self._drops.endpointed_utterances,
                 answer_turns=self._drops.answer_turns + dropped_answers,
@@ -351,7 +348,14 @@ class OnsiteStreamActor:
                         "drop", correlation, StageDetails(drop_count=1)
                     )
                     continue
-                self._append_answer(_AnswerItem(item.epoch, event, correlation))
+                self._append_answer(
+                    _AnswerItem(
+                        item.epoch,
+                        event,
+                        correlation,
+                        decision is AsrGateDecision.INTERRUPT,
+                    )
+                )
 
     async def _run_answers(self) -> None:
         while self._answers:
@@ -378,15 +382,22 @@ class OnsiteStreamActor:
             if self._closed or cancellation.cancelled or chunks is None:
                 continue
 
+            output_epoch = item.epoch
+            if item.interrupts:
+                replacement_epoch = await self._prepare_replacement(chunks.segment_id)
+                if replacement_epoch is None:
+                    continue
+                output_epoch = replacement_epoch
+
             # A packetizer has exactly one lifetime: one synthesized response.
             # Reusing it after finish would retain RTP sequence/timestamp state and
             # can never safely represent a later turn.
-            packetizer = TtsPcmRtpPacketizer(self.stream, item.epoch)
+            packetizer = TtsPcmRtpPacketizer(self.stream, output_epoch)
 
             for chunk in chunks.chunks:
                 self._append_chunk(
                     _ChunkItem(
-                        item.epoch,
+                        output_epoch,
                         chunk,
                         item.correlation,
                         packetizer,
@@ -396,7 +407,7 @@ class OnsiteStreamActor:
 
             self._append_chunk(
                 _ChunkItem(
-                    item.epoch,
+                    output_epoch,
                     None,
                     item.correlation,
                     packetizer,
@@ -434,7 +445,20 @@ class OnsiteStreamActor:
 
         self.stages.complete(turn, chunks)
 
-        return _SynthesizedAnswer(chunks, turn.answer_text)
+        return _SynthesizedAnswer(
+            chunks, turn.answer_text, SegmentId(str(turn.segment_id))
+        )
+
+    async def _prepare_replacement(
+        self, segment_id: SegmentId
+    ) -> CancellationEpoch | None:
+        callback = cast(
+            "Callable[[StreamKey, SegmentId], Awaitable[CancellationEpoch | None]] | None",  # noqa: E501
+            getattr(self.stages, "prepare_replacement", None),
+        )
+        if callback is None or self._output_epoch is None:
+            return None
+        return await callback(self.stream, segment_id)
 
     def _new_cancellation(self) -> CancellationToken:
         cancellation = CancellationToken()
@@ -473,6 +497,7 @@ class OnsiteStreamActor:
                     await self.stages.output(self.stream, item.epoch, packet)
                     self._is_playing = True
                     self._active_answer_excerpt = item.answer_excerpt
+                    self._output_epoch = item.epoch
 
                     self._record_correlation("rtp_egress", item.correlation, None)
 
@@ -489,6 +514,8 @@ class OnsiteStreamActor:
                     await finisher(self.stream, item.epoch)
                 self._active_answer_excerpt = ""
                 self._is_playing = False
+                if self._output_epoch == item.epoch:
+                    self._output_epoch = None
 
     def _gate(self, event: ASRAudienceEvent) -> AsrGateDecision:
         gate = cast(
@@ -500,9 +527,7 @@ class OnsiteStreamActor:
             # composition always installs one; while audio is active we still
             # fail closed to avoid accidental barge-in.
             return (
-                AsrGateDecision.DISCARD
-                if self._is_playing
-                else AsrGateDecision.ACCEPT
+                AsrGateDecision.DISCARD if self._is_playing else AsrGateDecision.ACCEPT
             )
         try:
             return gate(
@@ -512,7 +537,6 @@ class OnsiteStreamActor:
             )
         except (OSError, TimeoutError, ValueError):
             return AsrGateDecision.DISCARD
-
 
     def _authorize_output(self, epoch: CancellationEpoch) -> bool:
         if epoch in self._authorized_output_epochs:
