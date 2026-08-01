@@ -502,7 +502,10 @@ class OnsiteExplainerBridge:
             "onsite_tts_request text_chars=%d voice=%s", len(text), self.voice
         )
         try:
-            if isinstance(self.tts, StreamingTtsAdapter):
+            if (
+                getattr(self.tts, "capability", "streaming_sse") == "streaming_sse"
+                and isinstance(self.tts, StreamingTtsAdapter)
+            ):
                 return self.tts.stream_pcm16le(
                     text=text,
                     voice=self.voice,

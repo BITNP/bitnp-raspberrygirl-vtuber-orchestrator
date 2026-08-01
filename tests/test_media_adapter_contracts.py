@@ -324,6 +324,21 @@ def test_media_provider_rejects_blank_endpoint_or_model_before_network(
         _ = adapter_factory(endpoint=endpoint, model=model)
 
 
+def test_vllm_sse_delta_is_decoded_and_resampled_to_onsite_pcm() -> None:
+    payload = '{"type":"speech.audio.delta","audio":"AADoA9AH","response_format":"pcm"}'
+
+    pcm = media_adapters._normalize_tts_sse(payload)  # pyright: ignore[reportPrivateUsage]
+
+    assert pcm is not None
+    assert len(media_adapters._resample_24khz_to_16khz(pcm)) == 4  # pyright: ignore[reportPrivateUsage]
+    assert (
+        media_adapters._normalize_tts_sse(  # pyright: ignore[reportPrivateUsage]
+            '{"type":"speech.audio.done","usage":{}}'
+        )
+        is None
+    )
+
+
 def _data_url(payload: bytes) -> str:
     encoded = base64.b64encode(payload).decode("ascii")
 

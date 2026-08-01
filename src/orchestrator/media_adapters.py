@@ -25,6 +25,7 @@ from orchestrator.provider_streaming import (
     post_sse,
 )
 from orchestrator.tls import build_tls_context
+from orchestrator.tts_rtp import Pcm16leChunk
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -298,6 +299,8 @@ class VllmOmniTTSAdapter:
 
     timeout_seconds: float = 120.0
 
+    capability: Literal["final_only", "streaming_sse"] = "final_only"
+
     def __post_init__(self) -> None:
         _require_endpoint_and_model(self.endpoint, self.model)
 
@@ -348,6 +351,57 @@ class VllmOmniTTSAdapter:
         )
 
         return SynthesizedAudio(data=response.data, media_type=response.media_type)
+
+    def stream_pcm16le(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> Iterator[Pcm16leChunk]:
+        """Consume vLLM-Omni speech.audio SSE events without buffering a clip."""
+        speech = self.build_speech_request(
+            text=text,
+            voice=voice,
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+        )
+        payload = dict(speech.json)
+        payload.update(
+            {
+                "stream": True,
+                "stream_format": "sse",
+                "response_format": "pcm",
+                "speed": 1.0,
+            }
+        )
+        done = False
+        for data in post_sse(
+            ProviderRequest(
+                speech.url,
+                json.dumps(payload).encode(),
+                _headers(self.api_key, "application/json"),
+                "tts",
+                self.ca_path,
+            ),
+            deadlines=ProviderDeadlines(
+                connect_seconds=5.0,
+                read_seconds=self.timeout_seconds,
+                total_seconds=self.timeout_seconds,
+            ),
+            cancellation=cancellation,
+        ):
+            if cancellation is not None and cancellation.cancelled:
+                return
+            chunk = _normalize_tts_sse(data)
+            if chunk is None:
+                done = True
+                break
+            yield Pcm16leChunk(_resample_24khz_to_16khz(chunk))
+        if (cancellation is None or not cancellation.cancelled) and not done:
+            raise ProviderResponseError(stage="tts", reason="missing_done")
 
 
 def _require_endpoint_and_model(endpoint: str, model: str) -> None:
@@ -426,6 +480,53 @@ def _normalize_asr_sse(
     return ASRPartialEvent(text.strip(), received_at_ms, segment_id, seq)
 
 
+def _normalize_tts_sse(data: str) -> bytes | None:
+    """Return a PCM delta, ``None`` for done, or raise for a typed error."""
+    try:
+        payload = parse_json_value(data)
+    except JsonBoundaryError as error:
+        raise ProviderResponseError(stage="tts", reason="json") from error
+    if not isinstance(payload, dict):
+        raise ProviderResponseError(stage="tts", reason="event")
+    match payload.get("type"):
+        case "speech.audio.delta":
+            encoded = payload.get("audio")
+            if payload.get("response_format") != "pcm" or not isinstance(encoded, str):
+                raise ProviderResponseError(stage="tts", reason="event")
+            try:
+                return base64.b64decode(encoded, validate=True)
+            except ValueError as error:
+                raise ProviderResponseError(stage="tts", reason="base64") from error
+        case "speech.audio.done":
+            return None
+        case "speech.audio.error":
+            raise ProviderResponseError(stage="tts", reason="server")
+        case _:
+            raise ProviderResponseError(stage="tts", reason="event")
+
+
+def _resample_24khz_to_16khz(pcm: bytes) -> bytes:
+    """Downsample PCM16LE 24 kHz to the fixed 16 kHz onsite media format."""
+    if len(pcm) % 2 != 0:
+        raise ProviderResponseError(stage="tts", reason="incomplete_pcm")
+    samples = [
+        int.from_bytes(pcm[index : index + 2], "little", signed=True)
+        for index in range(0, len(pcm), 2)
+    ]
+    output = bytearray()
+    for index in range((len(samples) * 2) // 3):
+        source = index * 3
+        left = source // 2
+        right = min(left + 1, len(samples) - 1)
+        value = (
+            samples[left]
+            if source % 2 == 0
+            else (samples[left] + samples[right]) // 2
+        )
+        output.extend(value.to_bytes(2, "little", signed=True))
+    return bytes(output)
+
+
 @dataclass(frozen=True, slots=True)
 class _HttpResponse:
     data: bytes
@@ -433,7 +534,7 @@ class _HttpResponse:
     media_type: str
 
 
-def _post(
+def _post(  # noqa: PLR0913
     url: str,
     body: bytes,
     headers: dict[str, str],

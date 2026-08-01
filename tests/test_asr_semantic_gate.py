@@ -47,6 +47,16 @@ def test_gate_discards_malformed_timeout_and_unknown_decisions() -> None:
     )
 
 
+def test_gate_only_allows_interrupt_while_audio_is_playing() -> None:
+    gate = AsrSemanticGate(lambda request: '{"decision":"interrupt"}')
+
+    assert gate.evaluate("请停一下") is AsrGateDecision.DISCARD
+    assert (
+        gate.evaluate("请停一下", is_playing=True)
+        is AsrGateDecision.INTERRUPT
+    )
+
+
 def _response_or_raise(response: str | TimeoutError) -> str:
 
     if isinstance(response, TimeoutError):
