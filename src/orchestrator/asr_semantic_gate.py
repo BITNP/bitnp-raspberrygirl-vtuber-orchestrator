@@ -27,6 +27,10 @@ class AsrGateProvider(Protocol):
     def __call__(self, request: AsrGateRequest) -> str: ...
 
 
+class AsyncAsrGateProvider(Protocol):
+    async def __call__(self, request: AsrGateRequest) -> str: ...
+
+
 @unique
 class AsrGateDecision(StrEnum):
     ACCEPT = "accept"
@@ -89,3 +93,40 @@ class AsrSemanticGate:
             )
         except (JsonBoundaryError, OSError, TimeoutError):
             return None
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncAsrSemanticGate:
+    """Async equivalent of :class:`AsrSemanticGate` for live LLM requests."""
+
+    provider: AsyncAsrGateProvider
+
+    async def evaluate(
+        self,
+        transcript: str,
+        *,
+        active_answer_excerpt: str = "",
+        is_playing: bool = False,
+    ) -> AsrGateDecision:
+        if transcript.strip() == "":
+            return AsrGateDecision.DISCARD
+        try:
+            value = parse_json_value(
+                await self.provider(
+                    AsrGateRequest(
+                        transcript=transcript,
+                        active_answer_excerpt=active_answer_excerpt,
+                        is_playing=is_playing,
+                    )
+                )
+            )
+        except (JsonBoundaryError, OSError, TimeoutError):
+            return AsrGateDecision.DISCARD
+        if not isinstance(value, dict) or set(value) != {"decision"}:
+            return AsrGateDecision.DISCARD
+        decision = cast("dict[str, object]", value)["decision"]
+        if decision == "accept" and not is_playing:
+            return AsrGateDecision.ACCEPT
+        if decision == "interrupt" and is_playing:
+            return AsrGateDecision.INTERRUPT
+        return AsrGateDecision.DISCARD

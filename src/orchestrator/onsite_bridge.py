@@ -6,18 +6,18 @@ import wave
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import TYPE_CHECKING, Protocol, override
+from typing import TYPE_CHECKING, Protocol, cast, override
 
 from orchestrator.asr_semantic_gate import (
     AsrGateDecision,
     AsrGateRequest,
     AsrSemanticGate,
+    AsyncAsrSemanticGate,
 )
 from orchestrator.funasr_adapter import FunASRWebSocketAdapter
 from orchestrator.llm import (
     AdapterConfigError,
     CancellationToken,
-    LLMFinal,
     LLMPrompt,
     LLMRequest,
 )
@@ -37,7 +37,7 @@ from orchestrator.onsite_bridge_contracts import (
     wav_from_l16,
 )
 from orchestrator.onsite_stream_actor import OnsiteStages, OnsiteStreamActor
-from orchestrator.openai_llm_runtime import OpenAICompatibleLLMRuntimeAdapter
+from orchestrator.openai_llm_runtime import AsyncOpenAICompatibleLLMRuntime
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
 from orchestrator.pipeline_contracts import (
     ASRAudienceEvent,
@@ -70,6 +70,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from orchestrator.config import OrchestratorConfig
+    from orchestrator.llm import LLMAdapter
     from orchestrator.observability import OnsiteObservability
 
 
@@ -147,20 +148,16 @@ _LOGGER = logging.getLogger(__name__)
 _RTP_DIAGNOSTIC_INTERVAL = 100
 
 
-def _build_asr_gate(llm: OpenAICompatibleLLMRuntimeAdapter) -> AsrSemanticGate:
-    def provider(request: AsrGateRequest) -> str:
+def _build_asr_gate(llm: AsyncOpenAICompatibleLLMRuntime) -> AsyncAsrSemanticGate:
+    async def provider(request: AsrGateRequest) -> str:
         user = (
             f"转写: {request.transcript}\n"
             f"正在播放: {request.is_playing}\n"
             f"当前回答摘录: {request.active_answer_excerpt}"
         )
-        for event in llm.stream(LLMRequest(LLMPrompt(request.instruction, user))):
-            if isinstance(event, LLMFinal):
-                return event.text
-        message = "ASR Gate 未返回最终结果"
-        raise TimeoutError(message)
+        return await llm.complete_gate(LLMRequest(LLMPrompt(request.instruction, user)))
 
-    return AsrSemanticGate(provider)
+    return AsyncAsrSemanticGate(provider)
 
 
 @dataclass(slots=True)
@@ -177,7 +174,9 @@ class OnsiteExplainerBridge:
 
     ref_text: str
 
-    asr_gate: AsrSemanticGate | None = None
+    asr_gate: AsrSemanticGate | AsyncAsrSemanticGate | None = None
+
+    llm: AsyncOpenAICompatibleLLMRuntime | None = None
 
     frames_per_utterance: int = 50
 
@@ -561,6 +560,24 @@ class OnsiteExplainerBridge:
             return turn
         return None
 
+    async def answer_async(
+        self,
+        pipeline: OrchestratorTurnPipeline,
+        event: ASRAudienceEvent,
+        cancellation: CancellationToken,
+    ) -> TurnResult | None:
+        if not pipeline.accept_audience_input(event):
+            return None
+        try:
+            return await pipeline.process_next_turn_async(cancellation)
+        except AdapterConfigError:
+            _LOGGER.exception("onsite_llm_permanent_failure")
+            return None
+        except OSError:
+            if not cancellation.cancelled:
+                _LOGGER.exception("onsite_llm_failed")
+            return None
+
     def gate(
         self,
         event: ASRAudienceEvent,
@@ -571,6 +588,10 @@ class OnsiteExplainerBridge:
         gate = self.asr_gate
         if gate is None:
             return AsrGateDecision.DISCARD if is_playing else AsrGateDecision.ACCEPT
+        if isinstance(gate, AsyncAsrSemanticGate):
+            # Legacy batch ingress is synchronous; it must never start a live
+            # network request on its event-loop caller.
+            return AsrGateDecision.DISCARD
         decision = gate.evaluate(
             event.text,
             active_answer_excerpt=active_answer_excerpt,
@@ -584,6 +605,32 @@ class OnsiteExplainerBridge:
             len(event.text),
         )
         return decision
+
+    async def gate_async(
+        self,
+        event: ASRAudienceEvent,
+        *,
+        active_answer_excerpt: str,
+        is_playing: bool,
+    ) -> AsrGateDecision:
+        gate = self.asr_gate
+        if gate is None:
+            return AsrGateDecision.DISCARD if is_playing else AsrGateDecision.ACCEPT
+        if isinstance(gate, AsyncAsrSemanticGate):
+            return await gate.evaluate(
+                event.text,
+                active_answer_excerpt=active_answer_excerpt,
+                is_playing=is_playing,
+            )
+        return gate.evaluate(
+            event.text,
+            active_answer_excerpt=active_answer_excerpt,
+            is_playing=is_playing,
+        )
+
+    async def aclose(self) -> None:
+        if self.llm is not None:
+            await self.llm.aclose()
 
     async def prepare_replacement(
         self, stream: StreamKey, segment_id: SegmentId
@@ -719,19 +766,19 @@ class _BridgeStages(OnsiteStages):
         )
 
     @override
-    def answer(
+    async def answer(
         self, event: ASRAudienceEvent, cancellation: CancellationToken
     ) -> TurnResult | None:
-        return self.bridge.answer(self.pipeline, event, cancellation)
+        return await self.bridge.answer_async(self.pipeline, event, cancellation)
 
-    def gate(
+    async def gate(
         self,
         event: ASRAudienceEvent,
         *,
         active_answer_excerpt: str,
         is_playing: bool,
     ) -> AsrGateDecision:
-        return self.bridge.gate(
+        return await self.bridge.gate_async(
             event,
             active_answer_excerpt=active_answer_excerpt,
             is_playing=is_playing,
@@ -803,7 +850,7 @@ def build_onsite_bridge(
     if voice.strip() == "" or ref_audio.strip() == "" or ref_text.strip() == "":
         raise OnsiteBridgeConfigError(field_name="voice_reference")
 
-    llm = OpenAICompatibleLLMRuntimeAdapter(
+    llm = AsyncOpenAICompatibleLLMRuntime(
         config.llm_endpoint,
         config.llm_model,
         config.llm_api_key,
@@ -814,7 +861,7 @@ def build_onsite_bridge(
 
     adapters = PipelineAdapters(
         mode_policy=AdaptiveAgentPolicy(),
-        llm=llm,
+        llm=cast("LLMAdapter", cast("object", llm)),
         retrieval=RetrievalFixtureProvider(()),
     )
 
@@ -849,4 +896,5 @@ def build_onsite_bridge(
         ref_audio=ref_audio,
         ref_text=ref_text,
         asr_gate=_build_asr_gate(llm),
+        llm=llm,
     )

@@ -1,8 +1,7 @@
-
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from orchestrator.ids import SegmentId, TurnId
 from orchestrator.llm import (
@@ -11,6 +10,7 @@ from orchestrator.llm import (
     LLMChunk,
     LLMError,
     LLMFinal,
+    LLMStreamEvent,
     build_llm_request,
 )
 from orchestrator.modes import AnswerCandidate, AudienceInput, AudienceSource
@@ -31,19 +31,19 @@ from orchestrator.pipeline_contracts import (
 )
 from orchestrator.retrieval import RetrievalProvider
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 
 class AnswerPolicy(Protocol):
-
     def select_answer_candidate(
         self,
         audience_inputs: tuple[AudienceInput, ...],
-    ) -> AnswerCandidate | None:
-        ...
+    ) -> AnswerCandidate | None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class PipelineAdapters:
-
     mode_policy: AnswerPolicy
 
     llm: LLMAdapter
@@ -52,7 +52,6 @@ class PipelineAdapters:
 
 
 class OrchestratorTurnPipeline:
-
     def __init__(
         self,
         *,
@@ -184,6 +183,68 @@ class OrchestratorTurnPipeline:
             used_fallback=final.used_fallback if final is not None else False,
         )
 
+    async def process_next_turn_async(  # noqa: C901
+        self, cancellation: CancellationToken | None = None
+    ) -> TurnResult | None:
+        """Process a turn with an async live LLM, retaining mock compatibility."""
+        if len(self._queue) == 0:
+            return None
+        event = self._queue.popleft()
+        candidate = self._mode_policy.select_answer_candidate(
+            (_to_audience_input(event),)
+        )
+        if candidate is None:
+            return None
+        self._turn_seq += 1
+        turn_id = TurnId(f"{self._turn_id_prefix}-{self._turn_seq:04d}")
+        segment_id = SegmentId(f"{self._segment_id_prefix}-{self._turn_seq:04d}")
+        token = CancellationToken() if cancellation is None else cancellation
+        text_parts: list[str] = []
+        final: LLMFinal | None = None
+        try:
+            request = build_llm_request(
+                candidate, retrieval=self._retrieval.retrieve(candidate)
+            )
+            stream = self._llm.stream(request, cancellation=token)
+            if hasattr(stream, "__aiter__"):
+                async_stream = cast(
+                    "AsyncIterator[LLMStreamEvent]", cast("object", stream)
+                )
+                async for llm_event in async_stream:
+                    if isinstance(llm_event, LLMChunk):
+                        text_parts.append(llm_event.text)
+                    elif isinstance(llm_event, LLMFinal):
+                        final = llm_event
+                    elif (
+                        isinstance(llm_event, LLMError)
+                        and llm_event.cancel_pending_media
+                    ):
+                        self._cancel_commands.append(
+                            _cancel(
+                                _CancelIntent(
+                                    turn_id, segment_id, "media_stream", "llm_timeout"
+                                )
+                            )
+                        )
+            else:
+                for llm_event in stream:
+                    if isinstance(llm_event, LLMChunk):
+                        text_parts.append(llm_event.text)
+                    elif isinstance(llm_event, LLMFinal):
+                        final = llm_event
+        except OSError:
+            self._queue.appendleft(event)
+            self._turn_seq -= 1
+            raise
+        answer_text = final.text if final is not None else "".join(text_parts)
+        self._active = _ActiveTurn(turn_id, segment_id, answer_text, token)
+        return TurnResult(
+            turn_id=turn_id,
+            segment_id=segment_id,
+            answer_text=answer_text,
+            used_fallback=final.used_fallback if final is not None else False,
+        )
+
     def complete_synthesis(
         self,
         synthesis: MockSynthesisResult,
@@ -270,7 +331,6 @@ class OrchestratorTurnPipeline:
 
 @dataclass(frozen=True, slots=True)
 class _ActiveTurn:
-
     turn_id: TurnId
 
     segment_id: SegmentId
@@ -282,7 +342,6 @@ class _ActiveTurn:
 
 @dataclass(frozen=True, slots=True)
 class _CancelIntent:
-
     turn_id: TurnId
 
     segment_id: SegmentId

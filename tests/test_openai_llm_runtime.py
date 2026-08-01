@@ -1,19 +1,23 @@
-
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar, override
 
+import httpx
+
 from orchestrator.llm import LLMFinal, LLMPrompt, LLMRequest
-from orchestrator.openai_llm_runtime import OpenAICompatibleLLMRuntimeAdapter
+from orchestrator.openai_llm_runtime import (
+    AsyncOpenAICompatibleLLMRuntime,
+    OpenAICompatibleLLMRuntimeAdapter,
+)
 
 
 @dataclass(slots=True)
 class _CapturedRequest:
-
     path: str
 
     authorization: str
@@ -23,7 +27,6 @@ class _CapturedRequest:
 
 @dataclass(slots=True)
 class _FakeOpenAICompatibleServer:
-
     requests: list[_CapturedRequest] = field(default_factory=list)
 
     _server: ThreadingHTTPServer = field(init=False)
@@ -54,7 +57,6 @@ class _FakeOpenAICompatibleServer:
 
 
 class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
-
     requests: ClassVar[list[_CapturedRequest]]
 
     def do_POST(self) -> None:
@@ -92,7 +94,6 @@ class _OpenAICompatibleHandler(BaseHTTPRequestHandler):
 def test_runtime_adapter_posts_openai_chat_completion_and_yields_final() -> None:
     # Given: a fake-local OpenAI-compatible completion server and typed turn request.
 
-
     server = _FakeOpenAICompatibleServer()
 
     request = LLMRequest(
@@ -127,3 +128,55 @@ def test_runtime_adapter_posts_openai_chat_completion_and_yields_final() -> None
     }
 
     assert events == (LLMFinal(text="onsite answer", used_fallback=False),)
+
+
+def test_async_runtime_uses_documented_gate_and_streaming_parameters() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured.append(body)
+        if body["stream"] is False:
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": '{"decision":"accept"}'}}]},
+            )
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"choices":[{"delta":{"content":"hello "}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"world"}}]}\n\n'
+                b"data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async def run() -> tuple[str, tuple[object, ...]]:
+        runtime = AsyncOpenAICompatibleLLMRuntime(
+            endpoint="https://example.test/v1",
+            model="test-model",
+            api_key="test-key",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            gate = await runtime.complete_gate(LLMRequest(LLMPrompt("gate", "input")))
+            events = tuple(
+                [
+                    event
+                    async for event in runtime.stream(
+                        LLMRequest(LLMPrompt("system", "user"))
+                    )
+                ]
+            )
+            return gate, events
+        finally:
+            await runtime.aclose()
+
+    gate, events = asyncio.run(run())
+
+    assert gate == '{"decision":"accept"}'
+    assert captured[0]["stream"] is False
+    assert captured[0]["response_format"] == {"type": "json_object"}
+    assert captured[0]["reasoning_effort"] == "none"
+    assert captured[1]["stream"] is True
+    assert events[-1] == LLMFinal(text="hello world", used_fallback=False)

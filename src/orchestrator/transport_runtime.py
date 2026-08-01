@@ -231,6 +231,10 @@ class TransportRuntime:
 
         await self._hub.wait_for_onsite_jobs()
 
+        bridge = self._onsite_bridge
+        if isinstance(bridge, OnsiteExplainerBridge):
+            await bridge.aclose()
+
         self._control_dispatch.clear()
 
     async def handle_control(self, connection: ControlConnection) -> None:

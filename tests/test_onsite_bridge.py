@@ -10,7 +10,7 @@ from orchestrator.config import load_config_from_env
 from orchestrator.funasr_adapter import FunASRWebSocketAdapter
 from orchestrator.llm import OpenAICompatibleASRAdapter, VllmOmniTTSAdapter
 from orchestrator.onsite_bridge import OnsiteBridgeConfigError, build_onsite_bridge
-from orchestrator.openai_llm_runtime import OpenAICompatibleLLMRuntimeAdapter
+from orchestrator.openai_llm_runtime import AsyncOpenAICompatibleLLMRuntime
 
 
 @dataclass(slots=True)
@@ -155,17 +155,17 @@ def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(
         *,
         ca_path: Path | None,
         **kwargs: object,
-    ) -> OpenAICompatibleLLMRuntimeAdapter:
+    ) -> AsyncOpenAICompatibleLLMRuntime:
         _ = kwargs
         llm_ca_paths.append(ca_path)
-        return OpenAICompatibleLLMRuntimeAdapter(
+        return AsyncOpenAICompatibleLLMRuntime(
             endpoint,
             model,
             api_key,
             ca_path=ca_path,
         )
 
-    monkeypatch.setattr(onsite_bridge, "OpenAICompatibleLLMRuntimeAdapter", build_llm)
+    monkeypatch.setattr(onsite_bridge, "AsyncOpenAICompatibleLLMRuntime", build_llm)
 
     # When: the onsite composition root builds all HTTP provider adapters.
 

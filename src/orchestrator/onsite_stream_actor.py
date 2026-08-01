@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from collections import deque
@@ -39,7 +40,7 @@ class OnsiteStages(Protocol):
 
     def answer(
         self, event: ASRAudienceEvent, cancellation: CancellationToken
-    ) -> TurnResult | None: ...
+    ) -> TurnResult | None | Awaitable[TurnResult | None]: ...
 
     def synthesize(
         self, turn: TurnResult, cancellation: CancellationToken
@@ -50,6 +51,7 @@ class OnsiteStages(Protocol):
     async def output(
         self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
     ) -> None: ...
+
 
 _RTP_FRAME_DURATION_SECONDS = 0.020
 
@@ -63,6 +65,20 @@ def _next_chunk(stream: Iterator[Pcm16leChunk]) -> Pcm16leChunk | None:
         return next(stream)
     except StopIteration:
         return None
+
+
+def _run_answer_and_synthesize(
+    actor: OnsiteStreamActor,
+    event: ASRAudienceEvent,
+    correlation: StageCorrelation,
+    cancellation: CancellationToken,
+) -> _SynthesizedAnswer | None:
+    """Keep legacy synchronous mock/media stages off the RTP event loop."""
+    return asyncio.run(
+        actor.answer_and_synthesize(
+            event, correlation, cancellation
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,11 +364,19 @@ class OnsiteStreamActor:
             if item.epoch == self.epoch and event is not None:
                 correlation = self._correlation(item.endpoint, item.epoch)
                 self._record_correlation("asr_final", correlation, latency_ms)
-                # The semantic gate may issue a synchronous LLM request.  It
-                # is an interactive control-lane operation, never part of the
-                # realtime RTP clock: running it on this event loop would
-                # postpone 20 ms egress frames for the entire request.
-                decision = await asyncio.to_thread(self._gate, event)
+                gate = getattr(self.stages, "gate", None)
+                if gate is None:
+                    decision = AsrGateDecision.ACCEPT
+                elif inspect.iscoroutinefunction(gate):
+                    decision = await gate(
+                        event,
+                        active_answer_excerpt=self._active_answer_excerpt,
+                        is_playing=self._is_playing,
+                    )
+                else:
+                    # Test and mock stages can remain synchronous; only the
+                    # live SDK path is required to stay on the event loop.
+                    decision = await asyncio.to_thread(self._gate, event)
                 if decision is AsrGateDecision.DISCARD:
                     self._record_details(
                         "drop", correlation, StageDetails(drop_count=1)
@@ -384,12 +408,18 @@ class OnsiteStreamActor:
             self._active_answer_cancellation = cancellation
 
             try:
-                chunks = await asyncio.to_thread(
-                    self._answer_and_synthesize,
-                    item.event,
-                    item.correlation,
-                    cancellation,
-                )
+                if inspect.iscoroutinefunction(self.stages.answer):
+                    chunks = await self.answer_and_synthesize(
+                        item.event, item.correlation, cancellation
+                    )
+                else:
+                    chunks = await asyncio.to_thread(
+                        _run_answer_and_synthesize,
+                        self,
+                        item.event,
+                        item.correlation,
+                        cancellation,
+                    )
 
             finally:
                 self._active_cancellations.discard(cancellation)
@@ -462,7 +492,7 @@ class OnsiteStreamActor:
                 )
             )
 
-    def _answer_and_synthesize(
+    async def answer_and_synthesize(
         self,
         event: ASRAudienceEvent,
         correlation: StageCorrelation,
@@ -471,6 +501,8 @@ class OnsiteStreamActor:
         answer_started_at = time.perf_counter()
 
         turn = self.stages.answer(event, cancellation)
+        if inspect.isawaitable(turn):
+            turn = await turn
 
         self._record_correlation(
             "answer", correlation, (time.perf_counter() - answer_started_at) * 1_000
