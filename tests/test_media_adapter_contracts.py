@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import ssl
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -226,6 +227,49 @@ def test_vllm_omni_preserves_existing_reference_data_url() -> None:
     # Then: no second encoding corrupts the existing data URL.
 
     assert request.extra_body["ref_audio"] == ref_audio
+
+
+def test_tts_logs_only_summaries_for_reference_audio_and_response(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    reference_payload = "private-reference-audio" * 100
+    response_payload = b"private-api-response" * 100
+    adapter = VllmOmniTTSAdapter(
+        endpoint="http://127.0.0.1:8001/v1",
+        model="vllm-omni",
+    )
+
+    def create_speech(**_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(content=response_payload)
+
+    client = SimpleNamespace(
+        audio=SimpleNamespace(
+            speech=SimpleNamespace(create=create_speech)
+        ),
+        close=lambda: None,
+    )
+
+    def build_client(_adapter: VllmOmniTTSAdapter) -> SimpleNamespace:
+        return client
+
+    monkeypatch.setattr(VllmOmniTTSAdapter, "_client", build_client)
+
+    with caplog.at_level(logging.DEBUG, logger="orchestrator.media_adapters"):
+        result = adapter.synthesize(
+            text="讲解" * 100,
+            voice="raspberry",
+            ref_audio=f"data:audio/wav;base64,{reference_payload}",
+            ref_text="参考文本" * 100,
+        )
+
+    log_output = caplog.text
+    assert result.data == response_payload
+    assert "tts_request" in log_output
+    assert "tts_response" in log_output
+    assert "payload_chars=2300" in log_output
+    assert "bytes=2000" in log_output
+    assert reference_payload not in log_output
+    assert response_payload.decode() not in log_output
 
 
 def test_media_adapters_retain_configured_ca_path_for_provider_requests(

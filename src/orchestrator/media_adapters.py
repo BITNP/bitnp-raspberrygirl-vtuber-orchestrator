@@ -26,6 +26,11 @@ if TYPE_CHECKING:
 
 
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
+from orchestrator.log_summary import (
+    binary_summary,
+    reference_audio_summary,
+    text_summary,
+)
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.provider_streaming import (
     ProviderCancellationHandle,
@@ -386,9 +391,11 @@ class VllmOmniTTSAdapter:
             ref_audio=ref_audio,
             ref_text=ref_text,
         )
+        _log_tts_request(speech)
 
         client = self._client()
         release = _bind_cancellation(cancellation, client.close)
+        data = b""
         try:
             response = client.audio.speech.create(
                 **speech.json,
@@ -398,9 +405,11 @@ class VllmOmniTTSAdapter:
             )
             if cancellation is not None and cancellation.cancelled:
                 return SynthesizedAudio(data=b"", media_type="application/octet-stream")
-            return SynthesizedAudio(
-                data=response.content,
-                media_type="audio/wav",
+            data = response.content
+            _LOGGER.debug(
+                "tts_response transport=http media_type=%s %s",
+                "audio/wav",
+                binary_summary(data),
             )
         except (
             APIConnectionError,
@@ -415,6 +424,7 @@ class VllmOmniTTSAdapter:
         finally:
             release()
             client.close()
+        return SynthesizedAudio(data=data, media_type="audio/wav")
 
     def stream_pcm16le(
         self,
@@ -432,6 +442,7 @@ class VllmOmniTTSAdapter:
             ref_audio=ref_audio,
             ref_text=ref_text,
         )
+        _log_tts_request(speech)
         client = self._client()
         release = _bind_cancellation(cancellation, client.close)
         response = None
@@ -567,6 +578,20 @@ def _audio_data_url(path: Path) -> str:
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
 
     return f"data:audio/wav;base64,{encoded}"
+
+
+def _log_tts_request(speech: HttpSpeechRequest) -> None:
+    """Log request diagnostics without exposing reference audio or large text."""
+    _LOGGER.debug(
+        "tts_request url=%s model=%s voice=%s input=(%s) ref_audio=(%s) "
+        "ref_text=(%s)",
+        speech.url,
+        speech.json["model"],
+        speech.json["voice"],
+        text_summary(speech.json["input"]),
+        reference_audio_summary(speech.extra_body["ref_audio"]),
+        text_summary(speech.extra_body["ref_text"]),
+    )
 
 
 def _normalize_tts_sse(data: str) -> bytes | None:
