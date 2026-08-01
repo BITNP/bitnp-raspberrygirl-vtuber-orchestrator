@@ -120,11 +120,11 @@ class OpenAICompatibleASRAdapter:
         received_at_ms: int,
         segment_id: str,
         seq: int,
-    ) -> ASRAudienceEvent:
+    ) -> ASRAudienceEvent | None:
         text = response.get("text", "").strip()
 
         if text == "":
-            raise MediaAdapterConfigError(field_name="response.text")
+            return None
 
         return ASRAudienceEvent(text, received_at_ms, segment_id, seq)
 
@@ -137,16 +137,11 @@ class OpenAICompatibleASRAdapter:
         segment_id: str,
         seq: int,
         cancellation: ProviderCancellationHandle | None = None,
-    ) -> ASRAudienceEvent:
-        event = self._transcribe_request(
+    ) -> ASRAudienceEvent | None:
+        return self._transcribe_request(
             ASRStreamRequest(audio, filename, received_at_ms, segment_id, seq),
             cancellation=cancellation,
         )
-
-        if event is None:
-            raise MediaAdapterConfigError(field_name="cancellation")
-
-        return event
 
     def _transcribe_request(
         self,
@@ -204,11 +199,14 @@ class OpenAICompatibleASRAdapter:
             segment_id=request.segment_id,
             seq=request.seq,
         )
-        _LOGGER.debug(
-            "asr_response kind=final segment=%s chars=%d",
-            event.segment_id,
-            len(event.text),
-        )
+        if event is None:
+            _LOGGER.debug("asr_response kind=empty segment=%s", request.segment_id)
+        else:
+            _LOGGER.debug(
+                "asr_response kind=final segment=%s chars=%d",
+                event.segment_id,
+                len(event.text),
+            )
         return event
 
     def stream(

@@ -74,6 +74,8 @@ uv run --env-file .env mic-stream
 
 先让 Sound 完成 sink 注册，再启动 Mic。Mic 完成 source register/ready handshake 后才会发送 RTP。若进程在启动前失败，按下表检查配置：
 
+正常的静音或无有效语音片段可能使 ASR 返回空 `text`；Orchestrator 会将其记为 `onsite_asr_empty` 并丢弃，不会发起 LLM 或 TTS，也不应记录 `onsite_asr_permanent_failure`。
+
 | 错误 | 原因与处理 |
 | --- | --- |
 | `config field is blank: ORCHESTRATOR_TRANSPORT_ADVERTISED_HOST` | `.env` 未加载，或缺少该变量；使用 `uv run --env-file .env orchestrator-transport` 并填写 loopback 地址。 |

@@ -190,7 +190,7 @@ def test_native_funasr_wss_rejects_untrusted_or_hostname_mismatched_private_ca(
 
 def _request_http_provider(
     provider: HttpProvider, endpoint: str, ca_path: Path | None
-) -> tuple[LLMStreamEvent, ...] | ASRAudienceEvent | bytes:
+) -> tuple[LLMStreamEvent, ...] | ASRAudienceEvent | bytes | None:
     match provider:
         case "llm":
             return tuple(

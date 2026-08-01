@@ -45,6 +45,10 @@ class _TtsConnection:
         return
 
 
+def _empty_asr_response(*_args: object, **_kwargs: object) -> bytes:
+    return b'{"text":"   "}'
+
+
 def test_default_mock_media_providers_need_no_credentials_or_network() -> None:
     # Given: the normal replay environment has no provider configuration.
 
@@ -94,6 +98,37 @@ def test_openai_compatible_asr_normalizes_final_at_orchestrator_boundary() -> No
         segment_id="asr-local-0001",
         seq=4,
     )
+
+
+def test_openai_compatible_asr_treats_blank_final_as_no_transcription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a configured provider returns its normal empty final for a silent endpoint.
+
+
+    adapter = OpenAICompatibleASRAdapter(
+        endpoint="http://127.0.0.1:8000/v1",
+        model="local-asr",
+    )
+    monkeypatch.setattr(
+        media_adapters,
+        "post_bytes",
+        _empty_asr_response,
+    )
+
+    # When: Orchestrator transcribes the endpointed audio.
+
+    result = adapter.transcribe(
+        audio=b"wav",
+        filename="onsite-l16.wav",
+        received_at_ms=20,
+        segment_id="asr-local-0001",
+        seq=1,
+    )
+
+    # Then: silence is discarded rather than treated as a provider misconfiguration.
+
+    assert result is None
 
 
 def test_vllm_omni_builds_opt_in_fake_local_speech_request() -> None:
