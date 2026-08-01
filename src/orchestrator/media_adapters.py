@@ -378,6 +378,7 @@ class VllmOmniTTSAdapter:
             }
         )
         done = False
+        resampler = _Pcm24khzTo16khzResampler()
         for data in post_sse(
             ProviderRequest(
                 speech.url,
@@ -399,7 +400,9 @@ class VllmOmniTTSAdapter:
             if chunk is None:
                 done = True
                 break
-            yield Pcm16leChunk(_resample_24khz_to_16khz(chunk))
+            converted = resampler.push(chunk)
+            if converted:
+                yield Pcm16leChunk(converted)
         if (cancellation is None or not cancellation.cancelled) and not done:
             raise ProviderResponseError(stage="tts", reason="missing_done")
 
@@ -505,26 +508,50 @@ def _normalize_tts_sse(data: str) -> bytes | None:
             raise ProviderResponseError(stage="tts", reason="event")
 
 
-def _resample_24khz_to_16khz(pcm: bytes) -> bytes:
-    """Downsample PCM16LE 24 kHz to the fixed 16 kHz onsite media format."""
-    if len(pcm) % 2 != 0:
-        raise ProviderResponseError(stage="tts", reason="incomplete_pcm")
-    samples = [
-        int.from_bytes(pcm[index : index + 2], "little", signed=True)
-        for index in range(0, len(pcm), 2)
-    ]
-    output = bytearray()
-    for index in range((len(samples) * 2) // 3):
-        source = index * 3
-        left = source // 2
-        right = min(left + 1, len(samples) - 1)
-        value = (
-            samples[left]
-            if source % 2 == 0
-            else (samples[left] + samples[right]) // 2
+class _Pcm24khzTo16khzResampler:
+    """Linear 24 kHz → 16 kHz PCM16LE resampler preserving SSE boundaries.
+
+    An SSE delta is an arbitrary byte partition, not an independently sampled
+    clip.  Keep the fractional source position and one-sample look-ahead so
+    joining separately received deltas is byte-identical to resampling their
+    concatenation.
+    """
+
+    def __init__(self) -> None:
+        self._samples: list[int] = []
+        self._sample_offset: int = 0
+        self._next_position_halves: int = 0
+
+    def push(self, pcm: bytes) -> bytes:
+        if len(pcm) % 2 != 0:
+            raise ProviderResponseError(stage="tts", reason="incomplete_pcm")
+        self._samples.extend(
+            int.from_bytes(pcm[index : index + 2], "little", signed=True)
+            for index in range(0, len(pcm), 2)
         )
-        output.extend(value.to_bytes(2, "little", signed=True))
-    return bytes(output)
+        output = bytearray()
+        end = self._sample_offset + len(self._samples)
+        while True:
+            source_index = self._next_position_halves // 2
+            # Require interpolation look-ahead even at an integer position.
+            # This keeps output count equal to floor(input_samples * 2 / 3).
+            if source_index + 1 >= end:
+                break
+            left = self._samples[source_index - self._sample_offset]
+            if self._next_position_halves % 2 == 0:
+                value = left
+            else:
+                right = self._samples[source_index + 1 - self._sample_offset]
+                value = (left + right) // 2
+            output.extend(value.to_bytes(2, "little", signed=True))
+            self._next_position_halves += 3
+
+        next_source_index = self._next_position_halves // 2
+        discard = max(0, next_source_index - self._sample_offset)
+        if discard:
+            del self._samples[:discard]
+            self._sample_offset += discard
+        return bytes(output)
 
 
 @dataclass(frozen=True, slots=True)

@@ -330,13 +330,26 @@ def test_vllm_sse_delta_is_decoded_and_resampled_to_onsite_pcm() -> None:
     pcm = media_adapters._normalize_tts_sse(payload)  # pyright: ignore[reportPrivateUsage]
 
     assert pcm is not None
-    assert len(media_adapters._resample_24khz_to_16khz(pcm)) == 4  # pyright: ignore[reportPrivateUsage]
+    converter = media_adapters._Pcm24khzTo16khzResampler()  # pyright: ignore[reportPrivateUsage]
+    assert len(converter.push(pcm)) == 4
     assert (
         media_adapters._normalize_tts_sse(  # pyright: ignore[reportPrivateUsage]
             '{"type":"speech.audio.done","usage":{}}'
         )
         is None
     )
+
+
+def test_tts_sse_resampler_preserves_pcm_across_delta_boundaries() -> None:
+    pcm = b"\x00\x00\xe8\x03\xd0\x07\xb8\x0b\xa0\x0f"
+    resampler = media_adapters._Pcm24khzTo16khzResampler()  # pyright: ignore[reportPrivateUsage]
+
+    first = resampler.push(pcm[:4])
+    second = resampler.push(pcm[4:])
+
+    one_shot = media_adapters._Pcm24khzTo16khzResampler()  # pyright: ignore[reportPrivateUsage]
+    expected = one_shot.push(pcm)
+    assert first + second == expected
 
 
 def _data_url(payload: bytes) -> str:

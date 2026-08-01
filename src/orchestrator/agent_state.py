@@ -38,7 +38,6 @@ class StateEffect(StrEnum):
     FLUSH_SOUND = "flush_sound"
     EMIT_AUDIO = "emit_audio"
     FINISH_AUDIO = "finish_audio"
-    SHOW_FAILURE = "show_failure"
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,9 +90,7 @@ class AgentStateReducer:
         if epoch != self._state.epoch or self._state.phase is not TurnPhase.REASONING:
             return StateTransition(self._state)
         if not has_text:
-            return self._set(
-                AgentState(epoch, TurnPhase.FAILED), StateEffect.SHOW_FAILURE
-            )
+            return self._set(AgentState(epoch, TurnPhase.FAILED))
         return self._set(
             AgentState(epoch, TurnPhase.TTS_PENDING, self._state.pending_interrupt),
             StateEffect.START_TTS,
@@ -126,12 +123,10 @@ class AgentStateReducer:
     def failed(self, epoch: int, *, audio_started: bool) -> StateTransition:
         if epoch != self._state.epoch:
             return StateTransition(self._state)
-        effects = (
-            (StateEffect.FINISH_AUDIO, StateEffect.SHOW_FAILURE)
-            if audio_started
-            else (StateEffect.SHOW_FAILURE,)
-        )
-        return self._set(AgentState(epoch, TurnPhase.FAILED), *effects)
+        # Provider failure is terminal for its turn.  The runtime records the
+        # structured error and emits no recovery speech or frontend status.
+        _ = audio_started
+        return self._set(AgentState(epoch, TurnPhase.FAILED))
 
     def _set(self, state: AgentState, *effects: StateEffect) -> StateTransition:
         self._state = state

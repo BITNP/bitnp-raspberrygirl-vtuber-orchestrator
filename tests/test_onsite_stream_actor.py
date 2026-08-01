@@ -433,7 +433,7 @@ class _BackpressureStages:
         _ = await self.release_output.wait()
 
 
-def test_actor_counts_newest_wins_drops_for_all_stage_mailboxes() -> None:
+def test_actor_backpressures_tts_chunks_without_dropping_audio() -> None:
 
     asyncio.run(_stage_mailbox_drop_count_proof())
 
@@ -465,7 +465,7 @@ async def _stage_mailbox_drop_count_proof() -> None:
 
     _ = await stages.output_started.wait()
 
-    assert actor.drop_counts.tts_chunks > 0
+    assert actor.drop_counts.tts_chunks == 0
 
     _ = stages.release_output.set()
 

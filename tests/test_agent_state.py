@@ -39,10 +39,10 @@ def test_stale_callbacks_cannot_emit_audio_after_interrupt() -> None:
     assert reducer.audio_ready(0).effects == ()
 
 
-def test_failed_pre_audio_turn_only_exposes_recoverable_failure() -> None:
+def test_failed_pre_audio_turn_has_no_recovery_effect() -> None:
     reducer = AgentStateReducer()
     _ = reducer.gate(GateOutcome.ACCEPT)
 
     failed = reducer.failed(0, audio_started=False)
     assert failed.state.phase is TurnPhase.FAILED
-    assert failed.effects == (StateEffect.SHOW_FAILURE,)
+    assert failed.effects == ()

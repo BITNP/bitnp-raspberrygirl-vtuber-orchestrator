@@ -130,6 +130,10 @@ class OnsiteStreamActor:
 
     _chunk_wake: asyncio.Event = field(default_factory=asyncio.Event)
 
+    # TTS media is ordered data, not a latest-wins control message.  Producers
+    # wait for RTP egress capacity instead of dropping audible PCM.
+    _chunk_space: asyncio.Event = field(default_factory=asyncio.Event)
+
     _endpoint_task: asyncio.Task[None] | None = None
 
     _answer_task: asyncio.Task[None] | None = None
@@ -157,6 +161,9 @@ class OnsiteStreamActor:
     _is_playing: bool = False
 
     _output_epoch: CancellationEpoch | None = None
+
+    def __post_init__(self) -> None:
+        self._chunk_space.set()
 
     @property
     def drop_counts(self) -> PipelineDropCounts:
@@ -187,6 +194,7 @@ class OnsiteStreamActor:
         self._answers.clear()
 
         self._chunks.clear()
+        self._chunk_space.set()
 
         for cancellation in tuple(self._active_cancellations):
             _ = cancellation.cancel(reason="stream_invalidated")
@@ -289,21 +297,12 @@ class OnsiteStreamActor:
         if task is None or task.done():
             self._answer_task = asyncio.create_task(self._run_answers())
 
-    def _append_chunk(self, item: _ChunkItem) -> None:
-        if len(self._chunks) == TTS_CHUNK_CAPACITY:
-            _ = self._chunks.popleft()
-
-            self._drops = PipelineDropCounts(
-                endpointed_utterances=self._drops.endpointed_utterances,
-                answer_turns=self._drops.answer_turns,
-                tts_chunks=self._drops.tts_chunks + 1,
-            )
-
-            self._record_details(
-                "drop",
-                item.correlation,
-                StageDetails(drop_count=self._drops.tts_chunks),
-            )
+    async def _append_chunk(self, item: _ChunkItem) -> bool:
+        while len(self._chunks) >= TTS_CHUNK_CAPACITY:
+            self._chunk_space.clear()
+            _ = await self._chunk_space.wait()
+            if self._closed:
+                return False
 
         self._chunks.append(item)
 
@@ -319,6 +318,7 @@ class OnsiteStreamActor:
 
         if task is None or task.done():
             self._chunk_task = asyncio.create_task(self._run_chunks())
+        return True
 
     async def _run_endpoints(self) -> None:
         while self._endpoints:
@@ -401,7 +401,7 @@ class OnsiteStreamActor:
             if resolved_chunks is None:
                 continue
             for chunk in resolved_chunks:
-                self._append_chunk(
+                appended = await self._append_chunk(
                     _ChunkItem(
                         output_epoch,
                         chunk,
@@ -410,8 +410,10 @@ class OnsiteStreamActor:
                         chunks.answer_text[:240],
                     )
                 )
+                if not appended:
+                    return
 
-            self._append_chunk(
+            _ = await self._append_chunk(
                 _ChunkItem(
                     output_epoch,
                     None,
@@ -470,7 +472,7 @@ class OnsiteStreamActor:
             chunks, turn.answer_text, SegmentId(str(turn.segment_id)), turn
         )
 
-    async def _consume_stream(  # noqa: C901, PLR0912
+    async def _consume_stream(  # noqa: C901, PLR0911, PLR0912
         self,
         item: _AnswerItem,
         answer: _SynthesizedAnswer,
@@ -504,7 +506,7 @@ class OnsiteStreamActor:
                         output_epoch = replacement_epoch
                     packetizer = TtsPcmRtpPacketizer(self.stream, output_epoch)
                     for buffered_chunk in buffered:
-                        self._append_chunk(
+                        if not await self._append_chunk(
                             _ChunkItem(
                                 output_epoch,
                                 buffered_chunk,
@@ -512,10 +514,11 @@ class OnsiteStreamActor:
                                 packetizer,
                                 answer.answer_text[:240],
                             )
-                        )
+                        ):
+                            return
                     buffered.clear()
                     continue
-                self._append_chunk(
+                if not await self._append_chunk(
                     _ChunkItem(
                         output_epoch,
                         chunk,
@@ -523,7 +526,8 @@ class OnsiteStreamActor:
                         packetizer,
                         answer.answer_text[:240],
                     )
-                )
+                ):
+                    return
         except (OSError, ValueError):
             # Provider failures are terminal for this turn.  Do not synthesize
             # a recovery response or convert the failed stream into a normal
@@ -538,6 +542,7 @@ class OnsiteStreamActor:
                 for queued in self._chunks
                 if queued.correlation != item.correlation
             )
+            self._chunk_space.set()
             self._record_correlation("tts_failure", item.correlation, None)
             return
         if cancellation.cancelled:
@@ -550,7 +555,7 @@ class OnsiteStreamActor:
                 output_epoch = replacement_epoch
             packetizer = TtsPcmRtpPacketizer(self.stream, output_epoch)
             for buffered_chunk in buffered:
-                self._append_chunk(
+                if not await self._append_chunk(
                     _ChunkItem(
                         output_epoch,
                         buffered_chunk,
@@ -558,8 +563,9 @@ class OnsiteStreamActor:
                         packetizer,
                         answer.answer_text[:240],
                     )
-                )
-        self._append_chunk(
+                ):
+                    return
+        if not await self._append_chunk(
             _ChunkItem(
                 output_epoch,
                 None,
@@ -567,7 +573,8 @@ class OnsiteStreamActor:
                 packetizer,
                 answer.answer_text[:240],
             )
-        )
+        ):
+            return
         completer = cast(
             "Callable[[TurnResult, int], None] | None",
             getattr(self.stages, "complete_stream", None),
@@ -599,6 +606,7 @@ class OnsiteStreamActor:
 
         while self._chunks:
             item = self._chunks.popleft()
+            self._chunk_space.set()
 
             if self._closed:
                 continue
