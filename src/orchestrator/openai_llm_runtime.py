@@ -2,15 +2,27 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+
+import httpx
+from openai import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    OpenAI,
+    Stream,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
+    from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
 
-from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
+
 from orchestrator.llm import (
     AdapterConfigError,
     CancellationToken,
@@ -22,10 +34,7 @@ from orchestrator.llm import (
 from orchestrator.provider_streaming import (
     ProviderCapability,
     ProviderDeadlines,
-    ProviderRequest,
     ProviderResponseError,
-    post_bytes,
-    post_sse,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,27 +42,21 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class OpenAICompatibleLLMRuntimeAdapter:
+    """LLM adapter backed by the official OpenAI Python SDK."""
+
     endpoint: str
-
     model: str
-
     api_key: str
-
     timeout_seconds: float = 30.0
-
     capability: ProviderCapability = "final_only"
-
     deadlines: ProviderDeadlines = field(default_factory=ProviderDeadlines)
-
     ca_path: Path | None = None
 
     def __post_init__(self) -> None:
         if self.endpoint.strip() == "":
             raise AdapterConfigError(field_name="endpoint")
-
         if self.model.strip() == "":
             raise AdapterConfigError(field_name="model")
-
         if self.api_key.strip() == "":
             raise AdapterConfigError(field_name="api_key")
 
@@ -74,169 +77,164 @@ class OpenAICompatibleLLMRuntimeAdapter:
             len(request.prompt.system),
             len(request.prompt.user),
         )
-
         match self.capability:
             case "final_only":
                 yield from self._stream_final_only(request, cancellation)
-
             case "streaming":
-                yield from self._stream_sse(request, cancellation)
+                yield from self._stream_chat_completions(request, cancellation)
 
     def _stream_final_only(
         self, request: LLMRequest, cancellation: CancellationToken | None
     ) -> Iterator[LLMStreamEvent]:
-        response = post_bytes(
-            ProviderRequest(
-                f"{self.endpoint.rstrip('/')}/chat/completions",
-                json.dumps(
-                    {
-                        "model": self.model,
-                        "messages": [
-                            {"role": "system", "content": request.prompt.system},
-                            {"role": "user", "content": request.prompt.user},
-                        ],
-                        "stream": False,
-                        "temperature": request.temperature,
-                    }
-                ).encode(),
-                {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-                "llm",
-                self.ca_path,
-            ),
-            deadlines=ProviderDeadlines(
-                connect_seconds=self.deadlines.connect_seconds,
-                read_seconds=self.deadlines.read_seconds,
-                total_seconds=min(self.timeout_seconds, self.deadlines.total_seconds),
-            ),
-            cancellation=cancellation,
-        )
-
-        if cancellation is not None and cancellation.cancelled:
-            return
-
+        client = self._client(request)
+        release = _bind_cancellation(cancellation, client.close)
         try:
-            payload = parse_json_value(response.decode())
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=_messages(request),
+                temperature=request.temperature,
+                timeout=self._request_timeout(request),
+            )
+            if cancellation is not None and cancellation.cancelled:
+                return
+            if len(response.choices) != 1:
+                raise AdapterConfigError(field_name="response.choices")
+            text = response.choices[0].message.content
+            if not isinstance(text, str) or text.strip() == "":
+                raise AdapterConfigError(field_name="response.message.content")
+            final = text.strip()
+            _LOGGER.debug("llm_response kind=final chars=%d", len(final))
+            yield LLMFinal(text=final, used_fallback=False)
+        except (
+            APIConnectionError,
+            APITimeoutError,
+            APIStatusError,
+            APIError,
+            httpx.HTTPError,
+            json.JSONDecodeError,
+        ) as error:
+            if cancellation is not None and cancellation.cancelled:
+                return
+            raise _provider_error(error) from error
+        finally:
+            release()
+            client.close()
 
-        except JsonBoundaryError as error:
-            raise AdapterConfigError(field_name=error.field_name) from error
-
-        if not isinstance(payload, dict):
-            raise AdapterConfigError(field_name="response")
-
-        choices = payload.get("choices")
-
-        if not isinstance(choices, list) or len(choices) != 1:
-            raise AdapterConfigError(field_name="response.choices")
-
-        choice = choices[0]
-
-        if not isinstance(choice, dict):
-            raise AdapterConfigError(field_name="response.choices")
-
-        message = choice.get("message")
-
-        if not isinstance(message, dict):
-            raise AdapterConfigError(field_name="response.message")
-
-        text = message.get("content")
-
-        if not isinstance(text, str) or text.strip() == "":
-            raise AdapterConfigError(field_name="response.message.content")
-
-        final = text.strip()
-        _LOGGER.debug("llm_response kind=final chars=%d", len(final))
-        yield LLMFinal(text=final, used_fallback=False)
-
-    def _stream_sse(
+    def _stream_chat_completions(
         self, request: LLMRequest, cancellation: CancellationToken | None
     ) -> Iterator[LLMStreamEvent]:
-        chunks: list[str] = []
-
-        done = False
-
-        body = json.dumps(
-            {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": request.prompt.system},
-                    {"role": "user", "content": request.prompt.user},
-                ],
-                "stream": True,
-                "temperature": request.temperature,
-            }
-        ).encode()
-
-        for data in post_sse(
-            ProviderRequest(
-                f"{self.endpoint.rstrip('/')}/chat/completions",
-                body,
-                {
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-                "llm",
-                self.ca_path,
-            ),
-            deadlines=self.deadlines,
-            cancellation=cancellation,
-        ):
-            if data == "[DONE]":
-                done = True
-
-                break
-
-            text = _sse_delta(data)
-
-            chunks.append(text)
-
-            _LOGGER.debug(
-                "llm_response kind=chunk index=%d chars=%d", len(chunks) - 1, len(text)
+        client = self._client(request)
+        release = _bind_cancellation(cancellation, client.close)
+        stream: Stream[ChatCompletionChunk] | None = None
+        try:
+            stream = client.chat.completions.create(
+                model=self.model,
+                messages=_messages(request),
+                temperature=request.temperature,
+                stream=True,
+                timeout=self._request_timeout(request),
             )
+            stream_release = _bind_cancellation(cancellation, stream.close)
+            try:
+                chunks: list[str] = []
+                for chunk in stream:
+                    if cancellation is not None and cancellation.cancelled:
+                        return
+                    if len(chunk.choices) == 0:
+                        continue
+                    text = chunk.choices[0].delta.content
+                    if text is None:
+                        continue
+                    chunks.append(text)
+                    _LOGGER.debug(
+                        "llm_response kind=chunk index=%d chars=%d",
+                        len(chunks) - 1,
+                        len(text),
+                    )
+                    yield LLMChunk(index=len(chunks) - 1, text=text)
+                if cancellation is None or not cancellation.cancelled:
+                    if len(chunks) == 0:
+                        raise ProviderResponseError(stage="llm", reason="missing_final")
+                    final = "".join(chunks)
+                    _LOGGER.debug(
+                        "llm_response kind=final chars=%d chunks=%d",
+                        len(final),
+                        len(chunks),
+                    )
+                    yield LLMFinal(text=final, used_fallback=False)
+            finally:
+                stream_release()
+        except (
+            APIConnectionError,
+            APITimeoutError,
+            APIStatusError,
+            APIError,
+            httpx.HTTPError,
+            json.JSONDecodeError,
+        ) as error:
+            if cancellation is not None and cancellation.cancelled:
+                return
+            raise _provider_error(error) from error
+        finally:
+            if stream is not None:
+                stream.close()
+            release()
+            client.close()
 
-            yield LLMChunk(index=len(chunks) - 1, text=text)
+    def _client(self, request: LLMRequest) -> OpenAI:
+        timeout = self._request_timeout(request)
+        verify: bool | ssl.SSLContext = (
+            True
+            if self.ca_path is None
+            else ssl.create_default_context(cafile=self.ca_path)
+        )
+        return OpenAI(
+            api_key=self.api_key,
+            base_url=f"{self.endpoint.rstrip('/')}/",
+            timeout=timeout,
+            max_retries=0,
+            http_client=httpx.Client(verify=verify, timeout=timeout, trust_env=False),
+        )
 
-        if cancellation is None or not cancellation.cancelled:
-            if not done or len(chunks) == 0:
-                raise ProviderResponseError(stage="llm", reason="missing_final")
+    def _request_timeout(self, request: LLMRequest) -> httpx.Timeout:
+        total = min(
+            request.timeout_seconds, self.timeout_seconds, self.deadlines.total_seconds
+        )
+        return httpx.Timeout(
+            timeout=total,
+            connect=self.deadlines.connect_seconds,
+            read=self.deadlines.read_seconds,
+            write=total,
+        )
 
-            final = "".join(chunks)
-            _LOGGER.debug(
-                "llm_response kind=final chars=%d chunks=%d", len(final), len(chunks)
-            )
-            yield LLMFinal(text=final, used_fallback=False)
+
+def _messages(request: LLMRequest) -> list[ChatCompletionMessageParam]:
+    return cast(
+        "list[ChatCompletionMessageParam]",
+        [
+            {"role": "system", "content": request.prompt.system},
+            {"role": "user", "content": request.prompt.user},
+        ],
+    )
 
 
-def _sse_delta(data: str) -> str:
-    try:
-        payload = parse_json_value(data)
+def _bind_cancellation(
+    cancellation: CancellationToken | None, callback: Callable[[], None]
+) -> Callable[[], None]:
+    if cancellation is None:
+        return lambda: None
+    return cancellation.bind(callback)
 
-    except JsonBoundaryError as error:
-        raise ProviderResponseError(stage="llm", reason="json") from error
 
-    if not isinstance(payload, dict):
-        raise ProviderResponseError(stage="llm", reason="event")
-
-    choices = payload.get("choices")
-
-    if not isinstance(choices, list) or len(choices) != 1:
-        raise ProviderResponseError(stage="llm", reason="event")
-
-    choice = choices[0]
-
-    if not isinstance(choice, dict):
-        raise ProviderResponseError(stage="llm", reason="event")
-
-    delta = choice.get("delta")
-
-    if not isinstance(delta, dict):
-        raise ProviderResponseError(stage="llm", reason="event")
-
-    content = delta.get("content")
-
-    if not isinstance(content, str) or content == "":
-        raise ProviderResponseError(stage="llm", reason="event")
-
-    return content
+def _provider_error(
+    error: APIError | httpx.HTTPError | json.JSONDecodeError,
+) -> ProviderResponseError:
+    if isinstance(error, APIStatusError):
+        return ProviderResponseError(stage="llm", reason=f"status_{error.status_code}")
+    if isinstance(error, APITimeoutError):
+        return ProviderResponseError(stage="llm", reason="read")
+    if isinstance(error, httpx.TimeoutException):
+        return ProviderResponseError(stage="llm", reason="read")
+    if isinstance(error, APIConnectionError):
+        return ProviderResponseError(stage="llm", reason="connect")
+    return ProviderResponseError(stage="llm", reason="response")

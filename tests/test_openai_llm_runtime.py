@@ -113,22 +113,17 @@ def test_runtime_adapter_posts_openai_chat_completion_and_yields_final() -> None
 
     # Then: it sends the documented request and returns the provider final answer.
 
-    assert server.requests == [
-        _CapturedRequest(
-            path="/v1/chat/completions",
-            authorization="Bearer local-secret",
-            body=json.dumps(
-                {
-                    "model": "onsite-model",
-                    "messages": [
-                        {"role": "system", "content": "system context"},
-                        {"role": "user", "content": "audience question"},
-                    ],
-                    "stream": False,
-                    "temperature": 0.25,
-                }
-            ).encode(),
-        )
-    ]
+    assert len(server.requests) == 1
+    captured = server.requests[0]
+    assert captured.path == "/v1/chat/completions"
+    assert captured.authorization == "Bearer local-secret"
+    assert json.loads(captured.body) == {
+        "model": "onsite-model",
+        "messages": [
+            {"role": "system", "content": "system context"},
+            {"role": "user", "content": "audience question"},
+        ],
+        "temperature": 0.25,
+    }
 
     assert events == (LLMFinal(text="onsite answer", used_fallback=False),)

@@ -1,18 +1,16 @@
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 from dataclasses import dataclass
-from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import override
-from urllib.parse import urlparse
 
 import pytest
+from openai import APIError, OpenAI
 
-from orchestrator.llm import LLMPrompt, LLMRequest, OpenAICompatibleAdapter
+from orchestrator.llm import LLMPrompt, LLMRequest
 
 LLM_ENDPOINT_ENV = "BITNP_REAL_LLM_ENDPOINT"
 
@@ -49,15 +47,9 @@ def test_openai_compatible_endpoint_smoke_when_explicitly_enabled() -> None:
             timeout_seconds=1.0,
         )
 
-        payload = OpenAICompatibleAdapter(model="smoke-model").build_payload(request)
-
-        body = json.dumps(
-            {"model": payload["model"], "messages": payload["messages"]},
-        ).encode()
-
         # When: the smoke sends a minimal chat-completions request.
 
-        response_text = _post_chat_completion(endpoint, body)
+        response_text = _post_chat_completion(endpoint, request)
 
     # Then: a provider-shaped response is received without default credentials.
 
@@ -78,7 +70,9 @@ def test_openai_compatible_malformed_endpoint_reports_readiness_error() -> None:
         LLMReadinessError,
         match="OpenAI-compatible LLM readiness failed",
     ):
-        _ = _post_chat_completion("http://127.0.0.1:1", b'{"model":"smoke"}')
+        _ = _post_chat_completion(
+            "http://127.0.0.1:1", LLMRequest(LLMPrompt("smoke", "ping"))
+        )
 
 
 def test_provider_smoke_requires_explicit_opt_in_without_credentials(
@@ -144,7 +138,7 @@ class _FakeLLMServer:
 
         self._thread.start()
 
-        return f"http://127.0.0.1:{self._server.server_port}/v1/chat/completions"
+        return f"http://127.0.0.1:{self._server.server_port}/v1"
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
 
@@ -161,7 +155,7 @@ class _LLMHandler(BaseHTTPRequestHandler):
 
         _ = self.rfile.read(int(self.headers.get("content-length", "0")))
 
-        body = json.dumps({"choices": [{"message": {"content": "pong"}}]}).encode()
+        body = b'{"choices":[{"message":{"content":"pong"}}]}'
 
         _ = self.send_response(200)
 
@@ -179,35 +173,20 @@ class _LLMHandler(BaseHTTPRequestHandler):
         return
 
 
-def _post_chat_completion(endpoint: str, body: bytes) -> str:
-
-    parsed = urlparse(endpoint)
-
-    if parsed.hostname is None:
-        raise LLMReadinessError(endpoint=endpoint, reason="missing host")
-
-    path = parsed.path or "/"
-
-    headers = {"content-type": "application/json"}
-
-    api_key = os.environ.get(LLM_API_KEY_ENV)
-
-    if api_key is not None and api_key.strip() != "":
-        headers["authorization"] = f"Bearer {api_key.strip()}"
-
-    connection = HTTPConnection(parsed.hostname, parsed.port or 80, timeout=1.0)
-
+def _post_chat_completion(endpoint: str, request: LLMRequest) -> str:
+    api_key = os.environ.get(LLM_API_KEY_ENV, "not-needed-for-local-smoke")
+    client = OpenAI(api_key=api_key, base_url=f"{endpoint.rstrip('/')}/", max_retries=0)
     try:
-        connection.request("POST", path, body=body, headers=headers)
-
-        response = connection.getresponse()
-
-        raw_body: bytes = response.read()
-
-    except OSError as error:
+        response = client.chat.completions.create(
+            model="smoke-model",
+            messages=[
+                {"role": "system", "content": request.prompt.system},
+                {"role": "user", "content": request.prompt.user},
+            ],
+            timeout=request.timeout_seconds,
+        )
+    except APIError as error:
         raise LLMReadinessError(endpoint=endpoint, reason=str(error)) from error
-
     finally:
-        connection.close()
-
-    return raw_body.decode()
+        client.close()
+    return response.model_dump_json()

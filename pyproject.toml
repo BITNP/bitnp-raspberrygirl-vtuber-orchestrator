@@ -5,6 +5,7 @@ description = "Central Orchestrator shell for the distributed AI VTuber system."
 requires-python = ">=3.12"
 dependencies = [
     "jsonschema==4.26.0",
+    "openai>=1.0,<2",
     "websockets==16.1.1",
 ]
 
