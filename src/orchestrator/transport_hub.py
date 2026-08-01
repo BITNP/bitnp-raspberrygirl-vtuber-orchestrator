@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from time import monotonic
-from typing import TYPE_CHECKING, Protocol, final, override
+from typing import TYPE_CHECKING, Protocol, cast, final, override
 
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
@@ -163,7 +163,12 @@ class RtpHub:
 
         if onsite_bridge is not None:
             onsite_bridge.set_output_callback(self.deliver_generated_rtp)
-            onsite_bridge.set_replacement_callback(self.begin_onsite_replacement)
+            replacement_callback = cast(
+                "Callable[[Callable[[StreamKey, SegmentId], Awaitable[CancellationEpoch | None]]], None] | None",  # noqa: E501
+                getattr(onsite_bridge, "set_replacement_callback", None),
+            )
+            if replacement_callback is not None:
+                replacement_callback(self.begin_onsite_replacement)
 
     def set_output_finished_callback(
         self, callback: Callable[[StreamKey, CancellationEpoch], Awaitable[None]]

@@ -319,9 +319,13 @@ async def _scheduler_barge_in_proof() -> None:
         stream, replacement.cancellation_epoch, replacement_packet
     )
 
-    # Then: old and pre-ack replacement RTP are fenced until Sound confirms this flush.
+    # Then: old RTP remains continuous while the prepared replacement is fenced
+    # until Sound confirms this exact flush.
 
-    assert transport.sent == [(old_packet, (SOUND_PEER[0], 5006))]
+    assert transport.sent == [
+        (old_packet, (SOUND_PEER[0], 5006)),
+        (old_packet, (SOUND_PEER[0], 5006)),
+    ]
 
     acknowledgement = FlushAcknowledgement.from_flush(flush)
 
@@ -343,6 +347,7 @@ async def _scheduler_barge_in_proof() -> None:
     )
 
     assert transport.sent == [
+        (old_packet, (SOUND_PEER[0], 5006)),
         (old_packet, (SOUND_PEER[0], 5006)),
         (replacement_packet, (SOUND_PEER[0], 5006)),
     ]
@@ -408,6 +413,7 @@ async def _stale_epoch_gate_proof() -> None:
 
     # Then: stale audio remains gated and cannot resume after epoch 42.
     assert transport.sent == [
+        (stale_packet, (SOUND_PEER[0], 5006)),
         (stale_packet, (SOUND_PEER[0], 5006)),
         (active_packet, (SOUND_PEER[0], 5006)),
     ]
