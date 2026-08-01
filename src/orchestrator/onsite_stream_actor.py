@@ -24,7 +24,7 @@ from orchestrator.streaming_pipeline_actors import (
 from orchestrator.tts_rtp import Pcm16leChunk, TtsPcmRtpPacketizer
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterator
 
     from orchestrator.pipeline_contracts import ASRAudienceEvent, TurnResult
     from orchestrator.streaming_endpoint import EndpointedUtterance
@@ -55,6 +55,12 @@ class OnsiteStages(Protocol):
         self, turn: TurnResult, cancellation: CancellationToken
     ) -> tuple[Pcm16leChunk, ...] | None: ...
 
+    def stream_synthesize(
+        self, turn: TurnResult, cancellation: CancellationToken
+    ) -> Iterator[Pcm16leChunk] | None: ...
+
+    def complete_stream(self, turn: TurnResult, pcm_bytes: int) -> None: ...
+
     def complete(self, turn: TurnResult, chunks: tuple[Pcm16leChunk, ...]) -> None: ...
 
     async def output(
@@ -67,6 +73,15 @@ class OnsiteStages(Protocol):
 
 
 _RTP_FRAME_DURATION_SECONDS = 0.020
+
+_PCM_FRAME_BYTES = 640
+
+
+def _next_chunk(stream: Iterator[Pcm16leChunk]) -> Pcm16leChunk | None:
+    try:
+        return next(stream)
+    except StopIteration:
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,11 +117,15 @@ class _ChunkItem:
 
 @dataclass(frozen=True, slots=True)
 class _SynthesizedAnswer:
-    chunks: tuple[Pcm16leChunk, ...]
+    chunks: tuple[Pcm16leChunk, ...] | None
 
     answer_text: str
 
     segment_id: SegmentId
+
+    turn: TurnResult
+
+    stream: Iterator[Pcm16leChunk] | None = None
 
 
 @dataclass(slots=True)
@@ -382,6 +401,10 @@ class OnsiteStreamActor:
             if self._closed or cancellation.cancelled or chunks is None:
                 continue
 
+            if chunks.stream is not None:
+                await self._consume_stream(item, chunks, cancellation)
+                continue
+
             output_epoch = item.epoch
             if item.interrupts:
                 replacement_epoch = await self._prepare_replacement(chunks.segment_id)
@@ -394,7 +417,10 @@ class OnsiteStreamActor:
             # can never safely represent a later turn.
             packetizer = TtsPcmRtpPacketizer(self.stream, output_epoch)
 
-            for chunk in chunks.chunks:
+            resolved_chunks = chunks.chunks
+            if resolved_chunks is None:
+                continue
+            for chunk in resolved_chunks:
                 self._append_chunk(
                     _ChunkItem(
                         output_epoch,
@@ -432,6 +458,21 @@ class OnsiteStreamActor:
         if turn is None or turn.answer_text.strip() == "":
             return None
 
+        streamer = cast(
+            "Callable[[TurnResult, CancellationToken], Iterator[Pcm16leChunk] | None] | None",  # noqa: E501
+            getattr(self.stages, "stream_synthesize", None),
+        )
+        if streamer is not None:
+            stream = streamer(turn, cancellation)
+            if stream is not None:
+                return _SynthesizedAnswer(
+                    None,
+                    turn.answer_text,
+                    SegmentId(str(turn.segment_id)),
+                    turn,
+                    stream,
+                )
+
         tts_started_at = time.perf_counter()
 
         chunks = self.stages.synthesize(turn, cancellation)
@@ -446,8 +487,101 @@ class OnsiteStreamActor:
         self.stages.complete(turn, chunks)
 
         return _SynthesizedAnswer(
-            chunks, turn.answer_text, SegmentId(str(turn.segment_id))
+            chunks, turn.answer_text, SegmentId(str(turn.segment_id)), turn
         )
+
+    async def _consume_stream(  # noqa: C901, PLR0912
+        self,
+        item: _AnswerItem,
+        answer: _SynthesizedAnswer,
+        cancellation: CancellationToken,
+    ) -> None:
+        stream = answer.stream
+        if stream is None:
+            return
+        buffered: list[Pcm16leChunk] = []
+        buffered_bytes = 0
+        output_epoch = item.epoch
+        packetizer: TtsPcmRtpPacketizer | None = None
+        total_bytes = 0
+        try:
+            while not cancellation.cancelled:
+                chunk = await asyncio.to_thread(_next_chunk, stream)
+                if chunk is None:
+                    break
+                total_bytes += len(chunk.data)
+                if packetizer is None:
+                    buffered.append(chunk)
+                    buffered_bytes += len(chunk.data)
+                    if buffered_bytes < _PCM_FRAME_BYTES:
+                        continue
+                    if item.interrupts:
+                        replacement_epoch = await self._prepare_replacement(
+                            answer.segment_id
+                        )
+                        if replacement_epoch is None:
+                            return
+                        output_epoch = replacement_epoch
+                    packetizer = TtsPcmRtpPacketizer(self.stream, output_epoch)
+                    for buffered_chunk in buffered:
+                        self._append_chunk(
+                            _ChunkItem(
+                                output_epoch,
+                                buffered_chunk,
+                                item.correlation,
+                                packetizer,
+                                answer.answer_text[:240],
+                            )
+                        )
+                    buffered.clear()
+                    continue
+                self._append_chunk(
+                    _ChunkItem(
+                        output_epoch,
+                        chunk,
+                        item.correlation,
+                        packetizer,
+                        answer.answer_text[:240],
+                    )
+                )
+        except (OSError, ValueError):
+            # A partial streaming response remains a valid audible prefix; end
+            # it cleanly rather than abruptly flushing Sound.
+            pass
+        if cancellation.cancelled:
+            return
+        if packetizer is None:
+            if item.interrupts:
+                replacement_epoch = await self._prepare_replacement(answer.segment_id)
+                if replacement_epoch is None:
+                    return
+                output_epoch = replacement_epoch
+            packetizer = TtsPcmRtpPacketizer(self.stream, output_epoch)
+            for buffered_chunk in buffered:
+                self._append_chunk(
+                    _ChunkItem(
+                        output_epoch,
+                        buffered_chunk,
+                        item.correlation,
+                        packetizer,
+                        answer.answer_text[:240],
+                    )
+                )
+        self._append_chunk(
+            _ChunkItem(
+                output_epoch,
+                None,
+                item.correlation,
+                packetizer,
+                answer.answer_text[:240],
+            )
+        )
+        completer = cast(
+            "Callable[[TurnResult, int], None] | None",
+            getattr(self.stages, "complete_stream", None),
+        )
+        if completer is not None:
+            completer(answer.turn, total_bytes)
 
     async def _prepare_replacement(
         self, segment_id: SegmentId

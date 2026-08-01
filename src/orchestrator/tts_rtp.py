@@ -14,6 +14,8 @@ from typing import (
 from zlib import crc32
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from orchestrator.provider_streaming import ProviderCancellationHandle
     from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
 
@@ -83,7 +85,7 @@ class StreamingTtsAdapter(Protocol):
         ref_audio: str,
         ref_text: str,
         cancellation: ProviderCancellationHandle | None = None,
-    ) -> tuple[Pcm16leChunk, ...]:
+    ) -> Iterator[Pcm16leChunk]:
         ...
 
 

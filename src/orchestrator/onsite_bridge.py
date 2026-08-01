@@ -67,6 +67,8 @@ from orchestrator.tts_rtp import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from orchestrator.config import OrchestratorConfig
     from orchestrator.observability import OnsiteObservability
 
@@ -576,23 +578,6 @@ class OnsiteExplainerBridge:
             "onsite_tts_request text_chars=%d voice=%s", len(text), self.voice
         )
         try:
-            if getattr(
-                self.tts, "capability", "streaming_sse"
-            ) == "streaming_sse" and isinstance(self.tts, StreamingTtsAdapter):
-                # The legacy bridge contract remains complete-audio until the
-                # stream actor owns incremental TTS chunks.  Materialising at
-                # this boundary prevents a generator from being consumed once
-                # by completion bookkeeping and then again by RTP output.
-                return tuple(
-                    self.tts.stream_pcm16le(
-                        text=text,
-                        voice=self.voice,
-                        ref_audio=self.ref_audio,
-                        ref_text=self.ref_text,
-                        cancellation=cancellation,
-                    )
-                )
-
             response = self.tts.synthesize(
                 text=text,
                 voice=self.voice,
@@ -619,11 +604,39 @@ class OnsiteExplainerBridge:
             )
             return chunks
 
+    def stream_synthesize(
+        self, text: str, cancellation: CancellationToken
+    ) -> Iterator[Pcm16leChunk] | None:
+        if (
+            getattr(self.tts, "capability", "final_only") != "streaming_sse"
+            or not isinstance(self.tts, StreamingTtsAdapter)
+        ):
+            return None
+        return self.tts.stream_pcm16le(
+            text=text,
+            voice=self.voice,
+            ref_audio=self.ref_audio,
+            ref_text=self.ref_text,
+            cancellation=cancellation,
+        )
+
     def complete(
         self,
         pipeline: OrchestratorTurnPipeline,
         turn: TurnResult,
         chunks: tuple[Pcm16leChunk, ...],
+    ) -> None:
+        self.complete_stream(
+            pipeline,
+            turn,
+            sum(len(chunk.data) for chunk in chunks),
+        )
+
+    def complete_stream(
+        self,
+        pipeline: OrchestratorTurnPipeline,
+        turn: TurnResult,
+        pcm_bytes: int,
     ) -> None:
         _ = pipeline.complete_synthesis(
             MockSynthesisResult(
@@ -633,8 +646,8 @@ class OnsiteExplainerBridge:
                     _SAMPLE_RATE,
                     1,
                     "pcm_s16le",
-                    sum(len(chunk.data) for chunk in chunks) // 32,
-                    sum(len(chunk.data) for chunk in chunks),
+                    pcm_bytes // 32,
+                    pcm_bytes,
                 ),
                 expression="smile",
                 action="speak",
@@ -714,8 +727,18 @@ class _BridgeStages(OnsiteStages):
         return self.bridge.synthesize(turn.answer_text, cancellation)
 
     @override
+    def stream_synthesize(
+        self, turn: TurnResult, cancellation: CancellationToken
+    ) -> Iterator[Pcm16leChunk] | None:
+        return self.bridge.stream_synthesize(turn.answer_text, cancellation)
+
+    @override
     def complete(self, turn: TurnResult, chunks: tuple[Pcm16leChunk, ...]) -> None:
         self.bridge.complete(self.pipeline, turn, chunks)
+
+    @override
+    def complete_stream(self, turn: TurnResult, pcm_bytes: int) -> None:
+        self.bridge.complete_stream(self.pipeline, turn, pcm_bytes)
 
     @override
     async def output(
@@ -796,6 +819,7 @@ def build_onsite_bridge(
             config.tts_endpoint,
             config.tts_model,
             config.tts_api_key,
+            capability=config.tts_mode,
             ca_path=config.tls_ca_path,
         ),
         pipeline_factory=pipeline_factory,
