@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import ssl
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -43,10 +44,6 @@ class _TtsConnection:
 
     def close(self) -> None:
         return
-
-
-def _empty_asr_response(*_args: object, **_kwargs: object) -> bytes:
-    return b'{"text":"   "}'
 
 
 def test_default_mock_media_providers_need_no_credentials_or_network() -> None:
@@ -110,10 +107,24 @@ def test_openai_compatible_asr_treats_blank_final_as_no_transcription(
         endpoint="http://127.0.0.1:8000/v1",
         model="local-asr",
     )
+
+    def create_blank_transcription(**_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(text="   ")
+
+    client = SimpleNamespace(
+        audio=SimpleNamespace(
+            transcriptions=SimpleNamespace(create=create_blank_transcription)
+        ),
+        close=lambda: None,
+    )
+
+    def build_client(_adapter: OpenAICompatibleASRAdapter) -> SimpleNamespace:
+        return client
+
     monkeypatch.setattr(
-        media_adapters,
-        "post_bytes",
-        _empty_asr_response,
+        OpenAICompatibleASRAdapter,
+        "_client",
+        build_client,
     )
 
     # When: Orchestrator transcribes the endpointed audio.

@@ -3,14 +3,27 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import ssl
 from dataclasses import dataclass, field
 from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, override
 from urllib.parse import unquote, urlsplit
 
+import httpx
+from openai import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    OpenAI,
+    Stream,
+)
+
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
+
+    from openai.types.audio import TranscriptionStreamEvent
 
 
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
@@ -21,7 +34,6 @@ from orchestrator.provider_streaming import (
     ProviderDeadlines,
     ProviderRequest,
     ProviderResponseError,
-    post_bytes,
     post_sse,
 )
 from orchestrator.tls import build_tls_context
@@ -149,12 +161,6 @@ class OpenAICompatibleASRAdapter:
         *,
         cancellation: ProviderCancellationHandle | None,
     ) -> ASRAudienceEvent | None:
-        boundary = "orchestrator-asr-boundary"
-
-        body = _multipart_transcription_body(
-            boundary, self.model, request.filename, request.audio
-        )
-
         _LOGGER.debug(
             "asr_request endpoint=%s model=%s segment=%s audio_bytes=%d filename=%s",
             self.endpoint,
@@ -164,34 +170,31 @@ class OpenAICompatibleASRAdapter:
             request.filename,
         )
 
-        response = post_bytes(
-            ProviderRequest(
-                f"{self.endpoint.rstrip('/')}/audio/transcriptions",
-                body,
-                _headers(self.api_key, f"multipart/form-data; boundary={boundary}"),
-                "asr",
-                self.ca_path,
-            ),
-            deadlines=self.deadlines,
-            cancellation=cancellation,
-        )
-
-        if cancellation is not None and cancellation.cancelled:
-            return None
-
+        client = self._client()
+        release = _bind_cancellation(cancellation, client.close)
         try:
-            payload = parse_json_value(response.decode())
-
-        except JsonBoundaryError as error:
-            raise MediaAdapterConfigError(field_name=error.field_name) from error
-
-        if not isinstance(payload, dict):
-            raise MediaAdapterConfigError(field_name="response")
-
-        text = payload.get("text")
-
-        if not isinstance(text, str):
-            raise MediaAdapterConfigError(field_name="response.text")
+            response = client.audio.transcriptions.create(
+                model=self.model,
+                file=(request.filename, request.audio, "application/octet-stream"),
+                timeout=self._timeout(),
+            )
+            if cancellation is not None and cancellation.cancelled:
+                return None
+            text = response.text
+        except (
+            APIConnectionError,
+            APITimeoutError,
+            APIStatusError,
+            APIError,
+            httpx.HTTPError,
+            json.JSONDecodeError,
+        ) as error:
+            if cancellation is not None and cancellation.cancelled:
+                return None
+            raise _asr_provider_error(error) from error
+        finally:
+            release()
+            client.close()
 
         event = self.normalize_final(
             response={"text": text},
@@ -232,57 +235,97 @@ class OpenAICompatibleASRAdapter:
                     cancellation=cancellation,
                 )
 
-    def _stream_openai(
+    def _stream_openai(  # noqa: C901, PLR0912
         self,
         *,
         request: ASRStreamRequest,
         cancellation: ProviderCancellationHandle | None,
     ) -> Iterator[ASRStreamEvent]:
-        boundary = "orchestrator-asr-boundary"
+        client = self._client()
+        release = _bind_cancellation(cancellation, client.close)
+        stream: Stream[TranscriptionStreamEvent] | None = None
+        try:
+            stream = client.audio.transcriptions.create(
+                model=self.model,
+                file=(request.filename, request.audio, "application/octet-stream"),
+                stream=True,
+                timeout=self._timeout(),
+            )
+            stream_release = _bind_cancellation(cancellation, stream.close)
+            try:
+                final_emitted = False
+                for event in stream:
+                    if cancellation is not None and cancellation.cancelled:
+                        return
+                    match event.type:
+                        case "transcript.text.delta":
+                            text = event.delta.strip()
+                            if text != "":
+                                yield ASRPartialEvent(
+                                    text,
+                                    request.received_at_ms,
+                                    request.segment_id,
+                                    request.seq,
+                                )
+                        case "transcript.text.done":
+                            if final_emitted:
+                                raise ProviderResponseError(
+                                    stage="asr", reason="duplicate_final"
+                                )
+                            final_emitted = True
+                            text = event.text.strip()
+                            if text != "":
+                                yield ASRAudienceEvent(
+                                    text,
+                                    request.received_at_ms,
+                                    request.segment_id,
+                                    request.seq,
+                                )
+                if (
+                    cancellation is None or not cancellation.cancelled
+                ) and not final_emitted:
+                    raise ProviderResponseError(stage="asr", reason="missing_final")
+            finally:
+                stream_release()
+        except (
+            APIConnectionError,
+            APITimeoutError,
+            APIStatusError,
+            APIError,
+            httpx.HTTPError,
+            json.JSONDecodeError,
+        ) as error:
+            if cancellation is not None and cancellation.cancelled:
+                return
+            raise _asr_provider_error(error) from error
+        finally:
+            if stream is not None:
+                stream.close()
+            release()
+            client.close()
 
-        body = _multipart_transcription_body(
-            boundary, self.model, request.filename, request.audio
+    def _client(self) -> OpenAI:
+        verify: bool | ssl.SSLContext = (
+            True
+            if self.ca_path is None
+            else ssl.create_default_context(cafile=self.ca_path)
+        )
+        timeout = self._timeout()
+        return OpenAI(
+            api_key=self.api_key or "not-needed-for-openai-compatible-asr",
+            base_url=f"{self.endpoint.rstrip('/')}/",
+            timeout=timeout,
+            max_retries=0,
+            http_client=httpx.Client(verify=verify, timeout=timeout, trust_env=False),
         )
 
-        final_emitted = False
-
-        for data in post_sse(
-            ProviderRequest(
-                f"{self.endpoint.rstrip('/')}/audio/transcriptions",
-                body,
-                _headers(self.api_key, f"multipart/form-data; boundary={boundary}"),
-                "asr",
-                self.ca_path,
-            ),
-            deadlines=self.deadlines,
-            cancellation=cancellation,
-        ):
-            if data == "[DONE]":
-                break
-
-            event = _normalize_asr_sse(
-                data=data,
-                received_at_ms=request.received_at_ms,
-                segment_id=request.segment_id,
-                seq=request.seq,
-            )
-
-            match event:
-                case ASRPartialEvent():
-                    yield event
-
-                case ASRAudienceEvent():
-                    if final_emitted:
-                        raise ProviderResponseError(
-                            stage="asr", reason="duplicate_final"
-                        )
-
-                    final_emitted = True
-
-                    yield event
-
-        if (cancellation is None or not cancellation.cancelled) and not final_emitted:
-            raise ProviderResponseError(stage="asr", reason="missing_final")
+    def _timeout(self) -> httpx.Timeout:
+        return httpx.Timeout(
+            timeout=self.deadlines.total_seconds,
+            connect=self.deadlines.connect_seconds,
+            read=self.deadlines.read_seconds,
+            write=self.deadlines.total_seconds,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,6 +465,27 @@ def _headers(api_key: str | None, content_type: str) -> dict[str, str]:
     return headers
 
 
+def _bind_cancellation(
+    cancellation: ProviderCancellationHandle | None,
+    callback: Callable[[], None],
+) -> Callable[[], None]:
+    if cancellation is None:
+        return lambda: None
+    return cancellation.bind(callback)
+
+
+def _asr_provider_error(
+    error: APIError | httpx.HTTPError | json.JSONDecodeError,
+) -> ProviderResponseError:
+    if isinstance(error, APIStatusError):
+        return ProviderResponseError(stage="asr", reason=f"status_{error.status_code}")
+    if isinstance(error, (APITimeoutError, httpx.TimeoutException)):
+        return ProviderResponseError(stage="asr", reason="read")
+    if isinstance(error, APIConnectionError):
+        return ProviderResponseError(stage="asr", reason="connect")
+    return ProviderResponseError(stage="asr", reason="response")
+
+
 def _portable_reference_audio(ref_audio: str) -> str:
     stripped = ref_audio.strip()
 
@@ -450,35 +514,6 @@ def _audio_data_url(path: Path) -> str:
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
 
     return f"data:audio/wav;base64,{encoded}"
-
-
-def _normalize_asr_sse(
-    *, data: str, received_at_ms: int, segment_id: str, seq: int
-) -> ASRStreamEvent:
-    try:
-        payload = parse_json_value(data)
-
-    except JsonBoundaryError as error:
-        raise ProviderResponseError(stage="asr", reason="json") from error
-
-    if not isinstance(payload, dict):
-        raise ProviderResponseError(stage="asr", reason="event")
-
-    text = payload.get("text")
-
-    is_final = payload.get("is_final")
-
-    if (
-        not isinstance(text, str)
-        or text.strip() == ""
-        or not isinstance(is_final, bool)
-    ):
-        raise ProviderResponseError(stage="asr", reason="event")
-
-    if is_final:
-        return ASRAudienceEvent(text.strip(), received_at_ms, segment_id, seq)
-
-    return ASRPartialEvent(text.strip(), received_at_ms, segment_id, seq)
 
 
 def _normalize_tts_sse(data: str) -> bytes | None:
@@ -613,21 +648,3 @@ def _post(  # noqa: PLR0913
             release()
 
         connection.close()
-
-
-def _multipart_transcription_body(
-    boundary: str,
-    model: str,
-    filename: str,
-    audio: bytes,
-) -> bytes:
-    prefix = (
-        f"--{boundary}\r\n"
-        'Content-Disposition: form-data; name="model"\r\n\r\n'
-        f"{model}\r\n"
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        "Content-Type: application/octet-stream\r\n\r\n"
-    ).encode()
-
-    return prefix + audio + f"\r\n--{boundary}--\r\n".encode()

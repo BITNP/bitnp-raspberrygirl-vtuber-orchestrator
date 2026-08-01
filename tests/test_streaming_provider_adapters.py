@@ -1,10 +1,10 @@
 
 from __future__ import annotations
 
+import json
 import ssl
 import threading
 from dataclasses import dataclass, field
-from http.client import ResponseNotReady
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, ClassVar, Literal, final, override
 
@@ -39,6 +39,10 @@ if TYPE_CHECKING:
 
 
 _StreamMode = Literal["asr", "llm", "malformed", "error", "block", "final_block"]
+
+
+def _sse_data(payload: dict[str, str]) -> str:
+    return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
 @dataclass(slots=True)
@@ -99,8 +103,10 @@ class _StreamingHandler(BaseHTTPRequestHandler):
             case "asr":
                 self._sse(
                     (
-                        'data: {"text":"hello","is_final":false}\n\n',
-                        'data: {"text":"hello world","is_final":true}\n\n',
+                        _sse_data({"type": "transcript.text.delta", "delta": "hello"}),
+                        _sse_data(
+                            {"type": "transcript.text.done", "text": "hello world"}
+                        ),
                         "data: [DONE]\n\n",
                     )
                 )
@@ -316,70 +322,6 @@ def test_provider_https_connection_omits_context_without_configured_ca_bundle(
     assert arguments == [{"timeout": 1.0}]
 
 
-@final
-class _RaceSocket:
-
-    def settimeout(self, _seconds: float) -> None:
-
-        return
-
-
-@final
-class _ResponseCloseRace:
-
-    status: int = 200
-
-    def __init__(self, read_error: Exception | None = None) -> None:
-
-        self.entered: threading.Event = threading.Event()
-
-        self.closed: bool = False
-
-        self._closed: threading.Event = threading.Event()
-
-        self._read_error = AttributeError() if read_error is None else read_error
-
-    def read(self) -> bytes:
-
-        self.entered.set()
-
-        _ = self._closed.wait()
-
-        raise self._read_error
-
-    def close(self) -> None:
-
-        self.closed = True
-
-        self._closed.set()
-
-
-@final
-class _RaceConnection:
-
-    def __init__(self, response: _ResponseCloseRace) -> None:
-
-        self.sock: _RaceSocket = _RaceSocket()
-
-        self.closed: bool = False
-
-        self._response: _ResponseCloseRace = response
-
-    def request(
-        self, _method: str, _path: str, *, body: bytes, headers: dict[str, str]
-    ) -> None:
-
-        _ = (body, headers)
-
-    def getresponse(self) -> _ResponseCloseRace:
-
-        return self._response
-
-    def close(self) -> None:
-
-        self.closed = True
-
-
 def _deadlines(*, read_seconds: float = 1.0) -> ProviderDeadlines:
 
     return ProviderDeadlines(
@@ -503,126 +445,6 @@ def test_final_only_asr_cancellation_closes_in_flight_response_without_final() -
     # Then: cancellation owns the request resource and prevents a stale final event.
 
     assert worker.is_alive() is False
-
-    assert result == []
-
-    assert failure == []
-
-
-def test_final_only_asr_cancellation_absorbs_response_close_attribute_race(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Given: a final-only response whose concurrent close corrupts its read buffer.
-
-
-    response = _ResponseCloseRace()
-
-    connection = _RaceConnection(response)
-
-    cancellation = CancellationToken()
-
-    result: list[ASRAudienceEvent] = []
-
-    failure: list[BaseException] = []
-
-    def connection_factory(
-        _url: str,
-        _deadlines: ProviderDeadlines,
-        _stage: str,
-        _ca_path: Path | None,
-    ) -> _RaceConnection:
-
-        return connection
-
-    monkeypatch.setattr(provider_streaming, "_connection", connection_factory)
-
-    # When: cancellation closes the response while its read raises AttributeError.
-
-    stream = OpenAICompatibleASRAdapter(
-        endpoint="http://provider.example.test/v1",
-        model="local-asr",
-    ).stream(
-        ASRStreamRequest(b"wav", "utterance.wav", 40, "segment-1", 2),
-        cancellation=cancellation,
-    )
-
-    worker = threading.Thread(target=_consume_asr, args=(stream, result, failure))
-
-    worker.start()
-
-    assert response.entered.wait(timeout=1.0)
-
-    assert cancellation.cancel(reason="newer_turn") is True
-
-    worker.join(timeout=1.0)
-
-    # Then: the race is a clean cancellation, with both owned resources closed.
-
-    assert worker.is_alive() is False
-
-    assert response.closed is True
-
-    assert connection.closed is True
-
-    assert result == []
-
-    assert failure == []
-
-
-def test_final_only_asr_cancellation_absorbs_response_not_ready_race(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Given: closing a final-only HTTP response makes its in-flight read idle.
-
-
-    response = _ResponseCloseRace(ResponseNotReady("Idle"))
-
-    connection = _RaceConnection(response)
-
-    cancellation = CancellationToken()
-
-    result: list[ASRAudienceEvent] = []
-
-    failure: list[BaseException] = []
-
-    def connection_factory(
-        _url: str,
-        _deadlines: ProviderDeadlines,
-        _stage: str,
-        _ca_path: Path | None,
-    ) -> _RaceConnection:
-
-        return connection
-
-    monkeypatch.setattr(provider_streaming, "_connection", connection_factory)
-
-    stream = OpenAICompatibleASRAdapter(
-        endpoint="http://provider.example.test/v1",
-        model="local-asr",
-    ).stream(
-        ASRStreamRequest(b"wav", "utterance.wav", 40, "segment-1", 2),
-        cancellation=cancellation,
-    )
-
-    worker = threading.Thread(target=_consume_asr, args=(stream, result, failure))
-
-    # When: cancellation closes the response while read raises ResponseNotReady.
-
-    worker.start()
-
-    assert response.entered.wait(timeout=1.0)
-
-    assert cancellation.cancel(reason="newer_turn") is True
-
-    worker.join(timeout=1.0)
-
-    # Then: cancellation owns the race and no stale final or raw HTTP error escapes.
-
-    assert worker.is_alive() is False
-
-    assert response.closed is True
-
-    assert connection.closed is True
 
     assert result == []
 
