@@ -8,8 +8,19 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import TYPE_CHECKING, Protocol, override
 
+from orchestrator.asr_semantic_gate import (
+    AsrGateDecision,
+    AsrGateRequest,
+    AsrSemanticGate,
+)
 from orchestrator.funasr_adapter import FunASRWebSocketAdapter
-from orchestrator.llm import AdapterConfigError, CancellationToken
+from orchestrator.llm import (
+    AdapterConfigError,
+    CancellationToken,
+    LLMFinal,
+    LLMPrompt,
+    LLMRequest,
+)
 from orchestrator.media_adapters import (
     MediaAdapterConfigError,
     OpenAICompatibleASRAdapter,
@@ -123,6 +134,22 @@ _LOGGER = logging.getLogger(__name__)
 _RTP_DIAGNOSTIC_INTERVAL = 100
 
 
+def _build_asr_gate(llm: OpenAICompatibleLLMRuntimeAdapter) -> AsrSemanticGate:
+    def provider(request: AsrGateRequest) -> str:
+        user = (
+            f"转写: {request.transcript}\n"
+            f"正在播放: {request.is_playing}\n"
+            f"当前回答摘录: {request.active_answer_excerpt}"
+        )
+        for event in llm.stream(LLMRequest(LLMPrompt(request.instruction, user))):
+            if isinstance(event, LLMFinal):
+                return event.text
+        message = "ASR Gate 未返回最终结果"
+        raise TimeoutError(message)
+
+    return AsrSemanticGate(provider)
+
+
 @dataclass(slots=True)
 class OnsiteExplainerBridge:
     asr: AsrAdapter
@@ -136,6 +163,8 @@ class OnsiteExplainerBridge:
     ref_audio: str
 
     ref_text: str
+
+    asr_gate: AsrSemanticGate | None = None
 
     frames_per_utterance: int = 50
 
@@ -494,6 +523,30 @@ class OnsiteExplainerBridge:
                 )
             return turn
 
+    def gate(
+        self,
+        event: ASRAudienceEvent,
+        *,
+        active_answer_excerpt: str,
+        is_playing: bool,
+    ) -> AsrGateDecision:
+        gate = self.asr_gate
+        if gate is None:
+            return AsrGateDecision.DISCARD if is_playing else AsrGateDecision.ACCEPT
+        decision = gate.evaluate(
+            event.text,
+            active_answer_excerpt=active_answer_excerpt,
+            is_playing=is_playing,
+        )
+        _LOGGER.info(
+            "asr_gate segment=%s decision=%s playing=%s transcript_chars=%d",
+            event.segment_id,
+            decision,
+            is_playing,
+            len(event.text),
+        )
+        return decision
+
     def synthesize(
         self, text: str, cancellation: CancellationToken
     ) -> tuple[Pcm16leChunk, ...] | None:
@@ -611,6 +664,20 @@ class _BridgeStages(OnsiteStages):
     ) -> TurnResult | None:
         return self.bridge.answer(self.pipeline, event, cancellation)
 
+    @override
+    def gate(
+        self,
+        event: ASRAudienceEvent,
+        *,
+        active_answer_excerpt: str,
+        is_playing: bool,
+    ) -> AsrGateDecision:
+        return self.bridge.gate(
+            event,
+            active_answer_excerpt=active_answer_excerpt,
+            is_playing=is_playing,
+        )
+
     def authorize_output(self, stream: StreamKey, epoch: CancellationEpoch) -> bool:
         return self.bridge.authorize_output(stream, epoch)
 
@@ -665,19 +732,18 @@ def build_onsite_bridge(
     if voice.strip() == "" or ref_audio.strip() == "" or ref_text.strip() == "":
         raise OnsiteBridgeConfigError(field_name="voice_reference")
 
+    llm = OpenAICompatibleLLMRuntimeAdapter(
+        config.llm_endpoint,
+        config.llm_model,
+        config.llm_api_key,
+        timeout_seconds=120.0,
+        deadlines=ProviderDeadlines(read_seconds=60.0, total_seconds=120.0),
+        ca_path=config.tls_ca_path,
+    )
+
     adapters = PipelineAdapters(
         mode_policy=AdaptiveAgentPolicy(),
-        llm=OpenAICompatibleLLMRuntimeAdapter(
-            config.llm_endpoint,
-            config.llm_model,
-            config.llm_api_key,
-            # Remote reasoning can legitimately take longer than the short
-            # interactive default; a deadline expiry must not masquerade as a
-            # TTS failure after ASR has already accepted the utterance.
-            timeout_seconds=120.0,
-            deadlines=ProviderDeadlines(read_seconds=60.0, total_seconds=120.0),
-            ca_path=config.tls_ca_path,
-        ),
+        llm=llm,
         retrieval=RetrievalFixtureProvider(()),
     )
 
@@ -710,4 +776,5 @@ def build_onsite_bridge(
         voice=voice,
         ref_audio=ref_audio,
         ref_text=ref_text,
+        asr_gate=_build_asr_gate(llm),
     )

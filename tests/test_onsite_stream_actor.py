@@ -6,6 +6,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from orchestrator.asr_semantic_gate import AsrGateDecision
 from orchestrator.ids import SegmentId as PipelineSegmentId
 from orchestrator.ids import TurnId as PipelineTurnId
 from orchestrator.onsite_stream_actor import OnsiteStreamActor
@@ -76,9 +77,53 @@ class _Stages:
         self.outputs.append((stream, epoch, packet))
 
 
+@dataclass(slots=True)
+class _DiscardingGateStages(_Stages):
+
+    gate_calls: list[tuple[str, str, bool]] = field(default_factory=list)
+
+    answer_calls: int = 0
+
+    def gate(
+        self,
+        event: ASRAudienceEvent,
+        *,
+        active_answer_excerpt: str,
+        is_playing: bool,
+    ) -> AsrGateDecision:
+        self.gate_calls.append((event.text, active_answer_excerpt, is_playing))
+        return AsrGateDecision.DISCARD
+
+    def answer(
+        self, event: ASRAudienceEvent, cancellation: CancellationToken
+    ) -> TurnResult:
+        _ = (event, cancellation)
+        self.answer_calls += 1
+        message = "discarded ASR must not reach the LLM lane"
+        raise AssertionError(message)
+
+
 def test_actor_tags_generated_rtp_with_admission_epoch() -> None:
 
     asyncio.run(_epoch_proof())
+
+
+def test_actor_drops_asr_final_when_semantic_gate_rejects_it() -> None:
+    asyncio.run(_semantic_gate_proof())
+
+
+async def _semantic_gate_proof() -> None:
+    stages = _DiscardingGateStages()
+    stream = StreamKey("session", "stream")
+    actor = OnsiteStreamActor(stream, CancellationEpoch(0), stages)
+
+    actor.submit(_endpoint(stream), CancellationEpoch(0))
+
+    await actor.wait_quiescent()
+
+    assert stages.gate_calls == [("question", "", False)]
+    assert stages.answer_calls == 0
+    assert stages.outputs == []
 
 
 async def _epoch_proof() -> None:
