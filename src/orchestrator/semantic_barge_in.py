@@ -128,6 +128,8 @@ class SemanticBargeInGate:
 
         self._replacement: EndpointedTranscript | None = None
 
+        self._interrupted_active: ActiveAnswer | None = None
+
         self._replacement_flush: StreamFlush | None = None
 
         self._epoch = CancellationEpoch(0)
@@ -213,6 +215,34 @@ class SemanticBargeInGate:
     def acknowledge(self, acknowledgement: FlushAcknowledgement) -> None:
         _ = self._flush_admission.acknowledge(acknowledgement)
 
+    def replacement_audio_ready(self, stream: StreamKey) -> bool:
+        """Begin Sound cut-over only after replacement audio has a first frame.
+
+        Interrupt classification cancels obsolete LLM/TTS work immediately,
+        while the currently audible stream continues.  The producer calls this
+        only after it owns a validated replacement RTP frame.
+        """
+        active = self._interrupted_active
+        replacement = self._replacement
+        if active is None or replacement is None or replacement.stream != stream:
+            return False
+        if self._replacement_flush is not None:
+            return False
+        self._flush_sequence += 1
+        flush = StreamFlush(
+            stream=stream,
+            turn_id=active.turn_id,
+            segment_id=active.segment_id,
+            cancellation_epoch=self._epoch,
+            request_id=FlushRequestId(
+                f"{stream.session_id}:{stream.stream_id}:flush:{self._flush_sequence}"
+            ),
+            target_generated_ssrc=active.target_generated_ssrc,
+        )
+        self._replacement_flush = flush
+        self._flush_admission.begin(flush)
+        return True
+
     def pop_queued_utterance(self) -> EndpointedTranscript | None:
         queued = self._queued
 
@@ -236,6 +266,8 @@ class SemanticBargeInGate:
 
         self._replacement_flush = None
 
+        self._interrupted_active = None
+
         return replacement
 
     def _interrupt(self, decision: _Decision) -> None:
@@ -256,24 +288,7 @@ class SemanticBargeInGate:
 
         self._replacement = decision.utterance
 
-        self._flush_sequence += 1
-
-        flush = StreamFlush(
-            stream=active.stream,
-            turn_id=active.turn_id,
-            segment_id=active.segment_id,
-            cancellation_epoch=self._epoch,
-            request_id=FlushRequestId(
-                f"{active.stream.session_id}:{active.stream.stream_id}:flush:{self._flush_sequence}"
-            ),
-            target_generated_ssrc=active.target_generated_ssrc,
-        )
-
-        self._replacement_flush = flush
-
-        self._flush_admission.begin(flush)
-
-        self._record("flush", active)
+        self._interrupted_active = active
 
         self._active = None
 

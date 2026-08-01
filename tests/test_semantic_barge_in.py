@@ -96,6 +96,12 @@ def test_interrupt_cancels_active_turn_and_waits_for_matching_flush_ack() -> Non
 
     assert gate.cancellations[0].targets == ("llm", "tts", "rtp")
 
+    # Recognition only cancels obsolete compute.  Current Sound audio stays
+    # live until the replacement has produced its first valid RTP frame.
+    assert sender.flushes == []
+
+    assert gate.replacement_audio_ready(active.stream) is True
+
     assert len(sender.flushes) == 1
 
     flush = sender.flushes[0]
