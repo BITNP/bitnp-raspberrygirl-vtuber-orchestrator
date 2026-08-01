@@ -8,6 +8,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
+from orchestrator.agent_state import AgentStateReducer, GateOutcome, StateEffect
 from orchestrator.asr_semantic_gate import AsrGateDecision
 from orchestrator.llm import CancellationToken
 from orchestrator.observability import (
@@ -81,6 +82,8 @@ class _AnswerItem:
 
     interrupts: bool = False
 
+    state_epoch: int = 0
+
 
 @dataclass(frozen=True, slots=True)
 class _ChunkItem:
@@ -93,6 +96,8 @@ class _ChunkItem:
     packetizer: TtsPcmRtpPacketizer
 
     answer_excerpt: str
+
+    state_epoch: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +166,8 @@ class OnsiteStreamActor:
     _is_playing: bool = False
 
     _output_epoch: CancellationEpoch | None = None
+
+    _state: AgentStateReducer = field(default_factory=AgentStateReducer)
 
     def __post_init__(self) -> None:
         self._chunk_space.set()
@@ -347,16 +354,24 @@ class OnsiteStreamActor:
                         "drop", correlation, StageDetails(drop_count=1)
                     )
                     continue
+                transition = self._state.gate(
+                    GateOutcome.INTERRUPT
+                    if decision is AsrGateDecision.INTERRUPT
+                    else GateOutcome.ACCEPT
+                )
+                if StateEffect.START_REASONING not in transition.effects:
+                    continue
                 self._append_answer(
                     _AnswerItem(
                         item.epoch,
                         event,
                         correlation,
                         decision is AsrGateDecision.INTERRUPT,
+                        transition.state.epoch,
                     )
                 )
 
-    async def _run_answers(self) -> None:
+    async def _run_answers(self) -> None:  # noqa: C901, PLR0912
         while self._answers:
             item = self._answers.popleft()
 
@@ -381,16 +396,34 @@ class OnsiteStreamActor:
             if self._closed or cancellation.cancelled or chunks is None:
                 continue
 
+            transition = self._state.reasoning_complete(
+                item.state_epoch, has_text=chunks.answer_text.strip() != ""
+            )
+            if StateEffect.START_TTS not in transition.effects:
+                continue
+
             if chunks.stream is not None:
                 await self._consume_stream(item, chunks, cancellation)
                 continue
 
             output_epoch = item.epoch
             if item.interrupts:
+                ready = self._state.audio_ready(item.state_epoch)
+                if StateEffect.FLUSH_SOUND not in ready.effects:
+                    continue
                 replacement_epoch = await self._prepare_replacement(chunks.segment_id)
                 if replacement_epoch is None:
+                    _ = self._state.failed(item.state_epoch, audio_started=False)
+                    continue
+                acknowledged = self._state.flush_acknowledged(item.state_epoch)
+                if StateEffect.EMIT_AUDIO not in acknowledged.effects:
                     continue
                 output_epoch = replacement_epoch
+            elif (
+                StateEffect.EMIT_AUDIO
+                not in self._state.audio_ready(item.state_epoch).effects
+            ):
+                continue
 
             # A packetizer has exactly one lifetime: one synthesized response.
             # Reusing it after finish would retain RTP sequence/timestamp state and
@@ -408,6 +441,7 @@ class OnsiteStreamActor:
                         item.correlation,
                         packetizer,
                         chunks.answer_text[:240],
+                        item.state_epoch,
                     )
                 )
                 if not appended:
@@ -420,6 +454,7 @@ class OnsiteStreamActor:
                     item.correlation,
                     packetizer,
                     chunks.answer_text[:240],
+                    item.state_epoch,
                 )
             )
 
@@ -472,7 +507,7 @@ class OnsiteStreamActor:
             chunks, turn.answer_text, SegmentId(str(turn.segment_id)), turn
         )
 
-    async def _consume_stream(  # noqa: C901, PLR0911, PLR0912
+    async def _consume_stream(  # noqa: C901, PLR0911, PLR0912, PLR0915
         self,
         item: _AnswerItem,
         answer: _SynthesizedAnswer,
@@ -498,12 +533,26 @@ class OnsiteStreamActor:
                     if buffered_bytes < _PCM_FRAME_BYTES:
                         continue
                     if item.interrupts:
+                        ready = self._state.audio_ready(item.state_epoch)
+                        if StateEffect.FLUSH_SOUND not in ready.effects:
+                            return
                         replacement_epoch = await self._prepare_replacement(
                             answer.segment_id
                         )
                         if replacement_epoch is None:
+                            _ = self._state.failed(
+                                item.state_epoch, audio_started=False
+                            )
+                            return
+                        acknowledged = self._state.flush_acknowledged(item.state_epoch)
+                        if StateEffect.EMIT_AUDIO not in acknowledged.effects:
                             return
                         output_epoch = replacement_epoch
+                    elif (
+                        StateEffect.EMIT_AUDIO
+                        not in self._state.audio_ready(item.state_epoch).effects
+                    ):
+                        return
                     packetizer = TtsPcmRtpPacketizer(self.stream, output_epoch)
                     for buffered_chunk in buffered:
                         if not await self._append_chunk(
@@ -513,6 +562,7 @@ class OnsiteStreamActor:
                                 item.correlation,
                                 packetizer,
                                 answer.answer_text[:240],
+                                item.state_epoch,
                             )
                         ):
                             return
@@ -525,6 +575,7 @@ class OnsiteStreamActor:
                         item.correlation,
                         packetizer,
                         answer.answer_text[:240],
+                        item.state_epoch,
                     )
                 ):
                     return
@@ -544,15 +595,30 @@ class OnsiteStreamActor:
             )
             self._chunk_space.set()
             self._record_correlation("tts_failure", item.correlation, None)
+            _ = self._state.failed(
+                item.state_epoch, audio_started=packetizer is not None
+            )
             return
         if cancellation.cancelled:
             return
         if packetizer is None:
             if item.interrupts:
+                ready = self._state.audio_ready(item.state_epoch)
+                if StateEffect.FLUSH_SOUND not in ready.effects:
+                    return
                 replacement_epoch = await self._prepare_replacement(answer.segment_id)
                 if replacement_epoch is None:
+                    _ = self._state.failed(item.state_epoch, audio_started=False)
+                    return
+                acknowledged = self._state.flush_acknowledged(item.state_epoch)
+                if StateEffect.EMIT_AUDIO not in acknowledged.effects:
                     return
                 output_epoch = replacement_epoch
+            elif (
+                StateEffect.EMIT_AUDIO
+                not in self._state.audio_ready(item.state_epoch).effects
+            ):
+                return
             packetizer = TtsPcmRtpPacketizer(self.stream, output_epoch)
             for buffered_chunk in buffered:
                 if not await self._append_chunk(
@@ -562,6 +628,7 @@ class OnsiteStreamActor:
                         item.correlation,
                         packetizer,
                         answer.answer_text[:240],
+                        item.state_epoch,
                     )
                 ):
                     return
@@ -572,6 +639,7 @@ class OnsiteStreamActor:
                 item.correlation,
                 packetizer,
                 answer.answer_text[:240],
+                item.state_epoch,
             )
         ):
             return
@@ -646,6 +714,7 @@ class OnsiteStreamActor:
                 finisher = getattr(self.stages, "finish_output", None)
                 if finisher is not None:
                     await finisher(self.stream, item.epoch)
+                _ = self._state.audio_finished(item.state_epoch)
                 self._active_answer_excerpt = ""
                 self._is_playing = False
                 if self._output_epoch == item.epoch:

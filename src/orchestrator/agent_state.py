@@ -68,9 +68,21 @@ class AgentStateReducer:
         state = self._state
         if outcome is GateOutcome.DISCARD:
             return StateTransition(state)
-        if outcome is GateOutcome.ACCEPT and state.phase is TurnPhase.IDLE:
+        if outcome is GateOutcome.ACCEPT and state.phase in {
+            TurnPhase.IDLE,
+            TurnPhase.FAILED,
+        }:
             return self._set(
                 AgentState(state.epoch, TurnPhase.REASONING),
+                StateEffect.START_REASONING,
+            )
+        if outcome is GateOutcome.ACCEPT and state.phase in {
+            TurnPhase.REASONING,
+            TurnPhase.TTS_PENDING,
+        }:
+            return self._set(
+                AgentState(state.epoch + 1, TurnPhase.REASONING),
+                StateEffect.CANCEL_DELIBERATIVE,
                 StateEffect.START_REASONING,
             )
         if outcome is GateOutcome.INTERRUPT and state.phase is TurnPhase.PLAYING:
