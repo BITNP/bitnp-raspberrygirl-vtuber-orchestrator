@@ -1,5 +1,17 @@
 
-from orchestrator.llm import MockLLMAdapter
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Literal
+
+import pytest
+
+from orchestrator.llm import (
+    CancellationToken,
+    LLMFinal,
+    LLMRequest,
+    LLMStreamEvent,
+    MockLLMAdapter,
+)
 from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
 from orchestrator.pipeline_contracts import (
@@ -10,6 +22,23 @@ from orchestrator.pipeline_contracts import (
     PipelineConfig,
 )
 from orchestrator.retrieval import RetrievalFixtureProvider
+
+
+@dataclass
+class _FailOnceLlm:
+    attempts: int = 0
+
+    capability: Literal["final_only"] = "final_only"
+
+    def stream(
+        self, request: LLMRequest, *, cancellation: CancellationToken | None = None
+    ) -> Iterator[LLMStreamEvent]:
+        _ = (request, cancellation)
+        self.attempts += 1
+        if self.attempts == 1:
+            message = "transient"
+            raise OSError(message)
+        yield LLMFinal("recovered", used_fallback=False)
 
 
 def test_comment_turn_emits_media_stream_and_frontend_cues_after_synthesis() -> None:
@@ -156,3 +185,28 @@ def test_mock_synthesis_emits_rtp_relative_frontend_cues() -> None:
     assert cues.scene.slide_page == 3
 
     assert cues.scene.start_at_ms == 10_000
+
+
+def test_transient_llm_failure_requeues_same_audience_event_for_retry() -> None:
+    llm = _FailOnceLlm()
+    pipeline = OrchestratorTurnPipeline(
+        adapters=PipelineAdapters(
+            mode_policy=AdaptiveAgentPolicy(),
+            llm=llm,
+            retrieval=RetrievalFixtureProvider(refs=()),
+        ),
+        config=PipelineConfig(2, "turn", "seg"),
+    )
+    assert pipeline.accept_audience_input(
+        ASRAudienceEvent("retry me", 1_000, "asr-1", 1)
+    )
+
+    with pytest.raises(OSError, match="transient"):
+        _ = pipeline.process_next_turn()
+
+    retry = pipeline.process_next_turn()
+
+    assert retry is not None
+    assert retry.turn_id == "turn-0001"
+    assert retry.answer_text == "recovered"
+    assert llm.attempts == 2

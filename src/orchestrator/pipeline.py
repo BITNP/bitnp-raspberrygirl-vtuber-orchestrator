@@ -110,7 +110,9 @@ class OrchestratorTurnPipeline:
         if len(self._queue) == 0:
             return None
 
-        audience_input = _to_audience_input(self._queue.popleft())
+        event = self._queue.popleft()
+
+        audience_input = _to_audience_input(event)
 
         candidate = self._mode_policy.select_answer_candidate((audience_input,))
 
@@ -129,34 +131,42 @@ class OrchestratorTurnPipeline:
 
         final: LLMFinal | None = None
 
-        request = build_llm_request(
-            candidate,
-            retrieval=self._retrieval.retrieve(candidate),
-        )
+        try:
+            request = build_llm_request(
+                candidate,
+                retrieval=self._retrieval.retrieve(candidate),
+            )
 
-        for llm_event in self._llm.stream(
-            request,
-            cancellation=token,
-        ):
-            match llm_event:
-                case LLMChunk(text=text):
-                    text_parts.append(text)
+            for llm_event in self._llm.stream(
+                request,
+                cancellation=token,
+            ):
+                match llm_event:
+                    case LLMChunk(text=text):
+                        text_parts.append(text)
 
-                case LLMError() as error:
-                    if error.cancel_pending_media:
-                        self._cancel_commands.append(
-                            _cancel(
-                                _CancelIntent(
-                                    turn_id,
-                                    segment_id,
-                                    "media_stream",
-                                    "llm_timeout",
+                    case LLMError() as error:
+                        if error.cancel_pending_media:
+                            self._cancel_commands.append(
+                                _cancel(
+                                    _CancelIntent(
+                                        turn_id,
+                                        segment_id,
+                                        "media_stream",
+                                        "llm_timeout",
+                                    ),
                                 ),
-                            ),
-                        )
+                            )
 
-                case LLMFinal() as llm_final:
-                    final = llm_final
+                    case LLMFinal() as llm_final:
+                        final = llm_final
+        except OSError:
+            # The bridge retries transient LLM failures once.  Returning the
+            # exact event to the queue makes that retry semantically identical
+            # to the original turn rather than silently turning into no work.
+            self._queue.appendleft(event)
+            self._turn_seq -= 1
+            raise
 
         answer_text = final.text if final is not None else "".join(text_parts)
 
