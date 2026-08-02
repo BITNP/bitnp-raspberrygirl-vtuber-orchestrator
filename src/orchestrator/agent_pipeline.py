@@ -188,6 +188,7 @@ class AgentPlan:
 class PlanAccepted:
     plan: AgentPlan
     effects: tuple[object, ...]
+    observations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,7 +415,10 @@ class AgentPipeline:
             if (observation := self.tools.execute(request, snapshot)) is not None
         )
         raw_final = self.brain.plan(snapshot, observations=observations)
-        return self._reduce_or_repair(snapshot, raw_final, PlanStage.FINAL)
+        final = self._reduce_or_repair(snapshot, raw_final, PlanStage.FINAL)
+        if isinstance(final, PlanAccepted):
+            return PlanAccepted(final.plan, final.effects, observations)
+        return final
 
     def _reduce_or_repair(
         self, snapshot: BrainStateSnapshot, raw: str, stage: PlanStage

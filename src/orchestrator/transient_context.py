@@ -50,6 +50,15 @@ class AcceptedOutput:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolObservation:
+    """A successful, source-labelled tool observation from an accepted turn."""
+
+    provenance: ContextProvenance
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class PartialMaterial:
     provenance: ContextProvenance
 
@@ -73,6 +82,7 @@ class StaleMaterial:
 type ContextMaterial = (
     FinalizedInput
     | AcceptedOutput
+    | ToolObservation
     | PartialMaterial
     | CancelledMaterial
     | StaleMaterial
@@ -84,6 +94,8 @@ class ContextEntryKind(StrEnum):
     INPUT = "input"
 
     OUTPUT = "output"
+
+    OBSERVATION = "observation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +230,12 @@ class TransientContext:
             case AcceptedOutput(provenance=provenance, text=text):
                 self._entries.append(
                     ContextEntry(ContextEntryKind.OUTPUT, provenance, text)
+                )
+                self._generation += 1
+
+            case ToolObservation(provenance=provenance, text=text):
+                self._entries.append(
+                    ContextEntry(ContextEntryKind.OBSERVATION, provenance, text)
                 )
                 self._generation += 1
 

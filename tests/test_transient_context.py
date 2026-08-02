@@ -17,6 +17,7 @@ from orchestrator.transient_context import (
     StaleMaterial,
     StaticContextBudgetPolicy,
     TokenBudget,
+    ToolObservation,
     TransientContext,
 )
 
@@ -77,6 +78,18 @@ def test_context_admits_only_finalized_inputs_and_accepted_outputs() -> None:
     )
 
     assert context.snapshot.generation == 2
+
+
+def test_context_records_only_successful_tool_observations() -> None:
+    context = TransientContext(session_id=SessionId("session-1"))
+
+    _ = context.consider(ToolObservation(_provenance("tool", 1), "本地知识: 产品资料"))
+    _ = context.consider(CancelledMaterial(_provenance("cancel", 2), "失败工具"))
+
+    assert tuple(entry.kind.value for entry in context.snapshot.entries) == (
+        "observation",
+    )
+    assert context.snapshot.generation == 1
 
 
 def test_compaction_is_deterministic_and_preserves_all_source_identities() -> None:

@@ -117,6 +117,7 @@ from orchestrator.transient_context import (
     ModelId,
     StaticContextBudgetPolicy,
     TokenBudget,
+    ToolObservation,
 )
 from orchestrator.transport_control import VoiceEvidence
 
@@ -161,6 +162,17 @@ _BRAIN_CONTEXT_MODEL = ModelId("agent-brain")
 _BRAIN_CONTEXT_POLICY = StaticContextBudgetPolicy(
     model_id=_BRAIN_CONTEXT_MODEL,
     budget=ModelContextBudget(input_tokens=TokenBudget(512)),
+)
+
+_DEFAULT_AGENT_CAPABILITIES = frozenset(
+    {
+        "knowledge.lookup",
+        "task:tts",
+        "task:playback",
+        "task:retrieval",
+        "task:context_compaction",
+        "task:memory_patch",
+    }
 )
 
 
@@ -263,12 +275,14 @@ class SessionRuntime:
             mode_policy=AdaptiveAgentPolicy(),
             clock=clock,
             agent_pipeline=(
-                build_mock_agent_pipeline()
+                build_mock_agent_pipeline(interaction_ingress.data.retrieval)
                 if agent_pipeline is None
                 else agent_pipeline
             ),
             agent_capabilities=(
-                frozenset() if agent_capabilities is None else agent_capabilities
+                _DEFAULT_AGENT_CAPABILITIES
+                if agent_capabilities is None
+                else agent_capabilities
             ),
             agent_effect_dispatcher=agent_effect_dispatcher,
         )
@@ -443,6 +457,21 @@ class SessionRuntime:
         self.interaction_ingress.data.consider_context(
             FinalizedInput(provenance, audience_input.text)
         )
+        for index, observation in enumerate(accepted.observations):
+            self.interaction_ingress.data.consider_context(
+                ToolObservation(
+                    ContextProvenance(
+                        session_id=provenance.session_id,
+                        turn_id=provenance.turn_id,
+                        segment_id=provenance.segment_id,
+                        sequence=ContextSequence(audience_input.sequence),
+                        source_id=ContextSourceId(
+                            f"{audience_input.trace_id}:tool:{index}"
+                        ),
+                    ),
+                    observation,
+                )
+            )
         if accepted.plan.response_text != "":
             self.interaction_ingress.data.consider_context(
                 AcceptedOutput(provenance, accepted.plan.response_text)

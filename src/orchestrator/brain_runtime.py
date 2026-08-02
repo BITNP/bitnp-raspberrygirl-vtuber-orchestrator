@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from typing import Protocol, cast, final
+from typing import TYPE_CHECKING, Protocol, cast, final
 
 from orchestrator.agent_pipeline import (
     AgentPipeline,
@@ -22,6 +22,21 @@ from orchestrator.agent_pipeline import (
 )
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.llm import LLMPrompt, LLMRequest
+from orchestrator.modes import (
+    AnswerCandidate,
+)
+from orchestrator.modes import (
+    AudienceInput as RetrievalAudienceInput,
+)
+from orchestrator.modes import (
+    AudienceSource as RetrievalAudienceSource,
+)
+
+if TYPE_CHECKING:
+    from orchestrator.retrieval import VersionedRetrievalProvider
+
+
+_MAX_TOOL_QUERY_CHARS = 4_000
 
 _GATE_SYSTEM = """你是现场多模态智能体的输入相关性门。只判断，不执行任何动作。
 接受具有明确交流意图的提问、请求、纠正或与当前活动相关的陈述；丢弃空白、ASR 回声、
@@ -162,8 +177,61 @@ class NoopToolExecutor:
         return None
 
 
-def build_mock_agent_pipeline() -> AgentPipeline:
-    return AgentPipeline(MockAgentGate(), MockAgentBrain(), NoopToolExecutor())
+@final
+class ReadonlyKnowledgeToolExecutor:
+    """Turns a reducer-authorized local lookup into untrusted source material."""
+
+    def __init__(self, retrieval: VersionedRetrievalProvider) -> None:
+        self._retrieval = retrieval
+
+    def execute(self, request: ToolRequest, snapshot: BrainStateSnapshot) -> str | None:
+        if request.kind != "knowledge" or request.name != "local":
+            return None
+        query = request.arguments.get("query", snapshot.input.text)
+        if (
+            not isinstance(query, str)
+            or query.strip() == ""
+            or len(query) > _MAX_TOOL_QUERY_CHARS
+        ):
+            return None
+        candidate = AnswerCandidate(
+            RetrievalAudienceInput(
+                source=RetrievalAudienceSource(snapshot.input.source.value),
+                text=query,
+                received_at_ms=snapshot.input.received_at_ms,
+            )
+        )
+        result = self._retrieval.retrieve(candidate)
+        references = tuple(
+            {
+                "corpus_revision": int(reference.corpus_revision),
+                "index_revision": int(reference.index_revision),
+                "path_or_id": reference.ref_id,
+                "title": reference.title,
+                "text": reference.text[:4_000],
+            }
+            for reference in result.refs
+        )
+        return json.dumps(
+            {
+                "source": "local_knowledge",
+                "corpus_revision": int(result.snapshot.corpus_revision),
+                "index_revision": int(result.snapshot.index_revision),
+                "references": references,
+            },
+            ensure_ascii=False,
+        )
+
+
+def build_mock_agent_pipeline(
+    retrieval: VersionedRetrievalProvider | None = None,
+) -> AgentPipeline:
+    tools = (
+        NoopToolExecutor()
+        if retrieval is None
+        else ReadonlyKnowledgeToolExecutor(retrieval)
+    )
+    return AgentPipeline(MockAgentGate(), MockAgentBrain(), tools)
 
 
 def _empty_plan(revision: int) -> str:

@@ -6,9 +6,16 @@ from orchestrator.agent_pipeline import (
     AudienceInput,
     AudienceSource,
     BrainStateSnapshot,
+    ToolRequest,
 )
-from orchestrator.brain_runtime import JsonAgentBrain, JsonAgentGate, MockAgentGate
+from orchestrator.brain_runtime import (
+    JsonAgentBrain,
+    JsonAgentGate,
+    MockAgentGate,
+    ReadonlyKnowledgeToolExecutor,
+)
 from orchestrator.llm import LLMRequest
+from orchestrator.retrieval import KnowledgeRef, RetrievalFixtureProvider
 
 
 @dataclass
@@ -88,3 +95,19 @@ def test_mock_gate_discards_repeated_input_without_creating_effects() -> None:
 
     assert gate.evaluate(_input(), active_summary="").value == "accept"
     assert gate.evaluate(_input(), active_summary="").value == "discard"
+
+
+def test_readonly_knowledge_tool_returns_versioned_untrusted_observation() -> None:
+    executor = ReadonlyKnowledgeToolExecutor(
+        RetrievalFixtureProvider(
+            (KnowledgeRef("product.md:1", "产品", "树莓女孩可以讲解产品"),)
+        )
+    )
+
+    observation = executor.execute(
+        ToolRequest("knowledge", "local", {"query": "产品"}), _snapshot()
+    )
+
+    assert observation is not None
+    assert '"source": "local_knowledge"' in observation
+    assert "product.md:1" in observation
