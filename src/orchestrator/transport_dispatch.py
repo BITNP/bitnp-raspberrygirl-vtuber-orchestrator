@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Protocol, final
+from typing import Protocol, final
 
 from orchestrator.ids import ConnectionId
 from orchestrator.observability import (
@@ -13,12 +13,15 @@ from orchestrator.observability import (
     StageCorrelation,
 )
 from orchestrator.streaming_contracts import (
+    CancellationEpoch,
     FlushAcknowledgement,
     FlushAdmission,
     FlushClock,
     FlushFailure,
+    SegmentId,
     StreamFlush,
     StreamKey,
+    TurnId,
 )
 from orchestrator.transport_control import (
     ControlEvent,
@@ -30,10 +33,6 @@ from orchestrator.transport_control import (
     StreamState,
     parse_control_event,
 )
-
-if TYPE_CHECKING:
-    from orchestrator.scheduler_reflex import SchedulerOutputFence
-
 
 _CODEC = {
     "format": "L16",
@@ -64,6 +63,19 @@ class RouteRegistry(Protocol):
     def output_ssrc(self, stream: StreamKey, cancellation_epoch: int = 0) -> int: ...
 
     def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None: ...
+
+
+class OutputFence(Protocol):
+    def acknowledge(self, acknowledgement: FlushAcknowledgement) -> bool: ...
+
+    def finish(
+        self,
+        *,
+        stream: StreamKey,
+        turn_id: TurnId | None,
+        segment_id: SegmentId | None,
+        cancellation_epoch: CancellationEpoch | None,
+    ) -> bool: ...
 
 @dataclass(frozen=True, slots=True)
 class _SourcePeer:
@@ -111,7 +123,7 @@ class TransportControlDispatch:
             sender=self,
         )
 
-        self._output_fence: SchedulerOutputFence | None = None
+        self._output_fence: OutputFence | None = None
 
     async def register(  # noqa: C901, PLR0911, PLR0912
         self, raw_message: str, peer_ip: str, connection: ControlPeer
@@ -338,7 +350,7 @@ class TransportControlDispatch:
     def set_observability(self, observability: OnsiteObservability) -> None:
         self._observability = observability
 
-    def set_output_fence(self, output_fence: SchedulerOutputFence) -> None:
+    def set_output_fence(self, output_fence: OutputFence) -> None:
         self._output_fence = output_fence
 
     def remove_connection(self, connection: ControlPeer) -> None:
@@ -381,27 +393,6 @@ class TransportControlDispatch:
             _stream_command_envelope(
                 stream, self._hub.output_ssrc(stream), sink, correlation
             )
-        )
-
-    async def _release_source(self, stream: StreamKey) -> None:
-        source = self._sources.get(stream)
-
-        if (
-            source is None
-            or stream not in self._ready_sinks
-            or stream in self._released_sources
-        ):
-            return
-
-        correlation = self._hub.correlation(stream)
-
-        if correlation is None:
-            return
-
-        self._released_sources.add(stream)
-
-        await source.connection.send(
-            _source_ready_envelope(stream, source.ssrc, correlation)
         )
 
     async def _deliver_flushes(self) -> None:
@@ -507,16 +498,6 @@ class TransportControlDispatch:
 
         if observability is not None:
             observability.record_stream(stage, stream)
-
-
-def _source_ready_envelope(
-    stream: StreamKey, ssrc: int, correlation: EnvelopeCorrelation
-) -> str:
-    return _envelope(
-        event_type="media.rtp.source.ready",
-        correlation=correlation,
-        data={"stream_id": stream.stream_id, "ssrc": ssrc},
-    )
 
 
 def _stream_command_envelope(  # noqa: PLR0913

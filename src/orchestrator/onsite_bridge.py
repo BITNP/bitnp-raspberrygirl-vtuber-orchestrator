@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Protocol, cast, override
 
 from orchestrator.asr_semantic_gate import (
     AsrGateDecision,
-    AsrGateRequest,
     AsrSemanticGate,
     AsyncAsrSemanticGate,
 )
@@ -18,8 +17,6 @@ from orchestrator.funasr_adapter import FunASRWebSocketAdapter
 from orchestrator.llm import (
     AdapterConfigError,
     CancellationToken,
-    LLMPrompt,
-    LLMRequest,
 )
 from orchestrator.media_adapters import (
     MediaAdapterConfigError,
@@ -160,20 +157,6 @@ _RTP_HEADER_PREFIX = bytes((RTP_V2_HEADER, RTP_PAYLOAD_TYPE))
 
 _LOGGER = logging.getLogger(__name__)
 _RTP_DIAGNOSTIC_INTERVAL = 100
-
-
-def _build_asr_gate(llm: AsyncOpenAICompatibleLLMRuntime) -> AsyncAsrSemanticGate:
-    async def provider(request: AsrGateRequest) -> str:
-        user = (
-            f"转写: {request.transcript}\n"
-            f"正在播放: {request.is_playing}\n"
-            f"当前回答摘录: {request.active_answer_excerpt}"
-        )
-        return await llm.complete_gate(LLMRequest(LLMPrompt(request.instruction, user)))
-
-    return AsyncAsrSemanticGate(provider)
-
-
 @dataclass(frozen=True, slots=True)
 class _MicOwnedAsrAdapter:
     """Fail closed if retired local-ASR code is invoked accidentally."""
@@ -267,10 +250,10 @@ class OnsiteExplainerBridge:
     def submit_mic_rtp(
         self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
     ) -> None:
-        # The transport never calls this retired API.  Fail closed if an older
-        # in-process caller reaches it: no endpointing, ASR, or output work.
-        _ = stream, packet, epoch
-        return
+        # Mic RTP ingress is retired. Keep the legacy implementation below for
+        # controlled compatibility rollouts, but fail closed in this build.
+        if not self._accepts_retired_mic_rtp(stream):
+            return
         frame_count = self._rtp_diagnostic_counts.get(stream, 0) + 1
         self._rtp_diagnostic_counts[stream] = frame_count
         if frame_count % _RTP_DIAGNOSTIC_INTERVAL == 0:
@@ -306,6 +289,10 @@ class OnsiteExplainerBridge:
             epoch,
         )
         self._submit_endpoint(stream, endpoint, epoch)
+
+    def _accepts_retired_mic_rtp(self, stream: StreamKey) -> bool:
+        _ = stream
+        return False
 
     def _submit_endpoint(
         self,

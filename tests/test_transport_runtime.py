@@ -9,12 +9,18 @@ import pytest
 
 from orchestrator.agent_pipeline import AgentPipeline, BrainStateSnapshot, GateDecision
 from orchestrator.config import TrustedLanToken
-from orchestrator.ids import SessionId
+from orchestrator.ids import ConnectionId, SessionId
 from orchestrator.json_boundary import parse_json_value
 from orchestrator.mcp_adapters import DeckJournalKind
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.scheduler_runtime import SessionRuntime
-from orchestrator.streaming_contracts import StreamKey
+from orchestrator.streaming_contracts import (
+    CancellationEpoch,
+    FlushAcknowledgement,
+    SegmentId,
+    StreamKey,
+    TurnId,
+)
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import (
@@ -98,13 +104,45 @@ class _RouteWithoutEpochAdvance:
         _ = args, kwargs
         self.registrations += 1
 
+    def remove_connection(self, owner: ConnectionId) -> None:
+        _ = owner
+
+    def remove_stream(self, session_id: str, stream_id: str) -> None:
+        _ = session_id, stream_id
+
+    def output_ssrc(self, stream: StreamKey, cancellation_epoch: int = 0) -> int:
+        _ = stream, cancellation_epoch
+        return 0
+
+    def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None:
+        _ = stream
+        return None
+
 
 @dataclass
 class _RecordingOutputFence:
     finishes: list[dict[str, object]] = field(default_factory=list)
 
-    def finish(self, **kwargs: object) -> bool:
-        self.finishes.append(kwargs)
+    def acknowledge(self, acknowledgement: FlushAcknowledgement) -> bool:
+        _ = acknowledgement
+        return True
+
+    def finish(
+        self,
+        *,
+        stream: StreamKey,
+        turn_id: TurnId | None,
+        segment_id: SegmentId | None,
+        cancellation_epoch: CancellationEpoch | None,
+    ) -> bool:
+        self.finishes.append(
+            {
+                "stream": stream,
+                "turn_id": turn_id,
+                "segment_id": segment_id,
+                "cancellation_epoch": cancellation_epoch,
+            }
+        )
         return True
 
 
@@ -402,9 +440,9 @@ def test_dispatch_never_releases_retired_mic_rtp_source() -> None:
 
 def test_finished_playback_never_requires_mic_epoch_advance() -> None:
     route = _RouteWithoutEpochAdvance()
-    dispatcher = TransportControlDispatch(route)  # type: ignore[arg-type]
+    dispatcher = TransportControlDispatch(route)
     fence = _RecordingOutputFence()
-    dispatcher.set_output_fence(fence)  # type: ignore[arg-type]
+    dispatcher.set_output_fence(fence)
 
     asyncio.run(
         dispatcher.register(

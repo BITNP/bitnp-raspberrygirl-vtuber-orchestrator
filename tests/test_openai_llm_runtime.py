@@ -6,7 +6,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, ClassVar, override
+from typing import TYPE_CHECKING, ClassVar, cast, override
 
 import httpx
 
@@ -137,7 +137,7 @@ def test_async_runtime_uses_documented_gate_and_streaming_parameters() -> None:
     captured: list[dict[str, object]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
+        body = cast("dict[str, object]", json.loads(request.content))
         captured.append(body)
         if body["stream"] is False:
             return httpx.Response(
@@ -191,7 +191,7 @@ def test_async_runtime_logs_complete_json_request_and_response(
     captured: list[dict[str, object]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        captured.append(json.loads(request.content))
+        captured.append(cast("dict[str, object]", json.loads(request.content)))
         return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
 
     async def run() -> str:

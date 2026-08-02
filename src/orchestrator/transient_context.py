@@ -193,6 +193,7 @@ class ModelBudgetUnavailableError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ContextCompactionError(Exception):
+    @override
     def __str__(self) -> str:
         return "transient context compaction source is stale or invalid"
 

@@ -70,7 +70,9 @@ def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
     )
 
     # Then: a retired local-ASR call has no provider side effect.
-    assert bridge.asr.transcribe() is None
+    assert bridge.asr.transcribe(
+        audio=b"", filename="retired.wav", received_at_ms=0, segment_id="retired", seq=0
+    ) is None
 
 
 def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(

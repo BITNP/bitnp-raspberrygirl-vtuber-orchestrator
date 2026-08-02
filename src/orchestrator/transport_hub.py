@@ -602,44 +602,9 @@ class RtpHub:
         if actors is not None:
             _ = actors.discard(stream)
 
-    def _find_route(self, ssrc: int, peer: PeerAddress) -> StreamKey | None:
-        for route, stream in self._pinned_sources.items():
-            if route.ssrc == ssrc and (route.peer_ip, route.udp_port) == peer:
-                return stream
-
-        candidates = [
-            source
-            for source in self._pending_sources.values()
-            if source.ssrc == ssrc and source.peer_ip == peer[0]
-        ]
-
-        if len(candidates) != 1:
-            return None
-
-        source = candidates[0]
-
-        route = RouteKey(
-            source.stream.session_id,
-            source.stream.stream_id,
-            ssrc,
-            peer[0],
-            peer[1],
-        )
-
-        self._pinned_sources[route] = source.stream
-
-        del self._pending_sources[source.stream]
-
-        return source.stream
-
-
 def _is_canonical_rtp(data: bytes) -> bool:
     return (
         len(data) == RTP_HEADER_BYTES + L16_FRAME_BYTES
         and data[0] == RTP_V2_HEADER
         and data[1] & 0x7F == RTP_PAYLOAD_TYPE
     )
-
-
-def _rtp_ssrc(data: bytes) -> int:
-    return int.from_bytes(data[8:12])

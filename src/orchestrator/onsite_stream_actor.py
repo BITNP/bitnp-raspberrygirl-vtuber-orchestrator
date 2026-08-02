@@ -59,6 +59,10 @@ _PCM_FRAME_BYTES = 640
 
 _LOGGER = logging.getLogger(__name__)
 
+type GateCallable = (
+    Callable[..., Awaitable[AsrGateDecision]] | Callable[..., AsrGateDecision]
+)
+
 
 def _next_chunk(stream: Iterator[Pcm16leChunk]) -> Pcm16leChunk | None:
     try:
@@ -372,11 +376,17 @@ class OnsiteStreamActor:
                     handled = await final_handler(self.stream, event)
                     if handled:
                         continue
-                gate = getattr(self.stages, "gate", None)
+                gate = cast(
+                    "GateCallable | None",
+                    getattr(self.stages, "gate", None),
+                )
                 if gate is None:
                     decision = AsrGateDecision.ACCEPT
                 elif inspect.iscoroutinefunction(gate):
-                    decision = await gate(
+                    async_gate = cast(
+                        "Callable[..., Awaitable[AsrGateDecision]]", gate
+                    )
+                    decision = await async_gate(
                         event,
                         active_answer_excerpt=self._active_answer_excerpt,
                         is_playing=self._is_playing,

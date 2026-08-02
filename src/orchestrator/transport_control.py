@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hmac
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, override
+from typing import TYPE_CHECKING, Protocol, TypedDict, override
 
 from orchestrator.json_boundary import JsonValue, parse_json_value
 from orchestrator.streaming_contracts import (
@@ -41,6 +41,19 @@ type ControlEvent = (
     | AsrPartial
     | AsrFinal
 )
+
+
+class _AsrEventFields(TypedDict):
+    session_id: str
+    stream_id: str
+    segment_id: str
+    rtp_start_timestamp: int
+    rtp_end_timestamp: int
+    cancellation_epoch: CancellationEpoch
+    text: str
+    received_at_ms: int
+    confidence: float | None
+    correlation: EnvelopeCorrelation
 
 
 @dataclass(frozen=True, slots=True)
@@ -509,7 +522,7 @@ def _validate_voice_evidence(data: dict[str, JsonValue], source: str) -> None:
 
 def _parse_asr_event(
     data: dict[str, JsonValue], source: str, correlation: EnvelopeCorrelation
-) -> dict[str, object]:
+) -> _AsrEventFields:
     """Parse the wire ASR contract without trusting Mic-provided routing data."""
     required = {
         "stream_id",

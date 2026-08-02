@@ -215,10 +215,7 @@ class OrchestratorTurnPipeline:
                         text_parts.append(llm_event.text)
                     elif isinstance(llm_event, LLMFinal):
                         final = llm_event
-                    elif (
-                        isinstance(llm_event, LLMError)
-                        and llm_event.cancel_pending_media
-                    ):
+                    elif llm_event.cancel_pending_media:
                         self._cancel_commands.append(
                             _cancel(
                                 _CancelIntent(
