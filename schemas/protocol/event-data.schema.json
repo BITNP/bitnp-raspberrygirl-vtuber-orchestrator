@@ -27,6 +27,7 @@
     "action.command": {"additionalProperties": false, "required": ["command_id", "action"], "properties": {"command_id": {"type": "string", "minLength": 1}, "action": {"type": "string", "minLength": 1}}},
     "context.reset.command": {"additionalProperties": false, "required": [], "properties": {}},
     "memory.delete.command": {"additionalProperties": false, "required": ["key"], "properties": {"key": {"type": "string", "minLength": 1}}},
+    "session.end.command": {"additionalProperties": false, "required": [], "properties": {}},
     "action.result": {"additionalProperties": false, "required": ["command_id", "succeeded"], "properties": {"command_id": {"type": "string", "minLength": 1}, "succeeded": {"type": "boolean"}}},
     "health.heartbeat": {"required": ["service", "service_version", "status", "observed_at"]}, "error": {"required": ["code", "message"]}, "cancel": {"required": ["reason"]}, "session.created": {"required": ["created_at"]}, "session.ended": {"required": ["ended_at", "reason"]}
   }
