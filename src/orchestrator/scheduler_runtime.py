@@ -102,10 +102,16 @@ from orchestrator.task_registry import (
 )
 from orchestrator.transient_context import (
     AcceptedOutput,
+    ContextCompactionError,
+    ContextComposition,
     ContextProvenance,
     ContextSequence,
     ContextSourceId,
     FinalizedInput,
+    ModelContextBudget,
+    ModelId,
+    StaticContextBudgetPolicy,
+    TokenBudget,
 )
 
 
@@ -121,6 +127,14 @@ def _brain_task_kind(value: object) -> TaskKind | None:
     if value in {"context_compaction", "memory_patch"}:
         return TaskKind.MAINTENANCE
     return None
+
+
+_BRAIN_CONTEXT_MODEL = ModelId("agent-brain")
+
+_BRAIN_CONTEXT_POLICY = StaticContextBudgetPolicy(
+    model_id=_BRAIN_CONTEXT_MODEL,
+    budget=ModelContextBudget(input_tokens=TokenBudget(512)),
+)
 
 
 @dataclass(slots=True)
@@ -307,7 +321,10 @@ class SessionRuntime:
         pipeline = self.agent_pipeline
         if pipeline is None:
             return
-        context = self.interaction_ingress.data.context.snapshot
+        composition = self.interaction_ingress.data.context.compose(
+            _BRAIN_CONTEXT_MODEL, _BRAIN_CONTEXT_POLICY
+        )
+        context = composition.snapshot
         memory = self.interaction_ingress.data.memory.snapshot
         snapshot = BrainStateSnapshot(
             session_id=str(self.scheduler.snapshot.session_id),
@@ -316,7 +333,7 @@ class SessionRuntime:
             cancellation_epoch=int(self.cancellation_epoch),
             input=audience_input,
             context_summary=context.summary,
-            recent_context=tuple(entry.text for entry in context.entries),
+            recent_context=tuple(entry.text for entry in composition.entries),
             memory_markdown="\n".join(
                 f"- {entry.key}: {entry.value}" for entry in memory.entries
             ),
@@ -335,11 +352,15 @@ class SessionRuntime:
             ),
             context_revision=int(context.generation),
             memory_revision=int(memory.revision),
+            context_budget=512,
+            compaction_required=bool(composition.digests),
         )
         result = pipeline.run(snapshot)
         self._agent_results.append(result)
         if isinstance(result, PlanAccepted):
-            self._apply_agent_plan(result, audience_input, turn_id, correlation)
+            self._apply_agent_plan(
+                result, audience_input, turn_id, correlation, composition
+            )
 
     def _apply_agent_plan(
         self,
@@ -347,6 +368,7 @@ class SessionRuntime:
         audience_input: BrainAudienceInput,
         turn_id: TurnId,
         correlation: EventCorrelation,
+        composition: ContextComposition,
     ) -> None:
         """Commit only reducer-accepted Brain state operations.
 
@@ -361,6 +383,7 @@ class SessionRuntime:
             sequence=ContextSequence(audience_input.sequence),
             source_id=ContextSourceId(audience_input.trace_id),
         )
+        self._apply_context_compaction(accepted, composition)
         self.interaction_ingress.data.consider_context(
             FinalizedInput(provenance, audience_input.text)
         )
@@ -376,6 +399,22 @@ class SessionRuntime:
                 task_id = operation.payload.get("task_id")
                 if isinstance(task_id, str):
                     _ = self.cancel_task(TaskId(task_id), correlation)
+
+    def _apply_context_compaction(
+        self, accepted: PlanAccepted, composition: ContextComposition
+    ) -> None:
+        for operation in accepted.plan.state_operations:
+            if operation.kind != "context.compact":
+                continue
+            summary = operation.payload.get("summary")
+            if not isinstance(summary, str):
+                continue
+            try:
+                _ = self.interaction_ingress.data.context.compact(
+                    composition, summary=summary
+                )
+            except ContextCompactionError:
+                return
 
     def _apply_memory_patch(
         self,

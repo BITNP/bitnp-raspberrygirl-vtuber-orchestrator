@@ -6,7 +6,7 @@ from orchestrator.agent_pipeline import (
     BrainStateSnapshot,
     GateDecision,
 )
-from orchestrator.ids import SessionId, TraceId, TurnId
+from orchestrator.ids import SegmentId, SessionId, TraceId, TurnId
 from orchestrator.interactions import CommentProposal
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import EventCorrelation, EventSequence, StateRevision
@@ -19,6 +19,12 @@ from orchestrator.task_registry import (
     TaskId,
     TaskKind,
     TaskRequest,
+)
+from orchestrator.transient_context import (
+    ContextProvenance,
+    ContextSequence,
+    ContextSourceId,
+    FinalizedInput,
 )
 
 
@@ -110,6 +116,44 @@ def test_runtime_routes_comment_through_agent_gate_and_brain_snapshot() -> None:
     assert runtime.interaction_ingress.data.memory.snapshot.entries[0].value == "小莓"
 
 
+def test_runtime_commits_brain_compaction_against_its_snapshot() -> None:
+    pipeline = AgentPipeline(_AcceptGate(), _CompactingBrain(), _NoTools())
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-compaction"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        agent_pipeline=pipeline,
+    )
+    data = runtime.interaction_ingress.data
+    for sequence in (1, 2):
+        data.consider_context(
+            FinalizedInput(
+                ContextProvenance(
+                    SessionId("session-compaction"),
+                    TurnId(f"old-{sequence}"),
+                    SegmentId(f"old-{sequence}"),
+                    ContextSequence(sequence),
+                    ContextSourceId(f"old-{sequence}"),
+                ),
+                "old " * 300,
+            )
+        )
+
+    outcome = runtime.receive_comment(
+        CommentProposal(
+            "question",
+            EventCorrelation(
+                TraceId("compact"),
+                SessionId("session-compaction"),
+                EventSequence(3),
+            ),
+        )
+    )
+
+    assert outcome.accepted
+    assert data.context.snapshot.summary == "稳定事实: 已压缩"
+
+
 class _AcceptGate:
     def evaluate(self, *args: object, **kwargs: object) -> GateDecision:
         _ = args, kwargs
@@ -135,6 +179,28 @@ class _PlanBrain:
                         "source_turn": snapshot.turn_id,
                         "confidence": 95,
                         "base_revision": snapshot.memory_revision,
+                    }
+                ],
+            }
+        )
+
+    def repair(self, snapshot: object, invalid_plan: str) -> str:
+        _ = snapshot, invalid_plan
+        return "{}"
+
+
+class _CompactingBrain:
+    def plan(self, snapshot: BrainStateSnapshot, **kwargs: object) -> str:
+        _ = kwargs
+        assert snapshot.compaction_required
+        return json.dumps(
+            {
+                "response_text": "answer",
+                "expected_revision": snapshot.revision,
+                "state_operations": [
+                    {
+                        "kind": "context.compact",
+                        "payload": {"summary": "稳定事实: 已压缩"},
                     }
                 ],
             }

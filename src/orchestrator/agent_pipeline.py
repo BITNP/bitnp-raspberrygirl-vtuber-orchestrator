@@ -267,6 +267,10 @@ class AgentPlanReducer:
                     return False
             if operation.kind == "context.compact" and not snapshot.compaction_required:
                 return False
+            if operation.kind == "context.compact" and not isinstance(
+                operation.payload.get("summary"), str
+            ):
+                return False
         return True
 
     @staticmethod
