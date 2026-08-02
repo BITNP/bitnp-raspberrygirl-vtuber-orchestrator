@@ -169,6 +169,9 @@ class _AcceptGate:
 class _PlanBrain:
     def plan(self, snapshot: BrainStateSnapshot, **kwargs: object) -> str:
         _ = kwargs
+        assert snapshot.knowledge_references == (
+            "本地知识库: corpus=fixture-corpus@1, index=fixture-index@1",
+        )
         return json.dumps(
             {
                 "response_text": "answer",

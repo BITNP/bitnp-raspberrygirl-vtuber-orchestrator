@@ -396,6 +396,7 @@ class SessionRuntime:
         )
         context = composition.snapshot
         memory = self.interaction_ingress.data.memory.snapshot
+        retrieval = self.interaction_ingress.data.retrieval.snapshot
         snapshot = BrainStateSnapshot(
             session_id=str(self.scheduler.snapshot.session_id),
             turn_id=str(turn_id),
@@ -424,6 +425,11 @@ class SessionRuntime:
             memory_revision=int(memory.revision),
             context_budget=512,
             compaction_required=bool(composition.digests),
+            knowledge_references=(
+                "本地知识库: "
+                f"corpus={retrieval.corpus_id}@{retrieval.corpus_revision}, "
+                f"index={retrieval.index_id}@{retrieval.index_revision}",
+            ),
         )
         result = pipeline.run(snapshot)
         self._agent_results.append(result)
