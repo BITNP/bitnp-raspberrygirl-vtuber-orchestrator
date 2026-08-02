@@ -92,12 +92,21 @@ def test_runtime_routes_comment_through_agent_gate_and_brain_snapshot() -> None:
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
         clock=lambda: 10,
         agent_pipeline=pipeline,
+        agent_capabilities=frozenset({"task:tts"}),
     )
 
     outcome = runtime.receive_comment(CommentProposal("question", _correlation("q", 1)))
 
     assert outcome.accepted
     assert len(runtime.agent_results) == 1
+    assert tuple(
+        entry.text
+        for entry in runtime.interaction_ingress.data.context.snapshot.entries
+    ) == (
+        "question",
+        "answer",
+    )
+    assert runtime.task_registry.records[0].request.kind is TaskKind.INTERACTIVE
 
 
 class _AcceptGate:
@@ -110,7 +119,13 @@ class _PlanBrain:
     def plan(self, snapshot: BrainStateSnapshot, **kwargs: object) -> str:
         _ = kwargs
         return json.dumps(
-            {"response_text": "answer", "expected_revision": snapshot.revision}
+            {
+                "response_text": "answer",
+                "expected_revision": snapshot.revision,
+                "state_operations": [
+                    {"kind": "create_task", "payload": {"task_kind": "tts"}}
+                ],
+            }
         )
 
     def repair(self, snapshot: object, invalid_plan: str) -> str:

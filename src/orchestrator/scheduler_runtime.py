@@ -6,6 +6,7 @@ from orchestrator.agent_pipeline import (
     AgentPipeline,
     BrainStateSnapshot,
     GateDecision,
+    PlanAccepted,
     PlanResult,
     TaskSnapshot,
 )
@@ -27,7 +28,7 @@ from orchestrator.control_ingress import (
     SessionControl,
 )
 from orchestrator.identity import ProfileEnrollment, VoiceProfileId
-from orchestrator.ids import SessionId, TurnId
+from orchestrator.ids import SegmentId, SessionId, TurnId
 from orchestrator.interaction_ingress import SessionInteractionIngress
 from orchestrator.interactions import (
     ActionProposal,
@@ -77,8 +78,11 @@ from orchestrator.task_reducer import (
     TaskResultReducer,
 )
 from orchestrator.task_registry import (
+    IdempotencyKey,
     SchedulerTaskConfig,
+    TaskDeadlineMs,
     TaskId,
+    TaskKind,
     TaskRegistrationAccepted,
     TaskRegistrationRejected,
     TaskRegistrationRejection,
@@ -87,10 +91,27 @@ from orchestrator.task_registry import (
     TaskRequest,
     TaskState,
 )
+from orchestrator.transient_context import (
+    AcceptedOutput,
+    ContextProvenance,
+    ContextSequence,
+    ContextSourceId,
+    FinalizedInput,
+)
 
 
 def _monotonic_ms() -> int:
     return monotonic_ns() // 1_000_000
+
+
+def _brain_task_kind(value: object) -> TaskKind | None:
+    if value in {"tts", "playback"}:
+        return TaskKind.INTERACTIVE
+    if value in {"retrieval", "mcp"}:
+        return TaskKind.DELIBERATIVE
+    if value in {"context_compaction", "memory_patch"}:
+        return TaskKind.MAINTENANCE
+    return None
 
 
 @dataclass(slots=True)
@@ -230,7 +251,7 @@ class SessionRuntime:
                     RuntimeDispatch(correlation, accepted_turn)
                 )
 
-                self._run_agent_plan(agent_input, accepted_turn)
+                self._run_agent_plan(agent_input, accepted_turn, correlation)
 
                 return RuntimeOutcome(
                     accepted=True,
@@ -269,7 +290,10 @@ class SessionRuntime:
         return audience_input if decision is GateDecision.ACCEPT else None
 
     def _run_agent_plan(
-        self, audience_input: BrainAudienceInput, turn_id: TurnId
+        self,
+        audience_input: BrainAudienceInput,
+        turn_id: TurnId,
+        correlation: EventCorrelation,
     ) -> None:
         pipeline = self.agent_pipeline
         if pipeline is None:
@@ -303,7 +327,76 @@ class SessionRuntime:
             context_revision=int(context.generation),
             memory_revision=int(memory.revision),
         )
-        self._agent_results.append(pipeline.run(snapshot))
+        result = pipeline.run(snapshot)
+        self._agent_results.append(result)
+        if isinstance(result, PlanAccepted):
+            self._apply_agent_plan(result, audience_input, turn_id, correlation)
+
+    def _apply_agent_plan(
+        self,
+        accepted: PlanAccepted,
+        audience_input: BrainAudienceInput,
+        turn_id: TurnId,
+        correlation: EventCorrelation,
+    ) -> None:
+        """Commit only reducer-accepted Brain state operations.
+
+        Media/frontend effects remain with their dedicated adapters; this
+        reducer path owns context and scheduler tasks so late provider output
+        cannot write either one directly.
+        """
+        provenance = ContextProvenance(
+            session_id=SessionId(audience_input.session_id),
+            turn_id=turn_id,
+            segment_id=SegmentId(f"agent-{turn_id}"),
+            sequence=ContextSequence(audience_input.sequence),
+            source_id=ContextSourceId(audience_input.trace_id),
+        )
+        self.interaction_ingress.data.consider_context(
+            FinalizedInput(provenance, audience_input.text)
+        )
+        if accepted.plan.response_text != "":
+            self.interaction_ingress.data.consider_context(
+                AcceptedOutput(provenance, accepted.plan.response_text)
+            )
+        for index, operation in enumerate(accepted.plan.state_operations):
+            if operation.kind == "create_task":
+                self._create_brain_task(operation.payload, turn_id, correlation, index)
+            elif operation.kind == "cancel_task":
+                task_id = operation.payload.get("task_id")
+                if isinstance(task_id, str):
+                    _ = self.cancel_task(TaskId(task_id), correlation)
+
+    def _create_brain_task(
+        self,
+        payload: dict[str, object],
+        turn_id: TurnId,
+        correlation: EventCorrelation,
+        index: int,
+    ) -> None:
+        kind = _brain_task_kind(payload.get("task_kind"))
+        if kind is None:
+            return
+        deadline_ms = payload.get("deadline_ms")
+        deadline = (
+            self.clock() + 30_000
+            if type(deadline_ms) is not int or deadline_ms <= self.clock()
+            else deadline_ms
+        )
+        task_id = TaskId(f"brain-{turn_id}-{index}")
+        _ = self.schedule_task(
+            TaskRequest(
+                task_id=task_id,
+                session_id=self.scheduler.snapshot.session_id,
+                turn_id=turn_id,
+                parent_task_id=None,
+                deadline_ms=TaskDeadlineMs(deadline),
+                snapshot_revision=self.scheduler.snapshot.revision,
+                idempotency_key=IdempotencyKey(str(task_id)),
+                kind=kind,
+            ),
+            correlation,
+        )
 
     def receive_control(self, raw_message: str) -> bool:
         parsed = parse_presentation_result_control(
