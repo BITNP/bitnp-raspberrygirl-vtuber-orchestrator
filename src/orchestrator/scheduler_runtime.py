@@ -499,7 +499,22 @@ class SessionRuntime:
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
 
-        if gate.evaluate(event.text) is AsrGateDecision.DISCARD:
+        audience_input = BrainAudienceInput(
+            session_id=str(correlation.session_id),
+            trace_id=str(correlation.trace_id),
+            sequence=int(correlation.sequence),
+            source=BrainAudienceSource.ASR,
+            received_at_ms=event.received_at_ms,
+            text=event.text,
+        )
+        pipeline = self.agent_pipeline
+        if (
+            pipeline is not None
+            and pipeline.submit(audience_input) is GateDecision.DISCARD
+        ):
+            return self._reject(correlation, "agent_gate_discarded")
+
+        if pipeline is None and gate.evaluate(event.text) is AsrGateDecision.DISCARD:
             return self._reject(correlation, "asr_gate_discarded")
 
         transition = self.scheduler.apply(
@@ -515,6 +530,10 @@ class SessionRuntime:
 
                 self._journal.dispatches.append(
                     RuntimeDispatch(correlation, accepted_event.turn_id)
+                )
+
+                self._run_agent_plan(
+                    audience_input, accepted_event.turn_id, correlation
                 )
 
                 return RuntimeOutcome(
