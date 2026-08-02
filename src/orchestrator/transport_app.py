@@ -73,6 +73,7 @@ def main() -> None:
         format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
+    configure_dependency_loggers()
     try:
         asyncio.run(run_transport())
 
@@ -83,3 +84,8 @@ def main() -> None:
 def _log_level(env: Mapping[str, str]) -> int:
     """Return the development-selectable level; production defaults to INFO."""
     return getattr(logging, env.get("BITNP_LOG_LEVEL", "INFO").upper(), logging.INFO)
+
+
+def configure_dependency_loggers() -> None:
+    """Keep provider diagnostics readable without exposing request payloads."""
+    logging.getLogger("openai").setLevel(logging.INFO)

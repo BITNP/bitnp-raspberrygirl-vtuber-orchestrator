@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 from orchestrator.log_summary import (
     binary_summary,
     reference_audio_summary,
     text_summary,
 )
+from orchestrator.transport_app import configure_dependency_loggers
 
 
 def test_text_summary_limits_preview_to_thirty_utf8_bytes() -> None:
@@ -34,3 +37,16 @@ def test_reference_audio_summary_never_contains_base64_payload() -> None:
         "kind=data_url media_type='audio/wav' encoding=base64 payload_chars=1300"
     )
     assert "private-audio" not in summary
+
+
+def test_openai_sdk_debug_logs_are_suppressed() -> None:
+    logger = logging.getLogger("openai")
+    original_level = logger.level
+    try:
+        configure_dependency_loggers()
+
+        assert logger.level == logging.INFO
+        assert not logger.isEnabledFor(logging.DEBUG)
+        assert logger.isEnabledFor(logging.INFO)
+    finally:
+        logger.setLevel(original_level)
