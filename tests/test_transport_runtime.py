@@ -550,6 +550,35 @@ def test_onsite_asr_final_is_routed_to_matching_session_runtime() -> None:
     assert dispatch.correlation.session_id == SessionId(SESSION_ID)
 
 
+def test_onsite_asr_final_creates_an_isolated_session_runtime() -> None:
+    runtime = TransportRuntime(_loopback_config())
+    created: list[SessionRuntime] = []
+
+    def factory(session_id: SessionId) -> SessionRuntime:
+        session = SessionRuntime.create(
+            session_id=session_id,
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        )
+        created.append(session)
+        return session
+
+    runtime.set_session_runtime_factory(factory)
+
+    async def run() -> bool:
+        return await runtime.receive_onsite_asr_final(
+            StreamKey("session-new", STREAM_ID),
+            ASRAudienceEvent("请介绍 BitNet", 20, "asr-1", 1),
+        )
+
+    assert asyncio.run(run())
+    assert len(created) == 1
+    assert created[0].scheduler.snapshot.session_id == SessionId("session-new")
+    assert created[0].observables.dispatches[0].correlation.session_id == SessionId(
+        "session-new"
+    )
+
+
 def test_control_connection_refuses_comments_without_valid_credential() -> None:
     # Given: a production-token transport and three valid-looking comments.
 
