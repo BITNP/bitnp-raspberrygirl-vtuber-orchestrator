@@ -4,7 +4,9 @@ from dataclasses import replace
 from orchestrator.agent_pipeline import (
     AgentPipeline,
     BrainStateSnapshot,
+    FrontendOperation,
     GateDecision,
+    MediaOperation,
 )
 from orchestrator.ids import SegmentId, SessionId, TraceId, TurnId
 from orchestrator.interactions import CommentProposal
@@ -92,6 +94,7 @@ def test_runtime_rejects_stale_result_after_newer_turn_without_commit() -> None:
 
 def test_runtime_routes_comment_through_agent_gate_and_brain_snapshot() -> None:
     pipeline = AgentPipeline(_AcceptGate(), _PlanBrain(), _NoTools())
+    effects = _Effects()
     runtime = SessionRuntime.create(
         session_id=SessionId("session-1"),
         turn_id_prefix="turn",
@@ -99,6 +102,7 @@ def test_runtime_routes_comment_through_agent_gate_and_brain_snapshot() -> None:
         clock=lambda: 10,
         agent_pipeline=pipeline,
         agent_capabilities=frozenset({"task:tts"}),
+        agent_effect_dispatcher=effects,
     )
 
     outcome = runtime.receive_comment(CommentProposal("question", _correlation("q", 1)))
@@ -114,6 +118,8 @@ def test_runtime_routes_comment_through_agent_gate_and_brain_snapshot() -> None:
     )
     assert runtime.task_registry.records[0].request.kind is TaskKind.INTERACTIVE
     assert runtime.interaction_ingress.data.memory.snapshot.entries[0].value == "小莓"
+    assert effects.media == [MediaOperation("synthesize", text="answer")]
+    assert effects.frontend == [FrontendOperation("caption", "answer")]
 
 
 def test_runtime_commits_brain_compaction_against_its_snapshot() -> None:
@@ -181,6 +187,8 @@ class _PlanBrain:
                         "base_revision": snapshot.memory_revision,
                     }
                 ],
+                "media_operations": [{"kind": "synthesize", "text": "answer"}],
+                "frontend_operations": [{"kind": "caption", "value": "answer"}],
             }
         )
 
@@ -214,6 +222,20 @@ class _CompactingBrain:
 class _NoTools:
     def execute(self, request: object, snapshot: object) -> None:
         _ = request, snapshot
+
+
+class _Effects:
+    def __init__(self) -> None:
+        self.media: list[MediaOperation] = []
+        self.frontend: list[FrontendOperation] = []
+
+    def dispatch_media(self, operation: MediaOperation, **kwargs: object) -> None:
+        _ = kwargs
+        self.media.append(operation)
+
+    def dispatch_frontend(self, operation: FrontendOperation, **kwargs: object) -> None:
+        _ = kwargs
+        self.frontend.append(operation)
 
 
 def _runtime() -> SessionRuntime:

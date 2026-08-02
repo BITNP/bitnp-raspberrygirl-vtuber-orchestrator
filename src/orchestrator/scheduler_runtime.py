@@ -1,11 +1,14 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import monotonic_ns
+from typing import Protocol
 
 from orchestrator.agent_pipeline import (
     AgentPipeline,
     BrainStateSnapshot,
+    FrontendOperation,
     GateDecision,
+    MediaOperation,
     PlanAccepted,
     PlanResult,
     TaskSnapshot,
@@ -129,6 +132,27 @@ def _brain_task_kind(value: object) -> TaskKind | None:
     return None
 
 
+class AgentEffectDispatcher(Protocol):
+    """Dedicated adapters execute effects only after reducer acceptance."""
+
+    def dispatch_media(
+        self,
+        operation: MediaOperation,
+        *,
+        session_id: SessionId,
+        turn_id: TurnId,
+        cancellation_epoch: CancellationEpoch,
+    ) -> None: ...
+
+    def dispatch_frontend(
+        self,
+        operation: FrontendOperation,
+        *,
+        session_id: SessionId,
+        turn_id: TurnId,
+    ) -> None: ...
+
+
 _BRAIN_CONTEXT_MODEL = ModelId("agent-brain")
 
 _BRAIN_CONTEXT_POLICY = StaticContextBudgetPolicy(
@@ -166,6 +190,8 @@ class SessionRuntime:
 
     agent_capabilities: frozenset[str] = frozenset()
 
+    agent_effect_dispatcher: AgentEffectDispatcher | None = None
+
     clock: Callable[[], int] = _monotonic_ms
 
     cancellation_epoch: CancellationEpoch = field(
@@ -198,6 +224,7 @@ class SessionRuntime:
         clock: Callable[[], int] = _monotonic_ms,
         agent_pipeline: AgentPipeline | None = None,
         agent_capabilities: frozenset[str] = frozenset(),
+        agent_effect_dispatcher: AgentEffectDispatcher | None = None,
     ) -> "SessionRuntime":
         scheduler = SessionScheduler(
             session_id=session_id,
@@ -232,6 +259,7 @@ class SessionRuntime:
             clock=clock,
             agent_pipeline=agent_pipeline,
             agent_capabilities=agent_capabilities,
+            agent_effect_dispatcher=agent_effect_dispatcher,
         )
 
     @property
@@ -399,6 +427,26 @@ class SessionRuntime:
                 task_id = operation.payload.get("task_id")
                 if isinstance(task_id, str):
                     _ = self.cancel_task(TaskId(task_id), correlation)
+        self._dispatch_agent_effects(accepted, turn_id)
+
+    def _dispatch_agent_effects(self, accepted: PlanAccepted, turn_id: TurnId) -> None:
+        dispatcher = self.agent_effect_dispatcher
+        if dispatcher is None:
+            return
+        session_id = self.scheduler.snapshot.session_id
+        for operation in accepted.plan.media_operations:
+            dispatcher.dispatch_media(
+                operation,
+                session_id=session_id,
+                turn_id=turn_id,
+                cancellation_epoch=self.cancellation_epoch,
+            )
+        for operation in accepted.plan.frontend_operations:
+            dispatcher.dispatch_frontend(
+                operation,
+                session_id=session_id,
+                turn_id=turn_id,
+            )
 
     def _apply_context_compaction(
         self, accepted: PlanAccepted, composition: ContextComposition
