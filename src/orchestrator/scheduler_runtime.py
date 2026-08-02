@@ -1,4 +1,5 @@
-from collections.abc import Callable
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from time import monotonic_ns
 from typing import Protocol
@@ -123,6 +124,7 @@ from orchestrator.transient_context import (
 )
 from orchestrator.transport_control import VoiceEvidence
 
+_LOGGER = logging.getLogger(__name__)
 
 def _monotonic_ms() -> int:
     return monotonic_ns() // 1_000_000
@@ -232,6 +234,8 @@ class SessionRuntime:
     _journal: _RuntimeJournal = field(default_factory=_RuntimeJournal)
 
     _agent_results: list[PlanResult] = field(default_factory=list)
+
+    _agent_tts_text: dict[TaskId, str] = field(default_factory=dict)
 
     _voice_evidence_ranges: list[tuple[str, int, int]] = field(default_factory=list)
 
@@ -509,6 +513,10 @@ class SessionRuntime:
             self._apply_agent_plan(
                 result, audience_input, turn_id, correlation, composition
             )
+        else:
+            _LOGGER.debug(
+                "agent_plan_rejected turn=%s reason=%s", turn_id, result.reason
+            )
 
     async def _run_async_agent_plan(
         self,
@@ -575,6 +583,10 @@ class SessionRuntime:
             self._apply_agent_plan(
                 result, audience_input, turn_id, correlation, composition
             )
+        else:
+            _LOGGER.debug(
+                "agent_plan_rejected turn=%s reason=%s", turn_id, result.reason
+            )
 
     def _apply_agent_plan(
         self,
@@ -625,7 +637,13 @@ class SessionRuntime:
         self._apply_memory_patch(accepted, correlation, turn_id)
         for index, operation in enumerate(accepted.plan.state_operations):
             if operation.kind == "create_task":
-                self._create_brain_task(operation.payload, turn_id, correlation, index)
+                self._create_brain_task(
+                    operation.payload,
+                    accepted.plan.response_text,
+                    turn_id,
+                    correlation,
+                    index,
+                )
             elif operation.kind == "cancel_task":
                 task_id = operation.payload.get("task_id")
                 if isinstance(task_id, str):
@@ -729,6 +747,7 @@ class SessionRuntime:
     def _create_brain_task(
         self,
         payload: dict[str, object],
+        response_text: str,
         turn_id: TurnId,
         correlation: EventCorrelation,
         index: int,
@@ -743,7 +762,7 @@ class SessionRuntime:
             else deadline_ms
         )
         task_id = TaskId(f"brain-{turn_id}-{index}")
-        _ = self.schedule_task(
+        outcome = self.schedule_task(
             TaskRequest(
                 task_id=task_id,
                 session_id=self.scheduler.snapshot.session_id,
@@ -756,6 +775,54 @@ class SessionRuntime:
             ),
             correlation,
         )
+        if outcome.accepted and payload.get("task_kind") == "tts":
+            self._agent_tts_text[task_id] = response_text
+
+    async def run_agent_tts_for_turn(
+        self,
+        turn_id: TurnId,
+        synthesize: Callable[[str], Awaitable[bool]],
+        correlation: EventCorrelation,
+    ) -> bool:
+        """Run one reducer-approved TTS task and commit only successful output.
+
+        The caller owns the transport adapter; this runtime retains task lifecycle
+        validation so an unaccepted or stale plan can never reach TTS.
+        """
+        for task_id, text in tuple(self._agent_tts_text.items()):
+            record = self.task_registry.task(task_id)
+            if (
+                record is None
+                or record.request.turn_id != turn_id
+                or record.state is not TaskState.PENDING
+            ):
+                continue
+            if not text.strip():
+                _ = self.cancel_task(task_id, correlation)
+                _ = self._agent_tts_text.pop(task_id, None)
+                return False
+            try:
+                emitted = await synthesize(text)
+            except (OSError, ValueError):
+                emitted = False
+                _LOGGER.exception("agent_tts_execution_failed task=%s", task_id)
+            if not emitted:
+                _ = self.cancel_task(task_id, correlation)
+                _ = self._agent_tts_text.pop(task_id, None)
+                return False
+            committed = self.reduce_task(
+                TaskResult(
+                    task_id,
+                    record.request.session_id,
+                    record.request.turn_id,
+                    record.request.snapshot_revision,
+                    TaskEffect("tts.emitted", text[:240]),
+                ),
+                correlation,
+            ).accepted
+            _ = self._agent_tts_text.pop(task_id, None)
+            return committed
+        return False
 
     def receive_control(self, raw_message: str) -> bool:
         parsed = parse_presentation_result_control(

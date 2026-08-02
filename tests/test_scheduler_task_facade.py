@@ -1,3 +1,4 @@
+import asyncio
 import json
 from dataclasses import replace
 
@@ -120,6 +121,34 @@ def test_runtime_routes_comment_through_agent_gate_and_brain_snapshot() -> None:
     assert runtime.interaction_ingress.data.memory.snapshot.entries[0].value == "小莓"
     assert effects.media == [MediaOperation("synthesize", text="answer")]
     assert effects.frontend == [FrontendOperation("caption", "answer")]
+
+
+def test_runtime_emits_reducer_approved_tts_task_once() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-tts"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        clock=lambda: 10,
+        agent_pipeline=AgentPipeline(_AcceptGate(), _PlanBrain(), _NoTools()),
+        agent_capabilities=frozenset({"task:tts"}),
+    )
+    correlation = EventCorrelation(
+        TraceId("tts"), SessionId("session-tts"), EventSequence(1)
+    )
+    outcome = runtime.receive_comment(CommentProposal("question", correlation))
+    assert outcome.accepted
+    assert outcome.turn_id is not None
+    emitted: list[str] = []
+
+    async def synthesize(text: str) -> bool:
+        emitted.append(text)
+        return True
+
+    assert asyncio.run(
+        runtime.run_agent_tts_for_turn(outcome.turn_id, synthesize, correlation)
+    )
+    assert emitted == ["answer"]
+    assert runtime.observables.task_commits[-1].effect.effect_type == "tts.emitted"
 
 
 def test_runtime_commits_brain_compaction_against_its_snapshot() -> None:

@@ -388,7 +388,13 @@ _OPERATION_SCHEMA: dict[str, object] = {
     "type": "object",
     "additionalProperties": False,
     "required": ["kind", "payload"],
-    "properties": {"kind": {"type": "string"}, "payload": {"type": "object"}},
+    "properties": {
+        "kind": {
+            "type": "string",
+            "enum": ["create_task", "cancel_task", "context.compact", "memory.patch"],
+        },
+        "payload": {"type": "object"},
+    },
 }
 
 _AGENT_PLAN_SCHEMA: dict[str, object] = {

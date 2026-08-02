@@ -29,6 +29,7 @@ from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.sessions import EventCorrelation, EventSequence
+from orchestrator.streaming_contracts import StreamKey
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import (
     AsrFinal,
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from orchestrator.agent_pipeline import FrontendOperation
     from orchestrator.ids import TurnId
     from orchestrator.observability import OnsiteObservability
+    from orchestrator.runtime_contracts import RuntimeOutcome
     from orchestrator.scheduler_reflex import SchedulerOutputFence
     from orchestrator.scheduler_runtime import SessionRuntime
     from orchestrator.streaming_contracts import (
@@ -59,7 +61,6 @@ if TYPE_CHECKING:
         FlushFailure,
         SegmentId,
         StreamFlush,
-        StreamKey,
     )
 
 
@@ -189,7 +190,31 @@ class TransportRuntime:
             EventSequence(event.seq),
         )
         outcome = await session_runtime.receive_asr_final_async(event, correlation)
+        await self._run_agent_tts(
+            session_runtime, outcome, stream, correlation
+        )
         return outcome.accepted
+
+    async def _run_agent_tts(
+        self,
+        session_runtime: SessionRuntime,
+        outcome: RuntimeOutcome,
+        stream: StreamKey,
+        correlation: EventCorrelation,
+    ) -> None:
+        bridge = self._onsite_bridge
+        if (
+            outcome.accepted
+            and outcome.turn_id is not None
+            and isinstance(bridge, OnsiteExplainerBridge)
+        ):
+            _ = await session_runtime.run_agent_tts_for_turn(
+                outcome.turn_id,
+                lambda text: bridge.speak_agent_plan(
+                    stream, text, session_runtime.cancellation_epoch
+                ),
+                correlation,
+            )
 
     def set_observability(self, observability: OnsiteObservability) -> None:
         self._hub.set_observability(observability)
@@ -369,6 +394,14 @@ class TransportRuntime:
                         )
                         outcome = await runtime.receive_asr_final_async(
                             event, correlation
+                        )
+                        await self._run_agent_tts(
+                            runtime,
+                            outcome,
+                            StreamKey(
+                                control_event.session_id, control_event.stream_id
+                            ),
+                            correlation,
                         )
                         _LOGGER.debug(
                             "mic_asr_final_processed session=%s segment=%s accepted=%s turn=%s",  # noqa: E501

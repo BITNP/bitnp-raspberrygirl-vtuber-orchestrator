@@ -685,6 +685,28 @@ class OnsiteExplainerBridge:
             return chunks
         return None
 
+    async def speak_agent_plan(
+        self, stream: StreamKey, text: str, epoch: CancellationEpoch
+    ) -> bool:
+        """Synthesize one accepted Brain reply and deliver paced RTP to Sound."""
+        cancellation = CancellationToken()
+        chunks = await asyncio.to_thread(self.synthesize, text, cancellation)
+        if not chunks or not self.authorize_output(stream, epoch):
+            return False
+        packetizer = TtsPcmRtpPacketizer(stream=stream, cancellation_epoch=epoch)
+        packets = tuple(packet for chunk in chunks for packet in packetizer.push(chunk))
+        packets += packetizer.finish()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time()
+        for packet in packets:
+            await self.output(stream, epoch, packet)
+            deadline += 0.02
+            delay = deadline - loop.time()
+            if delay > 0:
+                await asyncio.sleep(delay)
+        await self.output_finished(stream, epoch)
+        return True
+
     def stream_synthesize(
         self, text: str, cancellation: CancellationToken
     ) -> Iterator[Pcm16leChunk] | None:

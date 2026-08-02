@@ -127,6 +127,17 @@ def test_invalid_json_is_repaired_once_without_effect_from_bad_plan() -> None:
     assert result.effects == ()
 
 
+def test_task_capability_name_is_not_a_state_operation() -> None:
+    audience_input = _input(AudienceSource.ASR, "question", 0)
+    plan = _plan(
+        state_operations=[{"kind": "task:tts", "payload": {"text": "您好"}}]
+    )
+
+    assert AgentPlanReducer().reduce(
+        _snapshot(audience_input), AgentPlan.from_json(plan), stage=PlanStage.INITIAL
+    ) == PlanRejected("unsupported_state_operation")
+
+
 def test_tool_plan_requires_a_final_plan_with_no_new_tool_request() -> None:
     audience_input = _input(AudienceSource.ASR, "question", 0)
     initial = _plan(
