@@ -39,14 +39,16 @@ def test_reference_audio_summary_never_contains_base64_payload() -> None:
     assert "private-audio" not in summary
 
 
-def test_openai_sdk_debug_logs_are_suppressed() -> None:
-    logger = logging.getLogger("openai")
-    original_level = logger.level
+def test_dependency_debug_logs_are_suppressed() -> None:
+    loggers = tuple(logging.getLogger(name) for name in ("openai", "httpcore"))
+    original_levels = tuple(logger.level for logger in loggers)
     try:
         configure_dependency_loggers()
 
-        assert logger.level == logging.INFO
-        assert not logger.isEnabledFor(logging.DEBUG)
-        assert logger.isEnabledFor(logging.INFO)
+        for logger in loggers:
+            assert logger.level == logging.INFO
+            assert not logger.isEnabledFor(logging.DEBUG)
+            assert logger.isEnabledFor(logging.INFO)
     finally:
-        logger.setLevel(original_level)
+        for logger, original_level in zip(loggers, original_levels, strict=True):
+            logger.setLevel(original_level)

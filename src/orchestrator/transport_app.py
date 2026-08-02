@@ -88,4 +88,5 @@ def _log_level(env: Mapping[str, str]) -> int:
 
 def configure_dependency_loggers() -> None:
     """Keep provider diagnostics readable without exposing request payloads."""
-    logging.getLogger("openai").setLevel(logging.INFO)
+    for logger_name in ("openai", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.INFO)
