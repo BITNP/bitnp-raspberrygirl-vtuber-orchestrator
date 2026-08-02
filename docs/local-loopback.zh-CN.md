@@ -6,7 +6,7 @@
 
 - 在三个服务仓库分别完成 `uv sync --locked`。
 - 每个服务都有自己的本地 `.env`；它不应提交。进程不会自动读取该文件，必须用 `uv run --env-file .env <command>` 启动。
-- Orchestrator 现场桥仍需要可用的 ASR、LLM、vLLM-Omni TTS provider。特别是 `ORCHESTRATOR_TTS_VOICE`、`ORCHESTRATOR_TTS_REF_AUDIO` 和 `ORCHESTRATOR_TTS_REF_TEXT` 都必须非空，且 voice ID 必须被 TTS 服务接受。
+- Mic 需要可用的 OpenAI-compatible ASR provider；Orchestrator 需要可用的 LLM、vLLM-Omni TTS provider。特别是 `ORCHESTRATOR_TTS_VOICE`、`ORCHESTRATOR_TTS_REF_AUDIO` 和 `ORCHESTRATOR_TTS_REF_TEXT` 都必须非空，且 voice ID 必须被 TTS 服务接受。
 - Mic 与 Sound 使用完全相同的 session ID 与 stream ID。
 
 ## 配置
@@ -39,6 +39,8 @@ MIC_ALLOW_LOOPBACK_WS=true
 TRUSTED_LAN_TOKEN=
 BITNP_SESSION_ID=session-onsite-001
 BITNP_MIC_RTP_STREAM_ID=onsite-primary
+MIC_ASR_ENDPOINT=http://127.0.0.1:8090/v1/audio/transcriptions
+MIC_ASR_MODEL=<openai-compatible-asr-model>
 ```
 
 Sound `.env`：
@@ -74,12 +76,12 @@ uv run --env-file .env mic-stream
 
 先让 Sound 完成 sink 注册，再启动 Mic。Mic 完成 source register/ready handshake 后才会发送 RTP。若进程在启动前失败，按下表检查配置：
 
-正常的静音或无有效语音片段可能使 ASR 返回空 `text`；Orchestrator 会将其记为 `onsite_asr_empty` 并丢弃，不会发起 LLM 或 TTS，也不应记录 `onsite_asr_permanent_failure`。
+正常的静音或无有效语音片段不会由 Mic 发送 `asr.final`，因此不会发起 Gate、LLM 或 TTS。
 
 | 错误 | 原因与处理 |
 | --- | --- |
 | `config field is blank: ORCHESTRATOR_TRANSPORT_ADVERTISED_HOST` | `.env` 未加载，或缺少该变量；使用 `uv run --env-file .env orchestrator-transport` 并填写 loopback 地址。 |
-| `onsite bridge configuration is incomplete: voice_reference` | 填写非空的 `ORCHESTRATOR_TTS_VOICE`、`ORCHESTRATOR_TTS_REF_AUDIO` 与 `ORCHESTRATOR_TTS_REF_TEXT`。 |
+| `MIC_ASR_ENDPOINT: response lacks text` | 确认 Mic ASR endpoint 返回带字符串 `text` 的 OpenAI-compatible transcription 响应。 |
 | WebSocket `HTTP 401` | Mic 或 Sound 在回环模式仍发送 token；将其 `.env` 中的 `TRUSTED_LAN_TOKEN` 清空后重启客户端。 |
 | `ORCHESTRATOR_WS_URL: must use WSS outside explicit loopback test mode` | Sound 缺少 `SOUND_ALLOW_LOOPBACK_WS=true`，或 URL 不是 `ws://localhost`、`ws://127.0.0.1` 或 `ws://[::1]`。 |
 

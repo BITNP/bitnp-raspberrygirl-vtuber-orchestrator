@@ -4,8 +4,8 @@ Raspberry Girl 是一个面向公开讲解、虚拟主播和现场产品介绍�
 
 ## 项目功能
 
-- 语音输入：Mic 采集 16 kHz 单声道音频，通过 RTP 交给 Orchestrator。
-- 智能回复：Orchestrator 调用 ASR、LLM、TTS provider，并维护会话、轮次、任务和取消状态。
+- 语音输入：Mic 采集 16 kHz 单声道音频，在本地完成端点检测与 ASR，并将 RTP 与结构化 ASR final 交给 Orchestrator。
+- 智能回复：Orchestrator 通过统一 Gate 和 LLM Brain 处理语音与评论，调用 LLM、TTS provider，并维护会话、轮次、任务和取消状态。
 - 语音输出：Sound 接收 Orchestrator 生成的 L16 RTP 音频并播放。
 - 观众输入：Comments 将观众评论规范化为 `audience.input` 事件提交给 Orchestrator。
 - 虚拟形象控制：Frontend 接收 Orchestrator 的表情、动作、场景和演示控制命令。
