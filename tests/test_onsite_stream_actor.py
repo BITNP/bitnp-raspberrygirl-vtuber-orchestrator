@@ -22,7 +22,7 @@ from orchestrator.streaming_endpoint import EndpointedUtterance, EndpointReason
 from orchestrator.tts_rtp import Pcm16leChunk
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Awaitable, Iterator
 
     from orchestrator.llm import CancellationToken
 
@@ -50,7 +50,7 @@ class _Stages:
 
     def answer(
         self, event: ASRAudienceEvent, cancellation: CancellationToken
-    ) -> TurnResult:
+    ) -> TurnResult | Awaitable[TurnResult]:
 
         _ = (event, cancellation)
 
@@ -212,6 +212,53 @@ def test_actor_emits_streaming_tts_chunks_without_materializing_clip() -> None:
 
 def test_actor_keeps_rtp_clock_running_while_semantic_gate_blocks() -> None:
     asyncio.run(_semantic_gate_does_not_block_rtp_proof())
+
+
+def test_actor_keeps_event_loop_responsive_while_tts_blocks() -> None:
+    asyncio.run(_blocking_tts_does_not_block_event_loop_proof())
+
+
+async def _blocking_tts_does_not_block_event_loop_proof() -> None:
+    stages = _AsyncAnswerBlockingTtsStages()
+    stream = StreamKey("session", "stream")
+    actor = OnsiteStreamActor(stream, CancellationEpoch(0), stages)
+    waiting_for_tts = asyncio.create_task(asyncio.to_thread(stages.tts_started.wait))
+    started_at = monotonic()
+
+    actor.submit(_endpoint(stream), CancellationEpoch(0))
+    await waiting_for_tts
+
+    # If TTS were called on the event loop, this resume would be delayed until
+    # the synchronous adapter returns instead of observing its start promptly.
+    assert monotonic() - started_at < 0.15
+    await actor.wait_quiescent()
+
+
+@dataclass(slots=True)
+class _AsyncAnswerBlockingTtsStages(_Stages):
+
+    tts_started: threading.Event = field(default_factory=threading.Event)
+
+    @override
+    async def answer(
+        self, event: ASRAudienceEvent, cancellation: CancellationToken
+    ) -> TurnResult:
+        _ = (event, cancellation)
+        return TurnResult(
+            PipelineTurnId("turn"),
+            PipelineSegmentId("segment"),
+            "answer",
+            used_fallback=False,
+        )
+
+    @override
+    def synthesize(
+        self, turn: TurnResult, cancellation: CancellationToken
+    ) -> tuple[Pcm16leChunk, ...]:
+        _ = (turn, cancellation)
+        self.tts_started.set()
+        _ = threading.Event().wait(0.300)
+        return (Pcm16leChunk(b"\x10\x20" * 320),)
 
 
 async def _semantic_gate_does_not_block_rtp_proof() -> None:

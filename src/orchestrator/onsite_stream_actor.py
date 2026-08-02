@@ -516,7 +516,7 @@ class OnsiteStreamActor:
             getattr(self.stages, "stream_synthesize", None),
         )
         if streamer is not None:
-            stream = streamer(turn, cancellation)
+            stream = await asyncio.to_thread(streamer, turn, cancellation)
             if stream is not None:
                 return _SynthesizedAnswer(
                     None,
@@ -528,7 +528,10 @@ class OnsiteStreamActor:
 
         tts_started_at = time.perf_counter()
 
-        chunks = self.stages.synthesize(turn, cancellation)
+        # TTS adapters use synchronous HTTP clients.  The answer stage is async
+        # in production, so calling the adapter directly here would otherwise
+        # stall the transport loop and starve websocket keepalive ping/pong.
+        chunks = await asyncio.to_thread(self.stages.synthesize, turn, cancellation)
 
         self._record_correlation(
             "tts", correlation, (time.perf_counter() - tts_started_at) * 1_000
