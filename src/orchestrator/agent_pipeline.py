@@ -9,11 +9,12 @@ and comment ingress share exactly the same policy.
 
 from __future__ import annotations
 
-import json
 from collections import deque
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol, cast, final
+
+from orchestrator.json_boundary import JsonBoundaryError, JsonValue, parse_json_value
 
 
 class AudienceSource(StrEnum):
@@ -146,12 +147,12 @@ class AgentPlan:
     @classmethod
     def from_json(cls, raw: str) -> AgentPlan:
         try:
-            value: object = json.loads(raw)
-        except json.JSONDecodeError as error:
+            value = parse_json_value(raw)
+        except JsonBoundaryError as error:
             raise PlanError("plan is not JSON") from error
         if not isinstance(value, dict):
             raise PlanError("plan must be an object")
-        document = cast("dict[str, object]", value)
+        document = value
         allowed = {
             "response_text",
             "expected_revision",
@@ -187,8 +188,11 @@ class AgentPlan:
             ),
             tool_requests=_tool_requests(document.get("tool_requests", [])),
             citations=_strings(document.get("citations", []), "citations"),
-            memory_patches=_objects(
-                document.get("memory_patches", []), "memory_patches"
+            memory_patches=tuple(
+                dict(patch)
+                for patch in _objects(
+                    document.get("memory_patches", []), "memory_patches"
+                )
             ),
         )
 
@@ -547,7 +551,7 @@ class AsyncAgentPipeline:
         return self.reducer.reduce(snapshot, plan, stage=stage)
 
 
-def _strings(value: object, field: str) -> tuple[str, ...]:
+def _strings(value: JsonValue, field: str) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise PlanError(f"{field} is invalid")
     strings = tuple(item for item in value if isinstance(item, str))
@@ -556,21 +560,22 @@ def _strings(value: object, field: str) -> tuple[str, ...]:
     return strings
 
 
-def _objects(value: object, field: str) -> tuple[dict[str, object], ...]:
+def _objects(value: JsonValue, field: str) -> tuple[dict[str, JsonValue], ...]:
     if not isinstance(value, list):
         raise PlanError(f"{field} is invalid")
     objects = tuple(item for item in value if isinstance(item, dict))
     if len(objects) != len(value):
         raise PlanError(f"{field} is invalid")
-    return tuple(cast("dict[str, object]", item) for item in objects)
+    return objects
 
 
 def _operations(
-    value: object, operation_type: type[StateOperation]
+    value: JsonValue, operation_type: type[StateOperation]
 ) -> tuple[StateOperation, ...]:
     objects = _objects(value, "operations")
     operations: list[StateOperation] = []
-    for item in objects:
+    for raw_item in objects:
+        item = dict(raw_item)
         kind = item.pop("kind", None)
         payload = item.pop("payload", {})
         if not isinstance(kind, str) or not isinstance(payload, dict) or item:
@@ -579,7 +584,7 @@ def _operations(
     return tuple(operations)
 
 
-def _media_operations(value: object) -> tuple[MediaOperation, ...]:
+def _media_operations(value: JsonValue) -> tuple[MediaOperation, ...]:
     result: list[MediaOperation] = []
     for item in _objects(value, "media_operations"):
         if set(item) - {"kind", "audio_id", "text"} or not isinstance(
@@ -595,7 +600,7 @@ def _media_operations(value: object) -> tuple[MediaOperation, ...]:
     return tuple(result)
 
 
-def _frontend_operations(value: object) -> tuple[FrontendOperation, ...]:
+def _frontend_operations(value: JsonValue) -> tuple[FrontendOperation, ...]:
     result: list[FrontendOperation] = []
     for item in _objects(value, "frontend_operations"):
         if set(item) - {"kind", "value"} or not isinstance(item.get("kind"), str):
@@ -609,7 +614,7 @@ def _frontend_operations(value: object) -> tuple[FrontendOperation, ...]:
     return tuple(result)
 
 
-def _tool_requests(value: object) -> tuple[ToolRequest, ...]:
+def _tool_requests(value: JsonValue) -> tuple[ToolRequest, ...]:
     result: list[ToolRequest] = []
     for item in _objects(value, "tool_requests"):
         if (
