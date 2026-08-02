@@ -199,6 +199,10 @@ class VoiceProfileService:
 
         self._vault.delete(profile_id)
 
+    def delete_all(self) -> None:
+        for profile_id in tuple(self._records):
+            self.delete(profile_id)
+
     def bind_memory(self, memory: MutableMemory) -> MutableMemorySnapshot:
         return memory.set_profile_revisions(
             self._profile_revision,

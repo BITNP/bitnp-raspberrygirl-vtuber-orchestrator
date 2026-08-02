@@ -243,6 +243,12 @@ class MutableMemory:
 
         return self.snapshot
 
+    def clear(self) -> MutableMemorySnapshot:
+        self._entries.clear()
+        self._conflict_audit.clear()
+        self._revision = MemoryRevision(self._revision + 1)
+        return self.snapshot
+
     def set_profile_revisions(
         self,
         profile_revision: ProfileRevision,

@@ -141,6 +141,12 @@ class SessionDataState:
     def reset_context(self) -> None:
         _ = self.context.reset()
 
+    def clear_session(self) -> None:
+        """Erase all in-memory session-owned mutable state before disk cleanup."""
+        _ = self.memory.clear()
+        _ = self.context.reset()
+        self.profiles.delete_all()
+
     def enroll_profile(self, enrollment: ProfileEnrollment) -> VoiceProfileId:
         profile_id = self.profiles.enroll(enrollment)
 

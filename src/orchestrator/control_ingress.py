@@ -66,6 +66,11 @@ class MemoryDeleteControl:
     correlation: EventCorrelation
 
 
+@dataclass(frozen=True, slots=True)
+class SessionEndControl:
+    correlation: EventCorrelation
+
+
 type SessionControl = (
     ProfileEnrollmentControl
     | ProfileRevocationControl
@@ -74,6 +79,7 @@ type SessionControl = (
     | PresentationResultControl
     | ContextResetControl
     | MemoryDeleteControl
+    | SessionEndControl
 )
 
 
@@ -138,6 +144,9 @@ def parse_session_control(  # noqa: C901, PLR0911, PLR0912
                 if key is not None and set(data) == {"key"}
                 else None
             )
+
+        case "session.end.command", "orchestrator":
+            return SessionEndControl(correlation) if data == {} else None
 
         case _:
             return None

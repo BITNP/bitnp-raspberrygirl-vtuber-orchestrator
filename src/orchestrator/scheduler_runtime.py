@@ -30,6 +30,7 @@ from orchestrator.control_ingress import (
     ProfileEnrollmentControl,
     ProfileRevocationControl,
     SessionControl,
+    SessionEndControl,
 )
 from orchestrator.identity import ProfileEnrollment, VoiceProfileId
 from orchestrator.ids import SegmentId, SessionId, TurnId
@@ -229,6 +230,8 @@ class SessionRuntime:
 
     _voice_evidence_ranges: list[tuple[str, int, int]] = field(default_factory=list)
 
+    _ended: bool = False
+
     operational_journal: OperationalJournal = field(default_factory=OperationalJournal)
 
     @classmethod
@@ -322,6 +325,9 @@ class SessionRuntime:
     def receive_comment(self, proposal: CommentProposal) -> RuntimeOutcome:
         correlation = proposal.correlation
 
+        if self._ended:
+            return self._reject(correlation, "session_ended")
+
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
 
@@ -397,6 +403,11 @@ class SessionRuntime:
         context = composition.snapshot
         memory = self.interaction_ingress.data.memory.snapshot
         retrieval = self.interaction_ingress.data.retrieval.snapshot
+        corpus_version = f"{retrieval.corpus_id}@{retrieval.corpus_revision}"
+        index_version = f"{retrieval.index_id}@{retrieval.index_revision}"
+        knowledge_reference = (
+            f"本地知识库: corpus={corpus_version}, index={index_version}"
+        )
         snapshot = BrainStateSnapshot(
             session_id=str(self.scheduler.snapshot.session_id),
             turn_id=str(turn_id),
@@ -425,11 +436,7 @@ class SessionRuntime:
             memory_revision=int(memory.revision),
             context_budget=512,
             compaction_required=bool(composition.digests),
-            knowledge_references=(
-                "本地知识库: "
-                f"corpus={retrieval.corpus_id}@{retrieval.corpus_revision}, "
-                f"index={retrieval.index_id}@{retrieval.index_revision}",
-            ),
+            knowledge_references=(knowledge_reference,),
         )
         result = pipeline.run(snapshot)
         self._agent_results.append(result)
@@ -651,6 +658,9 @@ class SessionRuntime:
                     correlation, "memory_deleted", accepted=True, task_id=None
                 )
 
+            case SessionEndControl(correlation=correlation):
+                return self.end_session(correlation)
+
     async def receive_session_control_async(
         self, control: SessionControl
     ) -> RuntimeOutcome:
@@ -702,6 +712,8 @@ class SessionRuntime:
     ) -> RuntimeOutcome:
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
+        if self._ended:
+            return self._reject(correlation, "session_ended")
 
         audience_input = BrainAudienceInput(
             session_id=str(correlation.session_id),
@@ -756,6 +768,23 @@ class SessionRuntime:
 
         return self._interaction_outcome(
             correlation, "profile_enrolled", accepted=True, task_id=None
+        )
+
+    def end_session(self, correlation: EventCorrelation) -> RuntimeOutcome:
+        """Cancel session work and erase session-owned durable and transient state."""
+        if self._ended:
+            return self._reject(correlation, "session_ended")
+        _ = self.task_registry.cancel_pending(reason="session_ended")
+        for command_id in tuple(self._active_deck_tasks.values()):
+            _ = self.deck_dispatcher.cancel(command_id)
+        self._deck_intents.clear()
+        self._active_deck_tasks.clear()
+        self._voice_evidence_ranges.clear()
+        self.interaction_ingress.data.clear_session()
+        self.interaction_ingress.clear_session_data()
+        self._ended = True
+        return self._interaction_outcome(
+            correlation, "session_ended", accepted=True, task_id=None
         )
 
     def revoke_profile_consent(

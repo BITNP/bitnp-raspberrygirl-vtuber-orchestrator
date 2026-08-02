@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from os import environ
 from pathlib import Path
+from shutil import rmtree
 
 from orchestrator.ids import SessionId, TraceId
 from orchestrator.interactions import (
@@ -36,6 +37,8 @@ from orchestrator.voice_profile_service import VoiceProfileService
 class SessionInteractionIngress:
     data: SessionDataState
 
+    session_root: Path
+
     profiles: VoiceProfileService
 
     reducer: SessionInteractionReducer
@@ -58,6 +61,7 @@ class SessionInteractionIngress:
 
         return cls(
             data=data,
+            session_root=session_root,
             profiles=data.profiles,
             reducer=SessionInteractionReducer(
                 scheduler=scheduler,
@@ -67,6 +71,15 @@ class SessionInteractionIngress:
                 mcp_capabilities=frozenset({McpCapability.PRESENTATION_DECK}),
             ),
         )
+
+    def clear_session_data(self) -> None:
+        """Remove only the hashed directory dedicated to this one session."""
+        root = self.session_root.resolve()
+        state_root = _state_root().resolve()
+        if root.parent != state_root:
+            return
+        if root.exists():
+            rmtree(root)
 
     def receive_comment(
         self,
