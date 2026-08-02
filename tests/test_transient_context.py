@@ -1,4 +1,3 @@
-
 import pytest
 
 from orchestrator.ids import SegmentId, SessionId, TurnId
@@ -24,7 +23,6 @@ from orchestrator.transient_context import (
 def test_llm_final_is_the_complete_output_context_characterization() -> None:
     # Given: the existing adapter's stream lifecycle.
 
-
     request = LLMRequest(prompt=LLMPrompt(system="system", user="user"))
 
     adapter = MockLLMAdapter(answer_chunks=("first", "second"))
@@ -40,7 +38,6 @@ def test_llm_final_is_the_complete_output_context_characterization() -> None:
 
 def test_context_admits_only_finalized_inputs_and_accepted_outputs() -> None:
     # Given: final, partial, cancelled, stale, and accepted turn material.
-
 
     context = TransientContext(session_id=SessionId("session-1"))
 
@@ -78,10 +75,11 @@ def test_context_admits_only_finalized_inputs_and_accepted_outputs() -> None:
         ContextSourceId("output"),
     )
 
+    assert context.snapshot.generation == 2
+
 
 def test_compaction_is_deterministic_and_preserves_all_source_identities() -> None:
     # Given: one reproducible event sequence whose text exceeds the model budget.
-
 
     policy = StaticContextBudgetPolicy(
         model_id=ModelId("local-model"),
@@ -130,7 +128,6 @@ def test_compaction_is_deterministic_and_preserves_all_source_identities() -> No
 def test_compaction_digests_only_the_oversized_entry_between_retained_entries() -> None:
     # Given: a budget-three sequence with a middle entry too large to retain.
 
-
     policy = StaticContextBudgetPolicy(
         model_id=ModelId("local-model"),
         budget=ModelContextBudget(input_tokens=TokenBudget(3)),
@@ -174,7 +171,6 @@ def test_compaction_digests_only_the_oversized_entry_between_retained_entries() 
 def test_reset_clears_one_session_without_reusing_another_sessions_context() -> None:
     # Given: one populated session and a contribution from another session.
 
-
     context = TransientContext(session_id=SessionId("session-1"))
 
     _ = context.consider(FinalizedInput(_provenance("input-1", 1), "question"))
@@ -187,7 +183,7 @@ def test_reset_clears_one_session_without_reusing_another_sessions_context() -> 
 
     # Then: reset is observable, prior entries stay absent, and reuse fails.
 
-    assert reset_snapshot.generation == 1
+    assert reset_snapshot.generation == 2
 
     assert reset_snapshot.entries == ()
 

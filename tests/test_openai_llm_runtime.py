@@ -181,6 +181,43 @@ def test_async_runtime_uses_documented_gate_and_streaming_parameters() -> None:
     assert events[-1] == LLMFinal(text="hello world", used_fallback=False)
 
 
+def test_async_runtime_requests_strict_brain_json_schema() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    async def run() -> str:
+        runtime = AsyncOpenAICompatibleLLMRuntime(
+            endpoint="https://example.test/v1",
+            model="test-model",
+            api_key="test-key",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            return await runtime.complete_json(
+                LLMRequest(LLMPrompt("系统", "输入")),
+                schema_name="agent_plan",
+                schema={"type": "object"},
+            )
+        finally:
+            await runtime.aclose()
+
+    assert asyncio.run(run()) == "{}"
+    assert captured[0]["stream"] is False
+    assert captured[0]["temperature"] == 0.0
+    assert captured[0]["reasoning_effort"] == "none"
+    assert captured[0]["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "agent_plan",
+            "strict": True,
+            "schema": {"type": "object"},
+        },
+    }
+
+
 def test_async_gate_discards_rejected_parameters_and_closes_shared_client() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/chat/completions"

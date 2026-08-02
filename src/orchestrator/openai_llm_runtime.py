@@ -153,6 +153,49 @@ class AsyncOpenAICompatibleLLMRuntime:
         ) as error:
             raise provider_error(error) from error
 
+    async def complete_json(
+        self,
+        request: LLMRequest,
+        *,
+        schema_name: str,
+        schema: dict[str, object],
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        """Request one non-streaming strict JSON proposal from the LLM Brain."""
+        if schema_name.strip() == "":
+            raise AdapterConfigError(field_name="schema_name")
+        try:
+            response = await self._client.chat.completions.create(
+                model=self.model,
+                messages=chat_messages(request),
+                temperature=0.0,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": schema_name,
+                        "strict": True,
+                        "schema": schema,
+                    },
+                },
+                reasoning_effort="none",
+                timeout=self._request_timeout(timeout_seconds),
+            )
+            if len(response.choices) != 1:
+                raise ProviderResponseError(stage="llm", reason="missing_final")
+            content = response.choices[0].message.content
+            if not isinstance(content, str) or content.strip() == "":
+                raise ProviderResponseError(stage="llm", reason="missing_final")
+            return content  # noqa: TRY300 - exception conversion belongs below.
+        except (
+            APIConnectionError,
+            APITimeoutError,
+            APIStatusError,
+            APIError,
+            httpx.HTTPError,
+        ) as error:
+            raise provider_error(error) from error
+
     async def stream(  # noqa: C901
         self,
         request: LLMRequest,

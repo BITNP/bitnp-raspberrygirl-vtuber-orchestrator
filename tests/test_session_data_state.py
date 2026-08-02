@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 from orchestrator.identity import (
@@ -65,7 +64,6 @@ from orchestrator.transient_context import (
 def test_session_data_state_admits_only_approved_memory_and_finalized_context() -> None:
     # Given: one live session with immutable knowledge attribution.
 
-
     state = _state()
 
     # When: a supported ordinary preference and a finalized input are accepted.
@@ -82,7 +80,7 @@ def test_session_data_state_admits_only_approved_memory_and_finalized_context() 
 
     assert prompt_snapshot.task_state.memory_revision == 1
 
-    assert prompt_snapshot.task_state.context_generation == 0
+    assert prompt_snapshot.task_state.context_generation == 1
 
     assert prompt_snapshot.memory_entries == ("preferred_name=小莓",)
 
@@ -91,7 +89,6 @@ def test_session_data_state_admits_only_approved_memory_and_finalized_context() 
 
 def test_session_data_state_reset_and_profile_deletion_invalidate_prior_work() -> None:
     # Given: work captured after a consented profile and finalized context exist.
-
 
     state = _state()
 
@@ -130,7 +127,6 @@ def test_session_data_state_reset_and_profile_deletion_invalidate_prior_work() -
 
 def test_memory_delete_rejects_previously_admitted_task_without_effect() -> None:
     # Given: a task admitted against the current session data snapshot.
-
 
     state = _state()
 
@@ -185,7 +181,6 @@ def test_memory_store_persists_human_readable_approved_preference(
     tmp_path: Path,
 ) -> None:
     # Given: a real scheduler-owned file store for a new session.
-
 
     path = tmp_path / "ordinary-preferences.json"
 

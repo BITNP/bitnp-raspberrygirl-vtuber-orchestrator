@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -23,7 +22,6 @@ TokenBudget = NewType("TokenBudget", int)
 
 @dataclass(frozen=True, slots=True)
 class ContextProvenance:
-
     session_id: SessionId
 
     turn_id: TurnId
@@ -37,7 +35,6 @@ class ContextProvenance:
 
 @dataclass(frozen=True, slots=True)
 class FinalizedInput:
-
     provenance: ContextProvenance
 
     text: str
@@ -45,7 +42,6 @@ class FinalizedInput:
 
 @dataclass(frozen=True, slots=True)
 class AcceptedOutput:
-
     provenance: ContextProvenance
 
     text: str
@@ -53,7 +49,6 @@ class AcceptedOutput:
 
 @dataclass(frozen=True, slots=True)
 class PartialMaterial:
-
     provenance: ContextProvenance
 
     text: str
@@ -61,7 +56,6 @@ class PartialMaterial:
 
 @dataclass(frozen=True, slots=True)
 class CancelledMaterial:
-
     provenance: ContextProvenance
 
     text: str
@@ -69,7 +63,6 @@ class CancelledMaterial:
 
 @dataclass(frozen=True, slots=True)
 class StaleMaterial:
-
     provenance: ContextProvenance
 
     text: str
@@ -86,7 +79,6 @@ type ContextMaterial = (
 
 @unique
 class ContextEntryKind(StrEnum):
-
     INPUT = "input"
 
     OUTPUT = "output"
@@ -94,7 +86,6 @@ class ContextEntryKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ContextEntry:
-
     kind: ContextEntryKind
 
     provenance: ContextProvenance
@@ -104,7 +95,6 @@ class ContextEntry:
 
 @dataclass(frozen=True, slots=True)
 class TransientContextSnapshot:
-
     session_id: SessionId
 
     generation: int
@@ -114,7 +104,6 @@ class TransientContextSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class ModelContextBudget:
-
     input_tokens: TokenBudget
 
     def __post_init__(self) -> None:
@@ -123,14 +112,11 @@ class ModelContextBudget:
 
 
 class ContextBudgetPolicy(Protocol):
-
-    def budget_for(self, model_id: ModelId) -> ModelContextBudget:
-        ...
+    def budget_for(self, model_id: ModelId) -> ModelContextBudget: ...
 
 
 @dataclass(frozen=True, slots=True)
 class StaticContextBudgetPolicy:
-
     model_id: ModelId
 
     budget: ModelContextBudget
@@ -144,7 +130,6 @@ class StaticContextBudgetPolicy:
 
 @dataclass(frozen=True, slots=True)
 class ContextDigest:
-
     source_provenances: tuple[ContextProvenance, ...]
 
     content_hash: str
@@ -152,7 +137,6 @@ class ContextDigest:
 
 @dataclass(frozen=True, slots=True)
 class ContextComposition:
-
     snapshot: TransientContextSnapshot
 
     entries: tuple[ContextEntry, ...]
@@ -164,7 +148,6 @@ class ContextComposition:
 
 @dataclass(frozen=True, slots=True)
 class ContextSessionMismatchError(Exception):
-
     expected_session_id: SessionId
 
     actual_session_id: SessionId
@@ -176,7 +159,6 @@ class ContextSessionMismatchError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class InvalidContextBudgetError(Exception):
-
     input_tokens: TokenBudget
 
     @override
@@ -186,7 +168,6 @@ class InvalidContextBudgetError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class ModelBudgetUnavailableError(Exception):
-
     model_id: ModelId
 
     @override
@@ -196,7 +177,6 @@ class ModelBudgetUnavailableError(Exception):
 
 @final
 class TransientContext:
-
     def __init__(self, *, session_id: SessionId) -> None:
         self._session_id = session_id
 
@@ -220,11 +200,13 @@ class TransientContext:
                 self._entries.append(
                     ContextEntry(ContextEntryKind.INPUT, provenance, text)
                 )
+                self._generation += 1
 
             case AcceptedOutput(provenance=provenance, text=text):
                 self._entries.append(
                     ContextEntry(ContextEntryKind.OUTPUT, provenance, text)
                 )
+                self._generation += 1
 
             case PartialMaterial() | CancelledMaterial() | StaleMaterial():
                 pass
