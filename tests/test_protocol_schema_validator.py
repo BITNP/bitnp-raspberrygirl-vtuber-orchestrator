@@ -107,8 +107,8 @@ def test_protocol_validator_rejects_invalid_local_cue_and_legacy_event(
     assert legacy_result.returncode == 0, legacy_result.stdout + legacy_result.stderr
 
 
-def test_protocol_validator_rejects_noncanonical_rtp_codec() -> None:
-    # Given: a canonical source registration with a non-PT96 payload type.
+def test_protocol_validator_rejects_retired_mic_rtp_source_registration() -> None:
+    # Given: a retired Mic RTP source registration.
 
     # When: the independent schema validator checks its fixture.
 
@@ -120,11 +120,11 @@ def test_protocol_validator_rejects_noncanonical_rtp_codec() -> None:
         capture_output=True,
     )
 
-    # Then: rejection identifies the fixed RTP codec invariant.
+    # Then: rejection identifies the retired event type.
 
     assert result.returncode == 0, result.stdout + result.stderr
 
-    assert '"path": "$[0].data.codec.payload_type"' in result.stdout
+    assert '"path": "$[0].event_type"' in result.stdout
 
 
 def test_protocol_validator_rejects_closed_envelope_semantic_and_version_violations(

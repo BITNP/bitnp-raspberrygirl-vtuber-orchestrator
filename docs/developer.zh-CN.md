@@ -16,15 +16,15 @@
 
 ```text
 Comments -- WSS audience.input --> Orchestrator <-- WSS control/result -- Frontend
-Mic      -- WSS source/ASR control --> Orchestrator <-- WSS sink control ---- Sound
-Mic      -- UDP L16 RTP -----------> Orchestrator -- UDP generated L16 RTP -> Sound
+Mic      -- WSS input/ASR/evidence control --> Orchestrator <-- WSS sink control ---- Sound
+Orchestrator -------------------------------------- UDP generated L16 RTP ---> Sound
 ```
 
 Orchestrator 拥有 session state、revisioned event history、active turn、task registry、cancellation epoch、交互策略及 LLM/TTS provider 边界。Mic、Comments、Sound 不感知业务策略，不持有跨服务状态。Frontend 只消费 Orchestrator 命令并返回受限结果。
 
 ## 数据流动关系
 
-Mic 在本地对 20 ms PCM16 帧进行端点检测，将窗口提交给 OpenAI-compatible ASR，并在同一认证 control connection 发送 `asr.final`；`asr.partial` 仅用于诊断。Orchestrator 只接受已注册 stream、当前 session/epoch、未重放序列及合法 RTP 范围的 final，然后与评论共用 Gate、队列和 Brain。LLM/TTS 生成的音频经校验后重新 packetize 为 L16 RTP 发给 Sound。每个输出使用独立 packetizer 和生成 SSRC；新的有效 ASR final 会取消过期回答工作，已取消的 LLM/TTS 结果不得产生 RTP。原始 Mic RTP 不直接转发给 Sound。
+Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口提交给 OpenAI-compatible ASR；它在同一认证 control connection 发送 `asr.final`，`asr.partial` 仅用于诊断。Orchestrator 只接受已注册 stream、当前 session/epoch、未重放序列及合法 RTP 范围的 final，然后与评论共用 Gate、队列和 Brain。Mic 没有 UDP RTP 输入路径。LLM/TTS 生成的音频经校验后 packetize 为 L16 RTP 发给 Sound。每个输出使用独立 packetizer 和生成 SSRC；新的有效 ASR final 会取消过期回答工作，已取消的 LLM/TTS 结果不得产生 RTP。
 
 评论输入由 Comments 以规范 envelope 提交为 `audience.input`。Frontend 只接收 Orchestrator 源的 caption、action、scene、presentation 等命令，演示命令完成后返回 `presentation.result`。所有迟到、超时、取消或被 supersede 的任务即使物理完成，也不能提交状态或产生副作用。
 

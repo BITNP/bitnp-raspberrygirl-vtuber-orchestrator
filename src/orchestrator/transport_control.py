@@ -30,7 +30,7 @@ MAX_ASR_TEXT_LENGTH = 4_000
 
 
 type ControlEvent = (
-    SourceRegistration
+    MicInputRegistration
     | SinkRegistration
     | StreamReady
     | StreamState
@@ -68,6 +68,15 @@ class SourceRegistration:
 
     ssrc: int
 
+    correlation: EnvelopeCorrelation
+
+
+@dataclass(frozen=True, slots=True)
+class MicInputRegistration:
+    """Authenticated Mic input identity; it deliberately has no RTP endpoint."""
+
+    session_id: str
+    stream_id: str
     correlation: EnvelopeCorrelation
 
 
@@ -179,7 +188,7 @@ def bearer_token_matches(
     return hmac.compare_digest(authorization.removeprefix(prefix), token)
 
 
-def parse_control_event(raw_message: str) -> ControlEvent:  # noqa: C901
+def parse_control_event(raw_message: str) -> ControlEvent:
     value = parse_json_value(raw_message)
 
     if not isinstance(value, dict):
@@ -198,14 +207,10 @@ def parse_control_event(raw_message: str) -> ControlEvent:  # noqa: C901
     )
 
     match event_type:
-        case "media.rtp.source.register":
-            _validate_source_registration(data, _text(value, "source"))
-
-            parsed: ControlEvent = SourceRegistration(
-                session_id=_text(value, "session_id"),
-                stream_id=_text(data, "stream_id"),
-                ssrc=_ssrc(data),
-                correlation=correlation,
+        case "mic.input.register":
+            _validate_mic_input_registration(data, _text(value, "source"))
+            parsed = MicInputRegistration(
+                _text(value, "session_id"), _text(data, "stream_id"), correlation
             )
 
         case "media.rtp.sink.register":
@@ -216,13 +221,6 @@ def parse_control_event(raw_message: str) -> ControlEvent:  # noqa: C901
                 stream_id=_text(data, "stream_id"),
                 udp_port=_endpoint_port(data),
                 correlation=correlation,
-            )
-
-        case "media.rtp.source.ready":
-            _validate_source_ready(data, _text(value, "source"))
-
-            parsed = StreamReady(
-                _text(value, "session_id"), _text(data, "stream_id"), correlation
             )
 
         case "media.rtp.sink.ready":
@@ -351,15 +349,12 @@ def _validate_envelope(value: dict[str, JsonValue]) -> None:
     _ = _mapping(value, "data")
 
 
-def _validate_source_registration(data: dict[str, JsonValue], source: str) -> None:
-    if source != "mic" or set(data) != {"stream_id", "ssrc", "codec", "rtp_endpoint"}:
-        raise ControlEnvelopeError(field_name="source")
-
+def _validate_mic_input_registration(
+    data: dict[str, JsonValue], source: str
+) -> None:
+    if source != "mic" or set(data) != {"stream_id"}:
+        raise ControlEnvelopeError(field_name="data")
     _ = _text(data, "stream_id")
-
-    _ = _ssrc(data)
-
-    _ = _endpoint_port(data)
 
 
 def _validate_sink_registration(data: dict[str, JsonValue], source: str) -> None:
@@ -369,15 +364,6 @@ def _validate_sink_registration(data: dict[str, JsonValue], source: str) -> None
     _ = _text(data, "stream_id")
 
     _ = _endpoint_port(data)
-
-
-def _validate_source_ready(data: dict[str, JsonValue], source: str) -> None:
-    if source != "mic" or set(data) != {"stream_id", "ssrc"}:
-        raise ControlEnvelopeError(field_name="source")
-
-    _ = _text(data, "stream_id")
-
-    _ = _ssrc(data)
 
 
 def _validate_sink_ready(data: dict[str, JsonValue], source: str) -> None:

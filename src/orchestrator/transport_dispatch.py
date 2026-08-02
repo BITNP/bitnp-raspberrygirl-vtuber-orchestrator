@@ -23,6 +23,7 @@ from orchestrator.streaming_contracts import (
 from orchestrator.transport_control import (
     ControlEvent,
     EnvelopeCorrelation,
+    MicInputRegistration,
     SinkRegistration,
     SourceRegistration,
     StreamReady,
@@ -115,7 +116,7 @@ class TransportControlDispatch:
 
         self._output_fence: SchedulerOutputFence | None = None
 
-    async def register(  # noqa: C901, PLR0912
+    async def register(  # noqa: C901, PLR0911, PLR0912
         self, raw_message: str, peer_ip: str, connection: ControlPeer
     ) -> None:
         event = parse_control_event(raw_message)
@@ -130,6 +131,10 @@ class TransportControlDispatch:
             self._record_playback(event)
 
         match event:
+            case MicInputRegistration(session_id=session_id, stream_id=stream_id):
+                await self._dispatch_start(StreamKey(session_id, stream_id))
+                return
+
             case SourceRegistration(
                 session_id=session_id, stream_id=stream_id, ssrc=ssrc
             ):
@@ -371,11 +376,9 @@ class TransportControlDispatch:
                 self._released_sources.discard(stream)
 
     async def _dispatch_start(self, stream: StreamKey) -> None:
-        source = self._sources.get(stream)
-
         sink = self._sinks.get(stream)
 
-        if source is None or sink is None or stream in self._dispatched:
+        if sink is None or stream in self._dispatched:
             return
 
         self._dispatched.add(stream)

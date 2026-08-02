@@ -13,12 +13,12 @@ from orchestrator.streaming_contracts import (
     StreamFlush,
     StreamKey,
 )
-from orchestrator.streaming_pipeline_actors import StreamPipelineActors
 from orchestrator.transport_control import (
     AsrFinal,
     AsrPartial,
     ControlEvent,
     EnvelopeCorrelation,
+    MicInputRegistration,
     SinkRegistration,
     SourceRegistration,
     StreamReady,
@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from orchestrator.ids import ConnectionId
     from orchestrator.observability import OnsiteObservability, OnsiteStage
     from orchestrator.scheduler_reflex import SchedulerOutputFence
+    from orchestrator.streaming_pipeline_actors import StreamPipelineActors
 
 
 type PeerAddress = tuple[str, int]
@@ -138,6 +139,8 @@ class RtpHub:
 
         self._pending_sources: dict[StreamKey, PendingSource] = {}
 
+        self._mic_inputs: set[StreamKey] = set()
+
         self._pinned_sources: dict[RouteKey, StreamKey] = {}
 
         self._sinks: dict[StreamKey, PeerAddress] = {}
@@ -210,10 +213,7 @@ class RtpHub:
         source registration and be for the route's active cancellation epoch.
         """
         stream = StreamKey(event.session_id, event.stream_id)
-        if (
-            stream not in self._pending_sources
-            and stream not in self._pinned_sources.values()
-        ):
+        if stream not in self._mic_inputs:
             return False
         if int(event.cancellation_epoch) != self._route_generations.get(stream, 0):
             return False
@@ -327,6 +327,11 @@ class RtpHub:
         )
 
         match parsed_event:
+            case MicInputRegistration(session_id=session_id, stream_id=stream_id):
+                stream = StreamKey(session_id, stream_id)
+                self._mic_inputs.add(stream)
+                self._correlations[stream] = parsed_event.correlation
+
             case SourceRegistration(
                 session_id=session_id, stream_id=stream_id, ssrc=ssrc
             ):
@@ -372,47 +377,14 @@ class RtpHub:
                 return
 
     def route_datagram(self, data: bytes, peer: PeerAddress) -> bool:
-        if not _is_canonical_rtp(data):
-            return False
+        """Reject ingress UDP: RTP is an Orchestrator-to-Sound output only.
 
-        stream = self._find_route(_rtp_ssrc(data), peer)
-
-        if stream is None:
-            return False
-
-        self._record_rtp("rtp_ingress", stream)
-
-        sink = self._sinks.get(stream)
-
-        if sink is None or self._transport is None:
-            return False
-
-        if self._onsite_bridge is None:
-            return False
-
-        return self._route_onsite(data, stream)
-
-    def _route_onsite(self, data: bytes, stream: StreamKey) -> bool:
-        actors = self._onsite_actors
-
-        if actors is None:
-            actors = StreamPipelineActors(self._process_onsite_frame)
-
-            self._onsite_actors = actors
-
-        actors.submit(stream, data)
-
+        The listener remains attached because the same UDP transport emits
+        generated TTS packets to Sound.  No Mic address, SSRC, or packet is
+        accepted as an input route.
+        """
+        _ = data, peer
         return False
-
-    async def _process_onsite_frame(self, stream: StreamKey, frame: bytes) -> None:
-        bridge = self._onsite_bridge
-
-        if bridge is not None:
-            bridge.submit_mic_rtp(
-                stream,
-                frame,
-                CancellationEpoch(self._route_generations.get(stream, 0)),
-            )
 
     async def deliver_generated_rtp(
         self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
@@ -475,6 +447,8 @@ class RtpHub:
                 self._invalidate_stream(stream)
 
         self._pending_sources.clear()
+
+        self._mic_inputs.clear()
 
         self._correlations.clear()
 
