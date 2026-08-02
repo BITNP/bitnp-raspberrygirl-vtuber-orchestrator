@@ -49,6 +49,9 @@ class _Runtime:
 
         self.ingress = session_runtime.interaction_ingress
 
+    def set_session_runtime_factory(self, _factory: object) -> None:
+        return
+
     def set_observability(self, _observability: OnsiteObservability) -> None:
 
         self.observability_set = True
@@ -181,10 +184,10 @@ def test_transport_skips_onsite_bridge_for_mock_provider_config(
     assert runtime.observability_set is False
 
 
-def test_transport_enables_onsite_bridge_for_native_funasr_provider_config(
+def test_transport_enables_onsite_bridge_for_llm_tts_provider_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: the real ASR/LLM/TTS provider combination for onsite spoken dialogue.
+    # Given: the Mic-ASR, Orchestrator-LLM/TTS provider combination.
 
     runtime = _Runtime()
 

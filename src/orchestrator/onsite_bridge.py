@@ -23,7 +23,6 @@ from orchestrator.llm import (
 )
 from orchestrator.media_adapters import (
     MediaAdapterConfigError,
-    OpenAICompatibleASRAdapter,
     VllmOmniTTSAdapter,
 )
 from orchestrator.modes import AdaptiveAgentPolicy
@@ -164,6 +163,14 @@ def _build_asr_gate(llm: AsyncOpenAICompatibleLLMRuntime) -> AsyncAsrSemanticGat
     return AsyncAsrSemanticGate(provider)
 
 
+@dataclass(frozen=True, slots=True)
+class _MicOwnedAsrAdapter:
+    """Fail closed if retired local-ASR code is invoked accidentally."""
+
+    def transcribe(self, **_kwargs: object) -> ASRAudienceEvent | None:
+        return None
+
+
 @dataclass(slots=True)
 class OnsiteExplainerBridge:
     asr: AsrAdapter
@@ -239,6 +246,10 @@ class OnsiteExplainerBridge:
     def submit_mic_rtp(
         self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
     ) -> None:
+        # The transport never calls this retired API.  Fail closed if an older
+        # in-process caller reaches it: no endpointing, ASR, or output work.
+        _ = stream, packet, epoch
+        return
         frame_count = self._rtp_diagnostic_counts.get(stream, 0) + 1
         self._rtp_diagnostic_counts[stream] = frame_count
         if frame_count % _RTP_DIAGNOSTIC_INTERVAL == 0:
@@ -830,14 +841,8 @@ def build_onsite_bridge(
     ref_audio: str,
     ref_text: str,
 ) -> OnsiteExplainerBridge:
-    if (
-        config.asr_provider not in {"openai_compatible", "funasr"}
-        or config.tts_provider != "vllm_omni"
-    ):
-        raise OnsiteBridgeConfigError(field_name="asr_provider_or_tts_provider")
-
-    if config.asr_endpoint is None or config.asr_model is None:
-        raise OnsiteBridgeConfigError(field_name="asr_endpoint_or_asr_model")
+    if config.tts_provider != "vllm_omni":
+        raise OnsiteBridgeConfigError(field_name="tts_provider")
 
     if config.tts_endpoint is None or config.tts_model is None:
         raise OnsiteBridgeConfigError(field_name="tts_endpoint_or_tts_model")
@@ -873,20 +878,8 @@ def build_onsite_bridge(
     def pipeline_factory() -> OrchestratorTurnPipeline:
         return OrchestratorTurnPipeline(adapters=adapters, config=pipeline_config)
 
-    asr = OpenAICompatibleASRAdapter(
-        config.asr_endpoint,
-        config.asr_model,
-        config.asr_api_key,
-        ca_path=config.tls_ca_path,
-    )
-
-    if config.asr_provider == "funasr":
-        asr = FunASRWebSocketAdapter(
-            config.asr_endpoint, config.asr_model, config.tls_ca_path
-        )
-
     return OnsiteExplainerBridge(
-        asr=asr,
+        asr=_MicOwnedAsrAdapter(),
         tts=VllmOmniTTSAdapter(
             config.tts_endpoint,
             config.tts_model,
@@ -898,6 +891,6 @@ def build_onsite_bridge(
         voice=voice,
         ref_audio=ref_audio,
         ref_text=ref_text,
-        asr_gate=_build_asr_gate(llm),
+        asr_gate=None,
         llm=llm,
     )

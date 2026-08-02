@@ -76,8 +76,7 @@ async def run_transport() -> None:
 
 def _onsite_bridge_enabled(config: OrchestratorConfig) -> bool:
     return (
-        config.asr_provider in {"openai_compatible", "funasr"}
-        and config.llm_provider == "openai_compatible"
+        config.llm_provider == "openai_compatible"
         and config.tts_provider == "vllm_omni"
     )
 
