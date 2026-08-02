@@ -8,14 +8,6 @@ from urllib.parse import urlsplit
 _PREVIEW_BYTES: Final = 30
 
 
-def text_summary(value: str, *, preview_bytes: int = _PREVIEW_BYTES) -> str:
-    """Describe text without allowing an unbounded payload into a log record."""
-    encoded = value.encode("utf-8")
-    preview = encoded[:preview_bytes].decode("utf-8", errors="replace")
-    suffix = "" if len(encoded) <= preview_bytes else "…"
-    return f"chars={len(value)} bytes={len(encoded)} preview={preview!r}{suffix}"
-
-
 def binary_summary(value: bytes, *, preview_bytes: int = _PREVIEW_BYTES) -> str:
     """Describe binary data using a bounded hexadecimal prefix."""
     preview = value[:preview_bytes].hex()

@@ -188,9 +188,9 @@ def _receive_events(
 
         if isinstance(event, ASRPartialEvent):
             _LOGGER.debug(
-                "asr_funasr_response kind=partial segment=%s chars=%d",
+                "asr_funasr_response kind=partial segment=%s text=%r",
                 request.segment_id,
-                len(event.text),
+                event.text,
             )
             yield event
 
@@ -202,9 +202,9 @@ def _receive_events(
         final_emitted = True
 
         _LOGGER.debug(
-            "asr_funasr_response kind=final segment=%s chars=%d",
+            "asr_funasr_response kind=final segment=%s text=%r",
             request.segment_id,
-            len(event.text),
+            event.text,
         )
 
         yield event

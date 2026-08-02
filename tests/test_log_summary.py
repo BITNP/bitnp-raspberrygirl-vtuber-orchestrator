@@ -5,17 +5,8 @@ import logging
 from orchestrator.log_summary import (
     binary_summary,
     reference_audio_summary,
-    text_summary,
 )
 from orchestrator.transport_app import configure_dependency_loggers
-
-
-def test_text_summary_limits_preview_to_thirty_utf8_bytes() -> None:
-    summary = text_summary("x" * 31)
-
-    assert "chars=31 bytes=31" in summary
-    assert "preview='" + ("x" * 30) + "'…" in summary
-    assert "x" * 31 not in summary
 
 
 def test_binary_summary_limits_preview_to_thirty_bytes() -> None:

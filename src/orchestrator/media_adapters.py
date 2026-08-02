@@ -29,7 +29,6 @@ from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.log_summary import (
     binary_summary,
     reference_audio_summary,
-    text_summary,
 )
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.provider_streaming import (
@@ -212,9 +211,9 @@ class OpenAICompatibleASRAdapter:
             _LOGGER.debug("asr_response kind=empty segment=%s", request.segment_id)
         else:
             _LOGGER.debug(
-                "asr_response kind=final segment=%s chars=%d",
+                "asr_response kind=final segment=%s text=%r",
                 event.segment_id,
-                len(event.text),
+                event.text,
             )
         return event
 
@@ -267,6 +266,11 @@ class OpenAICompatibleASRAdapter:
                         case "transcript.text.delta":
                             text = event.delta.strip()
                             if text != "":
+                                _LOGGER.debug(
+                                    "asr_response kind=partial segment=%s text=%r",
+                                    request.segment_id,
+                                    text,
+                                )
                                 yield ASRPartialEvent(
                                     text,
                                     request.received_at_ms,
@@ -281,6 +285,11 @@ class OpenAICompatibleASRAdapter:
                             final_emitted = True
                             text = event.text.strip()
                             if text != "":
+                                _LOGGER.debug(
+                                    "asr_response kind=final segment=%s text=%r",
+                                    request.segment_id,
+                                    text,
+                                )
                                 yield ASRAudienceEvent(
                                     text,
                                     request.received_at_ms,
@@ -581,16 +590,15 @@ def _audio_data_url(path: Path) -> str:
 
 
 def _log_tts_request(speech: HttpSpeechRequest) -> None:
-    """Log request diagnostics without exposing reference audio or large text."""
+    """Log request text while keeping reference audio out of the record."""
     _LOGGER.debug(
-        "tts_request url=%s model=%s voice=%s input=(%s) ref_audio=(%s) "
-        "ref_text=(%s)",
+        "tts_request url=%s model=%s voice=%s input=%r ref_audio=(%s) ref_text=%r",
         speech.url,
         speech.json["model"],
         speech.json["voice"],
-        text_summary(speech.json["input"]),
+        speech.json["input"],
         reference_audio_summary(speech.extra_body["ref_audio"]),
-        text_summary(speech.extra_body["ref_text"]),
+        speech.extra_body["ref_text"],
     )
 
 

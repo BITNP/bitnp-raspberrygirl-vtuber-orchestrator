@@ -517,9 +517,9 @@ class OnsiteExplainerBridge:
                 _LOGGER.debug("onsite_asr_empty segment=%s", segment_id)
                 return None
             _LOGGER.debug(
-                "onsite_asr_final segment=%s chars=%d latency_ms=%.1f",
+                "onsite_asr_final segment=%s text=%r latency_ms=%.1f",
                 event.segment_id,
-                len(event.text),
+                event.text,
                 (perf_counter() - started_at) * 1_000,
             )
             return event
@@ -534,9 +534,9 @@ class OnsiteExplainerBridge:
         if not pipeline.accept_audience_input(event):
             return None
         _LOGGER.debug(
-            "onsite_llm_request segment=%s transcript_chars=%d",
+            "onsite_llm_request segment=%s transcript=%r",
             event.segment_id,
-            len(event.text),
+            event.text,
         )
         started_at = perf_counter()
         for attempt in range(2):
@@ -555,9 +555,9 @@ class OnsiteExplainerBridge:
                 continue
             if turn is not None:
                 _LOGGER.debug(
-                    "onsite_llm_final turn=%s chars=%d latency_ms=%.1f",
+                    "onsite_llm_final turn=%s answer=%r latency_ms=%.1f",
                     turn.turn_id,
-                    len(turn.answer_text),
+                    turn.answer_text,
                     (perf_counter() - started_at) * 1_000,
                 )
             return turn
@@ -583,11 +583,11 @@ class OnsiteExplainerBridge:
             is_playing=is_playing,
         )
         _LOGGER.info(
-            "asr_gate segment=%s decision=%s playing=%s transcript_chars=%d",
+            "asr_gate segment=%s decision=%s playing=%s transcript=%r",
             event.segment_id,
             decision,
             is_playing,
-            len(event.text),
+            event.text,
         )
         return decision
 
@@ -627,7 +627,7 @@ class OnsiteExplainerBridge:
     ) -> tuple[Pcm16leChunk, ...] | None:
         started_at = perf_counter()
         _LOGGER.debug(
-            "onsite_tts_request text_chars=%d voice=%s", len(text), self.voice
+            "onsite_tts_request text=%r voice=%s", text, self.voice
         )
         for attempt in range(2):
             try:

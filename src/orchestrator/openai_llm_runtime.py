@@ -121,6 +121,12 @@ class AsyncOpenAICompatibleLLMRuntime:
 
     async def complete_gate(self, request: LLMRequest) -> str:
         """Return the gate JSON response, failing closed at the caller."""
+        _LOGGER.debug(
+            "llm_gate_request model=%s system=%r user=%r",
+            self.model,
+            request.prompt.system,
+            request.prompt.user,
+        )
         try:
             response = await self._client.chat.completions.create(
                 model=self.model,
@@ -136,6 +142,7 @@ class AsyncOpenAICompatibleLLMRuntime:
             content = response.choices[0].message.content
             if not isinstance(content, str) or content.strip() == "":
                 raise ProviderResponseError(stage="llm", reason="missing_final")
+            _LOGGER.debug("llm_gate_response text=%r", content)
             return content  # noqa: TRY300
         except (
             APIConnectionError,
@@ -156,6 +163,12 @@ class AsyncOpenAICompatibleLLMRuntime:
             return
         stream = None
         release = _noop
+        _LOGGER.debug(
+            "llm_request model=%s system=%r user=%r",
+            self.model,
+            request.prompt.system,
+            request.prompt.user,
+        )
         try:
             stream = await self._client.chat.completions.create(
                 model=self.model,
@@ -186,7 +199,9 @@ class AsyncOpenAICompatibleLLMRuntime:
             if cancellation is None or not cancellation.cancelled:
                 if not chunks:
                     raise ProviderResponseError(stage="llm", reason="missing_final")
-                yield LLMFinal(text="".join(chunks), used_fallback=False)
+                final_text = "".join(chunks)
+                _LOGGER.debug("llm_response text=%r", final_text)
+                yield LLMFinal(text=final_text, used_fallback=False)
         except (
             APIConnectionError,
             APITimeoutError,
