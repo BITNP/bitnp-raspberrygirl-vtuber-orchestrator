@@ -1,4 +1,3 @@
-
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import monotonic_ns
@@ -6,6 +5,8 @@ from time import monotonic_ns
 from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
 from orchestrator.control_ingress import (
     ActionControl,
+    ContextResetControl,
+    MemoryDeleteControl,
     PresentationControl,
     PresentationResultControl,
     ProfileEnrollmentControl,
@@ -88,7 +89,6 @@ class _RuntimeJournal:
 
 @dataclass(slots=True)
 class SessionRuntime:
-
     scheduler: SessionScheduler
 
     task_registry: TaskRegistry
@@ -225,7 +225,9 @@ class SessionRuntime:
 
         return True
 
-    def receive_session_control(self, control: SessionControl) -> RuntimeOutcome:
+    def receive_session_control(  # noqa: PLR0911
+        self, control: SessionControl
+    ) -> RuntimeOutcome:
         match control:
             case ProfileEnrollmentControl(
                 enrollment=enrollment, correlation=correlation
@@ -245,6 +247,18 @@ class SessionRuntime:
 
             case PresentationResultControl(result=result, correlation=correlation):
                 return self.receive_presentation_result(result, correlation)
+
+            case ContextResetControl(correlation=correlation):
+                self.interaction_ingress.data.reset_context()
+                return self._interaction_outcome(
+                    correlation, "context_reset", accepted=True, task_id=None
+                )
+
+            case MemoryDeleteControl(key=key, correlation=correlation):
+                self.interaction_ingress.data.delete_memory(key)
+                return self._interaction_outcome(
+                    correlation, "memory_deleted", accepted=True, task_id=None
+                )
 
     async def receive_session_control_async(
         self, control: SessionControl

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,12 +16,12 @@ from orchestrator.interactions import (
     PresentationResult,
 )
 from orchestrator.json_boundary import JsonBoundaryError, JsonValue, parse_json_value
+from orchestrator.memory import MemoryKey
 from orchestrator.sessions import EventCorrelation, EventSequence
 
 
 @dataclass(frozen=True, slots=True)
 class ProfileEnrollmentControl:
-
     enrollment: ProfileEnrollment
 
     correlation: EventCorrelation
@@ -30,7 +29,6 @@ class ProfileEnrollmentControl:
 
 @dataclass(frozen=True, slots=True)
 class ProfileRevocationControl:
-
     profile_id: VoiceProfileId
 
     correlation: EventCorrelation
@@ -38,7 +36,6 @@ class ProfileRevocationControl:
 
 @dataclass(frozen=True, slots=True)
 class ActionControl:
-
     proposal: ActionProposal
 
     correlation: EventCorrelation
@@ -46,7 +43,6 @@ class ActionControl:
 
 @dataclass(frozen=True, slots=True)
 class PresentationControl:
-
     proposal: PresentationCommand
 
     correlation: EventCorrelation
@@ -54,9 +50,19 @@ class PresentationControl:
 
 @dataclass(frozen=True, slots=True)
 class PresentationResultControl:
-
     result: PresentationResult
 
+    correlation: EventCorrelation
+
+
+@dataclass(frozen=True, slots=True)
+class ContextResetControl:
+    correlation: EventCorrelation
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryDeleteControl:
+    key: MemoryKey
     correlation: EventCorrelation
 
 
@@ -66,6 +72,8 @@ type SessionControl = (
     | ActionControl
     | PresentationControl
     | PresentationResultControl
+    | ContextResetControl
+    | MemoryDeleteControl
 )
 
 
@@ -119,6 +127,17 @@ def parse_session_control(  # noqa: C901, PLR0911, PLR0912
 
         case "presentation.result", "frontend":
             return _presentation_result(data, correlation)
+
+        case "context.reset.command", "orchestrator":
+            return ContextResetControl(correlation) if data == {} else None
+
+        case "memory.delete.command", "orchestrator":
+            key = _text(data, "key")
+            return (
+                MemoryDeleteControl(MemoryKey(key), correlation)
+                if key is not None and set(data) == {"key"}
+                else None
+            )
 
         case _:
             return None
