@@ -356,7 +356,7 @@ def test_hub_removes_stream_routes_when_sound_cancels_stream() -> None:
     assert transport.sent == []
 
 
-def test_dispatch_waits_for_sound_ready_before_releasing_mic() -> None:
+def test_dispatch_never_releases_retired_mic_rtp_source() -> None:
 
     async def verify_startup_gate() -> None:
 
@@ -372,15 +372,12 @@ def test_dispatch_waits_for_sound_ready_before_releasing_mic() -> None:
 
         assert source.messages == []
 
-        assert len(sink.messages) == 1
-
-        assert '"event_type":"media.stream.command"' in sink.messages[0]
+        # Source registration is compatibility-only and cannot start media.
+        assert sink.messages == []
 
         await dispatcher.register(_sink_ready(), SINK_PEER[0], sink)
 
-        assert len(source.messages) == 1
-
-        assert '"event_type":"media.rtp.source.ready"' in source.messages[0]
+        assert source.messages == []
 
     asyncio.run(verify_startup_gate())
 

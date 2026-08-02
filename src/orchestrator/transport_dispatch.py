@@ -158,9 +158,6 @@ class TransportControlDispatch:
                     return
 
                 self._ready_sinks.add(stream)
-
-                await self._release_source(stream)
-
                 return
 
             case StreamState(
