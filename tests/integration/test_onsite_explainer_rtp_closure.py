@@ -183,7 +183,7 @@ class FakeOnsiteExplainerBridge:
             _ = await asyncio.gather(*self._tasks, return_exceptions=True)
 
 
-def test_onsite_mic_rtp_is_ingested_and_replaced_with_synthesized_sound_rtp() -> None:
+def test_onsite_mic_rtp_is_rejected_without_bridge_work_or_sound_output() -> None:
 
     asyncio.run(_replacement_proof())
 
@@ -210,21 +210,13 @@ async def _replacement_proof() -> None:
 
     await hub.wait_for_onsite_jobs()
 
-    # Then: only bridge-produced canonical L16 reaches Sound, never the Mic bytes.
-
-    expected_packet = _rtp_packet(ssrc=TTS_SSRC, payload=SYNTHESIZED_L16_PAYLOAD)
+    # Then: Mic RTP never reaches bridge or Sound.
 
     assert delivered is False
 
-    assert bridge.mic_packets == [mic_packet]
-
-    assert bridge.answers == ["onsite answer"]
-
-    assert transport.sent == [(expected_packet, (SOUND_PEER[0], 5006))]
-
-    assert transport.sent[0][0] != mic_packet
-
-    assert transport.sent[0][0][:2] == b"\x80\x60"
+    assert bridge.mic_packets == []
+    assert bridge.answers == []
+    assert transport.sent == []
 
 
 def test_onsite_blank_asr_final_emits_no_sound_rtp() -> None:
@@ -254,11 +246,11 @@ async def _blank_asr_proof() -> None:
 
     await hub.wait_for_onsite_jobs()
 
-    # Then: the frame is ingested but neither raw nor synthesized RTP reaches Sound.
+    # Then: retired input RTP is not ingested and cannot reach Sound.
 
     assert delivered is False
 
-    assert bridge.mic_packets == [mic_packet]
+    assert bridge.mic_packets == []
 
     assert bridge.answers == []
 
