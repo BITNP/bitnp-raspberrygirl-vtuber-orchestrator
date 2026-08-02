@@ -57,6 +57,7 @@ from orchestrator.memory import (
     MemorySource,
     ProposalRevision,
 )
+from orchestrator.memory_store import render_markdown_memory
 from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.operational_journal import OperationalJournal, OperationalRecord
 from orchestrator.pipeline_contracts import ASRAudienceEvent
@@ -389,8 +390,8 @@ class SessionRuntime:
             input=audience_input,
             context_summary=context.summary,
             recent_context=tuple(entry.text for entry in composition.entries),
-            memory_markdown="\n".join(
-                f"- {entry.key}: {entry.value}" for entry in memory.entries
+            memory_markdown=render_markdown_memory(
+                memory, self.scheduler.snapshot.session_id
             ),
             capabilities=self.agent_capabilities,
             tasks=tuple(

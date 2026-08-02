@@ -21,6 +21,7 @@ from orchestrator.memory_store import (
     JsonMemoryStore,
     MarkdownMemoryStore,
     MemoryStoreBoundaryError,
+    render_markdown_memory,
 )
 from orchestrator.state_snapshots import ConsentRevision, ProfileRevision
 
@@ -289,6 +290,17 @@ def test_markdown_memory_store_is_human_readable_and_session_isolated(
     assert "- 置信度: 95" in document
     restored = store.load(SessionId("session-1"))
     assert restored == memory.snapshot
+
+
+def test_brain_memory_rendering_matches_the_persisted_markdown_format() -> None:
+    memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
+    _ = memory.reduce(_proposal(value="小莓", confidence=95))
+
+    rendered = render_markdown_memory(memory.snapshot, SessionId("session-1"))
+
+    assert "# 会话记忆" in rendered
+    assert "## preferred_name" in rendered
+    assert "<!-- bitnp-memory-state" in rendered
 
 
 def _proposal(

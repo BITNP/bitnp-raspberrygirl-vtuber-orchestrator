@@ -111,29 +111,7 @@ class MarkdownMemoryStore:
     def save(self, snapshot: MutableMemorySnapshot) -> None:
         if self._session_id is None:
             raise MemoryStoreBoundaryError(_SESSION_ID_FIELD)
-        document = _document_for_snapshot(snapshot, self._session_id)
-        rendered_entries = "\n".join(
-            "\n".join(
-                (
-                    f"## {entry.key}",
-                    f"- 值: {entry.value}",
-                    f"- 类别: {entry.category}",
-                    f"- 来源轮次: {entry.provenance.turn_id}",
-                    f"- 置信度: {entry.confidence}",
-                    f"- 更新时间(毫秒): {entry.updated_at_ms}",
-                    f"- 证据: {entry.provenance.evidence_id}",
-                )
-            )
-            for entry in snapshot.entries
-        )
-        state = json.dumps(document, ensure_ascii=False, sort_keys=True)
-        rendered = (
-            "# 会话记忆\n\n"
-            f"会话: {self._session_id}\n\n"
-            f"版本: {snapshot.revision}\n\n"
-            f"{rendered_entries}\n\n"
-            f"{_MARKDOWN_STATE_OPEN}{state}{_MARKDOWN_STATE_CLOSE}\n"
-        )
+        rendered = render_markdown_memory(snapshot, self._session_id)
         _ = self._path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._path.with_suffix(f"{self._path.suffix}.tmp")
         _ = temporary.write_text(rendered, encoding="utf-8")
@@ -158,6 +136,35 @@ class MarkdownMemoryStore:
         except JsonBoundaryError as error:
             raise MemoryStoreBoundaryError(error.field_name) from error
         return _snapshot_from_document(document, session_id)
+
+
+def render_markdown_memory(
+    snapshot: MutableMemorySnapshot, session_id: SessionId
+) -> str:
+    """Render the exact session-owned memory document injected into the Brain."""
+    document = _document_for_snapshot(snapshot, session_id)
+    rendered_entries = "\n".join(
+        "\n".join(
+            (
+                f"## {entry.key}",
+                f"- 值: {entry.value}",
+                f"- 类别: {entry.category}",
+                f"- 来源轮次: {entry.provenance.turn_id}",
+                f"- 置信度: {entry.confidence}",
+                f"- 更新时间(毫秒): {entry.updated_at_ms}",
+                f"- 证据: {entry.provenance.evidence_id}",
+            )
+        )
+        for entry in snapshot.entries
+    )
+    state = json.dumps(document, ensure_ascii=False, sort_keys=True)
+    return (
+        "# 会话记忆\n\n"
+        f"会话: {session_id}\n\n"
+        f"版本: {snapshot.revision}\n\n"
+        f"{rendered_entries}\n\n"
+        f"{_MARKDOWN_STATE_OPEN}{state}{_MARKDOWN_STATE_CLOSE}\n"
+    )
 
 
 def _document_for_snapshot(
