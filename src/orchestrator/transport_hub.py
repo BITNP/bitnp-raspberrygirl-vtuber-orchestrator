@@ -15,6 +15,8 @@ from orchestrator.streaming_contracts import (
 )
 from orchestrator.streaming_pipeline_actors import StreamPipelineActors
 from orchestrator.transport_control import (
+    AsrFinal,
+    AsrPartial,
     ControlEvent,
     EnvelopeCorrelation,
     SinkRegistration,
@@ -164,6 +166,8 @@ class RtpHub:
 
         self._voice_evidence_callback: Callable[[VoiceEvidence], bool] | None = None
 
+        self._last_asr_sequences: dict[StreamKey, int] = {}
+
         if onsite_bridge is not None:
             onsite_bridge.set_output_callback(self.deliver_generated_rtp)
             replacement_callback = cast(
@@ -197,6 +201,27 @@ class RtpHub:
         self, callback: Callable[[VoiceEvidence], bool]
     ) -> None:
         self._voice_evidence_callback = callback
+
+    def accept_asr_final(self, event: AsrFinal) -> bool:
+        """Validate that a final belongs to a live Mic route exactly once.
+
+        Recognition text is deliberately not accepted from RTP or arbitrary
+        peers: it must arrive on the authenticated control socket after Mic's
+        source registration and be for the route's active cancellation epoch.
+        """
+        stream = StreamKey(event.session_id, event.stream_id)
+        if (
+            stream not in self._pending_sources
+            and stream not in self._pinned_sources.values()
+        ):
+            return False
+        if int(event.cancellation_epoch) != self._route_generations.get(stream, 0):
+            return False
+        previous = self._last_asr_sequences.get(stream)
+        if previous is not None and event.correlation.seq <= previous:
+            return False
+        self._last_asr_sequences[stream] = event.correlation.seq
+        return True
 
     async def begin_onsite_replacement(
         self, stream: StreamKey, segment_id: SegmentId
@@ -335,6 +360,11 @@ class RtpHub:
                 if callback is not None:
                     _ = callback(parsed_event)
 
+            case AsrFinal() | AsrPartial():
+                # Finals are admitted by TransportRuntime, where they can enter
+                # the session's common audience gate. Partials have no effects.
+                return
+
             # Playback completion is not a disconnect.  Keeping the established
             # Mic/Sound route lets the next scheduler-authorized turn allocate a
             # fresh generated SSRC without requiring either peer to reconnect.
@@ -447,6 +477,8 @@ class RtpHub:
         self._pending_sources.clear()
 
         self._correlations.clear()
+
+        self._last_asr_sequences.clear()
 
         self._pinned_sources.clear()
 

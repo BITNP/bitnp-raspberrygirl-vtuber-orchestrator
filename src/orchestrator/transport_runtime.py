@@ -27,9 +27,15 @@ from orchestrator.ids import SessionId, TraceId
 from orchestrator.interaction_ingress import parse_comment_proposal
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
+from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.sessions import EventCorrelation, EventSequence
 from orchestrator.transport_config import TransportConfig
-from orchestrator.transport_control import ControlEnvelopeError, bearer_token_matches
+from orchestrator.transport_control import (
+    AsrFinal,
+    ControlEnvelopeError,
+    bearer_token_matches,
+    parse_control_event,
+)
 from orchestrator.transport_dispatch import TransportControlDispatch
 from orchestrator.transport_hub import (
     DatagramSender,
@@ -45,7 +51,6 @@ if TYPE_CHECKING:
     from orchestrator.agent_pipeline import FrontendOperation
     from orchestrator.ids import TurnId
     from orchestrator.observability import OnsiteObservability
-    from orchestrator.pipeline_contracts import ASRAudienceEvent
     from orchestrator.scheduler_reflex import SchedulerOutputFence
     from orchestrator.scheduler_runtime import SessionRuntime
     from orchestrator.streaming_contracts import (
@@ -321,6 +326,34 @@ class TransportRuntime:
                     if session_runtime is not None and session_runtime.receive_control(
                         message
                     ):
+                        continue
+
+                    # Mic ASR is the only voice ingress. A partial is parsed by
+                    # the control dispatcher for diagnostics only; a final is
+                    # route/epoch/replay checked before it reaches the shared
+                    # Gate and Brain pipeline.
+                    try:
+                        control_event = parse_control_event(message)
+                    except (ControlEnvelopeError, JsonBoundaryError):
+                        control_event = None
+                    if isinstance(control_event, AsrFinal):
+                        if not self._hub.accept_asr_final(control_event):
+                            continue
+                        runtime = self._runtime_for_session(control_event.session_id)
+                        if runtime is None:
+                            continue
+                        event = ASRAudienceEvent(
+                            text=control_event.text,
+                            received_at_ms=control_event.received_at_ms,
+                            segment_id=control_event.segment_id,
+                            seq=control_event.correlation.seq,
+                        )
+                        correlation = EventCorrelation(
+                            TraceId(control_event.correlation.trace_id),
+                            SessionId(control_event.session_id),
+                            EventSequence(control_event.correlation.seq),
+                        )
+                        _ = await runtime.receive_asr_final_async(event, correlation)
                         continue
 
                     if session_runtime is not None:

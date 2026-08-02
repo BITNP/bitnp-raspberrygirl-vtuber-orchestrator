@@ -26,6 +26,8 @@ MAX_UDP_PORT = 65_535
 
 MAX_VOICE_EMBEDDING_DIMENSIONS = 1_024
 
+MAX_ASR_TEXT_LENGTH = 4_000
+
 
 type ControlEvent = (
     SourceRegistration
@@ -35,6 +37,8 @@ type ControlEvent = (
     | StreamFlush
     | FlushAcknowledgement
     | VoiceEvidence
+    | AsrPartial
+    | AsrFinal
 )
 
 
@@ -119,6 +123,27 @@ class VoiceEvidence:
     correlation: EnvelopeCorrelation
 
 
+@dataclass(frozen=True, slots=True)
+class AsrPartial:
+    """Diagnostic-only recognition update emitted by the registered Mic."""
+
+    session_id: str
+    stream_id: str
+    segment_id: str
+    rtp_start_timestamp: int
+    rtp_end_timestamp: int
+    cancellation_epoch: CancellationEpoch
+    text: str
+    received_at_ms: int
+    confidence: float | None
+    correlation: EnvelopeCorrelation
+
+
+@dataclass(frozen=True, slots=True)
+class AsrFinal(AsrPartial):
+    """A finalized Mic recognition result eligible for the audience gate."""
+
+
 class ControlReceiver(Protocol):
     def register_control(self, raw_message: str, peer_ip: str) -> None: ...
 
@@ -154,7 +179,7 @@ def bearer_token_matches(
     return hmac.compare_digest(authorization.removeprefix(prefix), token)
 
 
-def parse_control_event(raw_message: str) -> ControlEvent:
+def parse_control_event(raw_message: str) -> ControlEvent:  # noqa: C901
     value = parse_json_value(raw_message)
 
     if not isinstance(value, dict):
@@ -267,6 +292,14 @@ def parse_control_event(raw_message: str) -> ControlEvent:
                 speech_ms=_nonnegative_int(quality, "speech_ms"),
                 quality_score=_quality_score(quality),
                 correlation=correlation,
+            )
+
+        case "asr.partial" | "asr.final" as asr_event_type:
+            asr = _parse_asr_event(data, _text(value, "source"), correlation)
+            parsed = (
+                AsrPartial(**asr)
+                if asr_event_type == "asr.partial"
+                else AsrFinal(**asr)
             )
 
         case _:
@@ -452,6 +485,53 @@ def _validate_voice_evidence(data: dict[str, JsonValue], source: str) -> None:
         raise ControlEnvelopeError(field_name="data.quality")
     _ = _nonnegative_int(quality, "speech_ms")
     _ = _quality_score(quality)
+
+
+def _parse_asr_event(
+    data: dict[str, JsonValue], source: str, correlation: EnvelopeCorrelation
+) -> dict[str, object]:
+    """Parse the wire ASR contract without trusting Mic-provided routing data."""
+    required = {
+        "stream_id",
+        "segment_id",
+        "rtp_start_timestamp",
+        "rtp_end_timestamp",
+        "cancellation_epoch",
+        "text",
+        "received_at_ms",
+    }
+    if (
+        source != "mic"
+        or not required.issubset(data)
+        or set(data) - (required | {"confidence"})
+    ):
+        raise ControlEnvelopeError(field_name="data")
+    start = _nonnegative_int(data, "rtp_start_timestamp")
+    if _nonnegative_int(data, "rtp_end_timestamp") < start:
+        raise ControlEnvelopeError(field_name="data.rtp_end_timestamp")
+    text = _text(data, "text")
+    if len(text) > MAX_ASR_TEXT_LENGTH:
+        raise ControlEnvelopeError(field_name="data.text")
+    confidence: float | None = None
+    if "confidence" in data:
+        value = data["confidence"]
+        if not _is_number(value) or not 0 <= _number(value) <= 1:
+            raise ControlEnvelopeError(field_name="data.confidence")
+        confidence = _number(value)
+    return {
+        "session_id": correlation.session_id,
+        "stream_id": _text(data, "stream_id"),
+        "segment_id": _text(data, "segment_id"),
+        "rtp_start_timestamp": start,
+        "rtp_end_timestamp": _nonnegative_int(data, "rtp_end_timestamp"),
+        "cancellation_epoch": CancellationEpoch(
+            _nonnegative_int(data, "cancellation_epoch")
+        ),
+        "text": text,
+        "received_at_ms": _nonnegative_int(data, "received_at_ms"),
+        "confidence": confidence,
+        "correlation": correlation,
+    }
 
 
 def _embedding(data: dict[str, JsonValue]) -> tuple[float, ...]:
