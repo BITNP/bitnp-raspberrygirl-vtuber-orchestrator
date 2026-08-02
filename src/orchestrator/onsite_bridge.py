@@ -93,6 +93,8 @@ type OnsiteReplacement = Callable[
 
 type OnsiteAsrFinal = Callable[[StreamKey, ASRAudienceEvent], Awaitable[bool]]
 
+type AgentPlanOutputStarted = Callable[[], bool]
+
 
 async def _discard_output(
     stream: StreamKey, epoch: CancellationEpoch, packet: bytes
@@ -703,9 +705,18 @@ class OnsiteExplainerBridge:
         return None
 
     async def speak_agent_plan(
-        self, stream: StreamKey, text: str, epoch: CancellationEpoch
+        self,
+        stream: StreamKey,
+        text: str,
+        epoch: CancellationEpoch,
+        output_started: AgentPlanOutputStarted,
     ) -> bool:
-        """Synthesize one accepted Brain reply and deliver paced RTP to Sound."""
+        """Synthesize one accepted Brain reply and deliver paced RTP to Sound.
+
+        ``output_started`` commits the scheduler task after an output lease has
+        been granted and before paced playback begins.  Later user input can
+        supersede playback without leaving the task pending forever.
+        """
         cancellation = CancellationToken()
         chunks = await asyncio.to_thread(self.synthesize, text, cancellation)
         output_epoch = self.allocate_agent_plan_output(stream, epoch)
@@ -714,6 +725,8 @@ class OnsiteExplainerBridge:
         packetizer = TtsPcmRtpPacketizer(stream=stream, cancellation_epoch=output_epoch)
         packets = tuple(packet for chunk in chunks for packet in packetizer.push(chunk))
         packets += packetizer.finish()
+        if not packets or not output_started():
+            return False
         loop = asyncio.get_running_loop()
         deadline = loop.time()
         for packet in packets:

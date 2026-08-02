@@ -223,8 +223,8 @@ class TransportRuntime:
         ):
             _ = await session_runtime.run_agent_tts_for_turn(
                 outcome.turn_id,
-                lambda text: bridge.speak_agent_plan(
-                    stream, text, session_runtime.cancellation_epoch
+                lambda text, output_started: bridge.speak_agent_plan(
+                    stream, text, session_runtime.cancellation_epoch, output_started
                 ),
                 correlation,
             )

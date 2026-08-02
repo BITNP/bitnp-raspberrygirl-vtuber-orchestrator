@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import replace
 
 from orchestrator.agent_pipeline import (
@@ -22,6 +23,7 @@ from orchestrator.task_registry import (
     TaskId,
     TaskKind,
     TaskRequest,
+    TaskState,
 )
 from orchestrator.transient_context import (
     ContextProvenance,
@@ -140,8 +142,9 @@ def test_runtime_emits_reducer_approved_tts_task_once() -> None:
     assert outcome.turn_id is not None
     emitted: list[str] = []
 
-    async def synthesize(text: str) -> bool:
+    async def synthesize(text: str, output_started: Callable[[], bool]) -> bool:
         emitted.append(text)
+        assert output_started()
         return True
 
     assert asyncio.run(
@@ -149,6 +152,46 @@ def test_runtime_emits_reducer_approved_tts_task_once() -> None:
     )
     assert emitted == ["answer"]
     assert runtime.observables.task_commits[-1].effect.effect_type == "tts.emitted"
+
+
+def test_runtime_commits_tts_before_paced_playback_can_be_superseded() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-tts-lifecycle"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        clock=lambda: 10,
+        agent_pipeline=AgentPipeline(_AcceptGate(), _PlanBrain(), _NoTools()),
+        agent_capabilities=frozenset({"task:tts"}),
+    )
+    first_correlation = EventCorrelation(
+        TraceId("first"), SessionId("session-tts-lifecycle"), EventSequence(1)
+    )
+    first = runtime.receive_comment(CommentProposal("first", first_correlation))
+    assert first.accepted
+    assert first.turn_id is not None
+
+    async def synthesize(_text: str, output_started: Callable[[], bool]) -> bool:
+        assert output_started()
+        # This models a user speaking while the accepted reply is still being
+        # paced to Sound.  It must not invalidate the already admitted task.
+        second = runtime.receive_comment(
+            CommentProposal(
+                "second",
+                EventCorrelation(
+                    TraceId("second"),
+                    SessionId("session-tts-lifecycle"),
+                    EventSequence(2),
+                ),
+            )
+        )
+        assert second.accepted
+        return True
+
+    assert asyncio.run(
+        runtime.run_agent_tts_for_turn(first.turn_id, synthesize, first_correlation)
+    )
+    first_task = runtime.task_registry.records[0]
+    assert first_task.state is TaskState.COMPLETED
 
 
 def test_runtime_commits_brain_compaction_against_its_snapshot() -> None:

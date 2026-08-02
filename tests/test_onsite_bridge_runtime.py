@@ -263,7 +263,9 @@ async def _agent_plan_output_epoch_proof() -> None:
     # When: a new accepted Brain reply is synthesized from the unchanged Mic
     # input epoch.
 
-    emitted = await bridge.speak_agent_plan(stream, "agent reply", CancellationEpoch(0))
+    emitted = await bridge.speak_agent_plan(
+        stream, "agent reply", CancellationEpoch(0), lambda: True
+    )
     await asyncio.sleep(0)
 
     # Then: the hub's fresh lease is used consistently for both the command and

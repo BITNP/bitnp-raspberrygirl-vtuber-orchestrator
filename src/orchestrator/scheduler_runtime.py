@@ -100,6 +100,7 @@ from orchestrator.task_registry import (
     TaskDeadlineMs,
     TaskId,
     TaskKind,
+    TaskRecord,
     TaskRegistrationAccepted,
     TaskRegistrationRejected,
     TaskRegistrationRejection,
@@ -125,6 +126,8 @@ from orchestrator.transient_context import (
 from orchestrator.transport_control import VoiceEvidence
 
 _LOGGER = logging.getLogger(__name__)
+
+type AgentTtsSynthesize = Callable[[str, Callable[[], bool]], Awaitable[bool]]
 
 def _monotonic_ms() -> int:
     return monotonic_ns() // 1_000_000
@@ -781,13 +784,16 @@ class SessionRuntime:
     async def run_agent_tts_for_turn(
         self,
         turn_id: TurnId,
-        synthesize: Callable[[str], Awaitable[bool]],
+        synthesize: AgentTtsSynthesize,
         correlation: EventCorrelation,
     ) -> bool:
-        """Run one reducer-approved TTS task and commit only successful output.
+        """Run one reducer-approved TTS task and commit admitted output.
 
         The caller owns the transport adapter; this runtime retains task lifecycle
-        validation so an unaccepted or stale plan can never reach TTS.
+        validation so an unaccepted or stale plan can never reach TTS.  The
+        adapter invokes ``output_started`` after synthesis and output admission,
+        but before its paced RTP playback.  Playback may outlive the active turn;
+        task completion must not, or stale results strand pending tasks.
         """
         for task_id, text in tuple(self._agent_tts_text.items()):
             record = self.task_registry.task(task_id)
@@ -801,27 +807,40 @@ class SessionRuntime:
                 _ = self.cancel_task(task_id, correlation)
                 _ = self._agent_tts_text.pop(task_id, None)
                 return False
+
+            committed = False
+
+            def output_started(
+                task_id: TaskId = task_id,
+                record: TaskRecord = record,
+                text: str = text,
+            ) -> bool:
+                nonlocal committed
+                if committed:
+                    return True
+                committed = self.reduce_task(
+                    TaskResult(
+                        task_id,
+                        record.request.session_id,
+                        record.request.turn_id,
+                        record.request.snapshot_revision,
+                        TaskEffect("tts.emitted", text[:240]),
+                    ),
+                    correlation,
+                ).accepted
+                return committed
+
             try:
-                emitted = await synthesize(text)
+                emitted = await synthesize(text, output_started)
             except (OSError, ValueError):
                 emitted = False
                 _LOGGER.exception("agent_tts_execution_failed task=%s", task_id)
-            if not emitted:
+            if not emitted or not committed:
                 _ = self.cancel_task(task_id, correlation)
                 _ = self._agent_tts_text.pop(task_id, None)
                 return False
-            committed = self.reduce_task(
-                TaskResult(
-                    task_id,
-                    record.request.session_id,
-                    record.request.turn_id,
-                    record.request.snapshot_revision,
-                    TaskEffect("tts.emitted", text[:240]),
-                ),
-                correlation,
-            ).accepted
             _ = self._agent_tts_text.pop(task_id, None)
-            return committed
+            return True
         return False
 
     def receive_control(self, raw_message: str) -> bool:
