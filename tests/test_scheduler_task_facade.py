@@ -1,5 +1,11 @@
+import json
 from dataclasses import replace
 
+from orchestrator.agent_pipeline import (
+    AgentPipeline,
+    BrainStateSnapshot,
+    GateDecision,
+)
 from orchestrator.ids import SessionId, TraceId, TurnId
 from orchestrator.interactions import CommentProposal
 from orchestrator.scheduler_runtime import SessionRuntime
@@ -76,6 +82,45 @@ def test_runtime_rejects_stale_result_after_newer_turn_without_commit() -> None:
     # Then: no effect is committed.
     assert outcome.accepted is False
     assert runtime.observables.task_commits == ()
+
+
+def test_runtime_routes_comment_through_agent_gate_and_brain_snapshot() -> None:
+    pipeline = AgentPipeline(_AcceptGate(), _PlanBrain(), _NoTools())
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        clock=lambda: 10,
+        agent_pipeline=pipeline,
+    )
+
+    outcome = runtime.receive_comment(CommentProposal("question", _correlation("q", 1)))
+
+    assert outcome.accepted
+    assert len(runtime.agent_results) == 1
+
+
+class _AcceptGate:
+    def evaluate(self, *args: object, **kwargs: object) -> GateDecision:
+        _ = args, kwargs
+        return GateDecision.ACCEPT
+
+
+class _PlanBrain:
+    def plan(self, snapshot: BrainStateSnapshot, **kwargs: object) -> str:
+        _ = kwargs
+        return json.dumps(
+            {"response_text": "answer", "expected_revision": snapshot.revision}
+        )
+
+    def repair(self, snapshot: object, invalid_plan: str) -> str:
+        _ = snapshot, invalid_plan
+        return "{}"
+
+
+class _NoTools:
+    def execute(self, request: object, snapshot: object) -> None:
+        _ = request, snapshot
 
 
 def _runtime() -> SessionRuntime:

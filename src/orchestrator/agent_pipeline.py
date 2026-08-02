@@ -387,9 +387,15 @@ class AgentPipeline:
             return self._voice.popleft()
         return self._comments.popleft() if self._comments else None
 
+    def peek_input(self) -> AudienceInput | None:
+        if self._voice:
+            return self._voice[0]
+        return self._comments[0] if self._comments else None
+
     def run(self, snapshot: BrainStateSnapshot) -> PlanResult:
-        if snapshot.input != self.next_input():
+        if snapshot.input != self.peek_input():
             return PlanRejected("input_not_scheduled")
+        _ = self.next_input()
         raw = self.brain.plan(snapshot)
         result = self._reduce_or_repair(snapshot, raw, PlanStage.INITIAL)
         if not isinstance(result, PlanAccepted) or not result.plan.tool_requests:

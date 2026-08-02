@@ -2,6 +2,19 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import monotonic_ns
 
+from orchestrator.agent_pipeline import (
+    AgentPipeline,
+    BrainStateSnapshot,
+    GateDecision,
+    PlanResult,
+    TaskSnapshot,
+)
+from orchestrator.agent_pipeline import (
+    AudienceInput as BrainAudienceInput,
+)
+from orchestrator.agent_pipeline import (
+    AudienceSource as BrainAudienceSource,
+)
 from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
 from orchestrator.control_ingress import (
     ActionControl,
@@ -105,6 +118,10 @@ class SessionRuntime:
 
     mode_policy: AdaptiveAgentPolicy
 
+    agent_pipeline: AgentPipeline | None = None
+
+    agent_capabilities: frozenset[str] = frozenset()
+
     clock: Callable[[], int] = _monotonic_ms
 
     cancellation_epoch: CancellationEpoch = field(
@@ -123,16 +140,20 @@ class SessionRuntime:
 
     _journal: _RuntimeJournal = field(default_factory=_RuntimeJournal)
 
+    _agent_results: list[PlanResult] = field(default_factory=list)
+
     operational_journal: OperationalJournal = field(default_factory=OperationalJournal)
 
     @classmethod
-    def create(
+    def create(  # noqa: PLR0913
         cls,
         *,
         session_id: SessionId,
         turn_id_prefix: str,
         task_config: SchedulerTaskConfig,
         clock: Callable[[], int] = _monotonic_ms,
+        agent_pipeline: AgentPipeline | None = None,
+        agent_capabilities: frozenset[str] = frozenset(),
     ) -> "SessionRuntime":
         scheduler = SessionScheduler(
             session_id=session_id,
@@ -165,7 +186,13 @@ class SessionRuntime:
             ),
             mode_policy=AdaptiveAgentPolicy(),
             clock=clock,
+            agent_pipeline=agent_pipeline,
+            agent_capabilities=agent_capabilities,
         )
+
+    @property
+    def agent_results(self) -> tuple[PlanResult, ...]:
+        return tuple(self._agent_results)
 
     @property
     def observables(self) -> RuntimeObservables:
@@ -184,6 +211,10 @@ class SessionRuntime:
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
 
+        agent_input = self._submit_agent_comment(proposal)
+        if agent_input is None:
+            return self._reject(correlation, "agent_gate_discarded")
+
         outcome = self.interaction_ingress.receive_comment(
             text=proposal.text,
             correlation=correlation,
@@ -199,6 +230,8 @@ class SessionRuntime:
                     RuntimeDispatch(correlation, accepted_turn)
                 )
 
+                self._run_agent_plan(agent_input, accepted_turn)
+
                 return RuntimeOutcome(
                     accepted=True,
                     correlation=correlation,
@@ -210,6 +243,67 @@ class SessionRuntime:
 
             case _:
                 return self._reject(correlation, "scheduler_rejected")
+
+    def _submit_agent_comment(
+        self, proposal: CommentProposal
+    ) -> BrainAudienceInput | None:
+        pipeline = self.agent_pipeline
+        if pipeline is None:
+            return BrainAudienceInput(
+                session_id=str(proposal.correlation.session_id),
+                trace_id=str(proposal.correlation.trace_id),
+                sequence=int(proposal.correlation.sequence),
+                source=BrainAudienceSource.COMMENT,
+                received_at_ms=self.clock(),
+                text=proposal.text,
+            )
+        audience_input = BrainAudienceInput(
+            session_id=str(proposal.correlation.session_id),
+            trace_id=str(proposal.correlation.trace_id),
+            sequence=int(proposal.correlation.sequence),
+            source=BrainAudienceSource.COMMENT,
+            received_at_ms=self.clock(),
+            text=proposal.text,
+        )
+        decision = pipeline.submit(audience_input)
+        return audience_input if decision is GateDecision.ACCEPT else None
+
+    def _run_agent_plan(
+        self, audience_input: BrainAudienceInput, turn_id: TurnId
+    ) -> None:
+        pipeline = self.agent_pipeline
+        if pipeline is None:
+            return
+        context = self.interaction_ingress.data.context.snapshot
+        memory = self.interaction_ingress.data.memory.snapshot
+        snapshot = BrainStateSnapshot(
+            session_id=str(self.scheduler.snapshot.session_id),
+            turn_id=str(turn_id),
+            revision=int(self.scheduler.snapshot.revision),
+            cancellation_epoch=int(self.cancellation_epoch),
+            input=audience_input,
+            context_summary=context.summary,
+            recent_context=tuple(entry.text for entry in context.entries),
+            memory_markdown="\n".join(
+                f"- {entry.key}: {entry.value}" for entry in memory.entries
+            ),
+            capabilities=self.agent_capabilities,
+            tasks=tuple(
+                TaskSnapshot(
+                    task_id=str(record.request.task_id),
+                    kind=record.request.kind.value,
+                    lane=record.request.kind.value,
+                    status=record.state.value,
+                    deadline_ms=int(record.request.deadline_ms),
+                    owner_turn_id=str(record.request.turn_id),
+                    cancellation_reason=record.cancellation_reason,
+                )
+                for record in self.task_registry.records
+            ),
+            context_revision=int(context.generation),
+            memory_revision=int(memory.revision),
+        )
+        self._agent_results.append(pipeline.run(snapshot))
 
     def receive_control(self, raw_message: str) -> bool:
         parsed = parse_presentation_result_control(
