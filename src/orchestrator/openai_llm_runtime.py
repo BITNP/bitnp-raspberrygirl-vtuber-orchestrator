@@ -164,6 +164,13 @@ class AsyncOpenAICompatibleLLMRuntime:
         """Request one non-streaming strict JSON proposal from the LLM Brain."""
         if schema_name.strip() == "":
             raise AdapterConfigError(field_name="schema_name")
+        _LOGGER.debug(
+            "llm_json_request model=%s schema=%s system=%r user=%r",
+            self.model,
+            schema_name,
+            request.prompt.system,
+            request.prompt.user,
+        )
         try:
             response = await self._client.chat.completions.create(
                 model=self.model,
@@ -186,6 +193,12 @@ class AsyncOpenAICompatibleLLMRuntime:
             content = response.choices[0].message.content
             if not isinstance(content, str) or content.strip() == "":
                 raise ProviderResponseError(stage="llm", reason="missing_final")
+            _LOGGER.debug(
+                "llm_json_response model=%s schema=%s text=%r",
+                self.model,
+                schema_name,
+                content,
+            )
             return content  # noqa: TRY300 - exception conversion belongs below.
         except (
             APIConnectionError,

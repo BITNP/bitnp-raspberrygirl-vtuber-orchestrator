@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import ClassVar, override
+from typing import TYPE_CHECKING, ClassVar, override
 
 import httpx
 
@@ -13,6 +14,9 @@ from orchestrator.asr_semantic_gate import AsrGateDecision, AsyncAsrSemanticGate
 from orchestrator.llm import LLMFinal, LLMPrompt, LLMRequest
 from orchestrator.openai_llm_runtime import AsyncOpenAICompatibleLLMRuntime
 from tests.openai_llm_test_helper import OpenAICompatibleLLMRuntimeAdapter
+
+if TYPE_CHECKING:
+    import pytest
 
 
 @dataclass(slots=True)
@@ -181,7 +185,9 @@ def test_async_runtime_uses_documented_gate_and_streaming_parameters() -> None:
     assert events[-1] == LLMFinal(text="hello world", used_fallback=False)
 
 
-def test_async_runtime_requests_strict_brain_json_schema() -> None:
+def test_async_runtime_logs_complete_json_request_and_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     captured: list[dict[str, object]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -204,7 +210,15 @@ def test_async_runtime_requests_strict_brain_json_schema() -> None:
         finally:
             await runtime.aclose()
 
-    assert asyncio.run(run()) == "{}"
+    with caplog.at_level(logging.DEBUG, logger="orchestrator.openai_llm_runtime"):
+        assert asyncio.run(run()) == "{}"
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert (
+        "llm_json_request model=test-model schema=agent_plan "
+        "system='系统' user='输入'"
+    ) in messages
+    assert "llm_json_response model=test-model schema=agent_plan text='{}'" in messages
     assert captured[0]["stream"] is False
     assert captured[0]["temperature"] == 0.0
     assert captured[0]["reasoning_effort"] == "none"

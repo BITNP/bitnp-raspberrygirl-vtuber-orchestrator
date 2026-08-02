@@ -289,7 +289,7 @@ class TransportRuntime:
 
         self._control_dispatch.clear()
 
-    async def handle_control(  # noqa: C901, PLR0912
+    async def handle_control(  # noqa: C901, PLR0912, PLR0915
         self, connection: ControlConnection
     ) -> None:
         peer_ip = _peer_ip(connection)
@@ -337,7 +337,21 @@ class TransportRuntime:
                     except (ControlEnvelopeError, JsonBoundaryError):
                         control_event = None
                     if isinstance(control_event, AsrFinal):
+                        _LOGGER.debug(
+                            "mic_asr_final_received session=%s stream=%s segment=%s seq=%s text=%r",  # noqa: E501
+                            control_event.session_id,
+                            control_event.stream_id,
+                            control_event.segment_id,
+                            control_event.correlation.seq,
+                            control_event.text,
+                        )
                         if not self._hub.accept_asr_final(control_event):
+                            _LOGGER.debug(
+                                "mic_asr_final_rejected session=%s stream=%s segment=%s",  # noqa: E501
+                                control_event.session_id,
+                                control_event.stream_id,
+                                control_event.segment_id,
+                            )
                             continue
                         runtime = self._runtime_for_session(control_event.session_id)
                         if runtime is None:
@@ -353,7 +367,16 @@ class TransportRuntime:
                             SessionId(control_event.session_id),
                             EventSequence(control_event.correlation.seq),
                         )
-                        _ = await runtime.receive_asr_final_async(event, correlation)
+                        outcome = await runtime.receive_asr_final_async(
+                            event, correlation
+                        )
+                        _LOGGER.debug(
+                            "mic_asr_final_processed session=%s segment=%s accepted=%s turn=%s",  # noqa: E501
+                            control_event.session_id,
+                            control_event.segment_id,
+                            outcome.accepted,
+                            outcome.turn_id,
+                        )
                         continue
 
                     if session_runtime is not None:
