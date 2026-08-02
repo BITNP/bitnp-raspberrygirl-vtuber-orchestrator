@@ -138,6 +138,22 @@ def test_task_capability_name_is_not_a_state_operation() -> None:
     ) == PlanRejected("unsupported_state_operation")
 
 
+def test_semantically_invalid_plan_is_repaired_once_before_effects() -> None:
+    audience_input = _input(AudienceSource.ASR, "question", 0)
+    invalid = _plan(
+        state_operations=[{"kind": "context.compact", "payload": {"summary": "x"}}]
+    )
+    repaired = _plan(
+        state_operations=[{"kind": "create_task", "payload": {"task_kind": "tts"}}]
+    )
+    brain = _Brain(invalid, repaired=repaired)
+    pipeline = AgentPipeline(_Gate(set()), brain, _Tools())
+
+    assert pipeline.submit(audience_input) is GateDecision.ACCEPT
+    assert isinstance(pipeline.run(_snapshot(audience_input)), PlanAccepted)
+    assert brain.calls == 1
+
+
 def test_tool_plan_requires_a_final_plan_with_no_new_tool_request() -> None:
     audience_input = _input(AudienceSource.ASR, "question", 0)
     initial = _plan(
@@ -164,7 +180,9 @@ def test_final_plan_cannot_request_tools() -> None:
     initial = _plan(
         tool_requests=[tool_request]
     )
-    pipeline = AgentPipeline(_Gate(set()), _Brain(initial, final=initial), _Tools())
+    pipeline = AgentPipeline(
+        _Gate(set()), _Brain(initial, final=initial, repaired=initial), _Tools()
+    )
     assert pipeline.submit(audience_input) is GateDecision.ACCEPT
     result = pipeline.run(_snapshot(audience_input))
     assert result == PlanRejected("final_plan_requests_tools")

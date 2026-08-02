@@ -470,11 +470,20 @@ class AgentPipeline:
         try:
             plan = AgentPlan.from_json(raw)
         except PlanError:
-            try:
-                plan = AgentPlan.from_json(self.brain.repair(snapshot, raw))
-            except PlanError:
-                return PlanRejected("plan_parse_failed")
-        return self.reducer.reduce(snapshot, plan, stage=stage)
+            return self._repair_and_reduce(snapshot, raw, stage)
+        result = self.reducer.reduce(snapshot, plan, stage=stage)
+        if isinstance(result, PlanAccepted):
+            return result
+        return self._repair_and_reduce(snapshot, raw, stage)
+
+    def _repair_and_reduce(
+        self, snapshot: BrainStateSnapshot, raw: str, stage: PlanStage
+    ) -> PlanResult:
+        try:
+            repaired = AgentPlan.from_json(self.brain.repair(snapshot, raw))
+        except PlanError:
+            return PlanRejected("plan_parse_failed")
+        return self.reducer.reduce(snapshot, repaired, stage=stage)
 
 
 @dataclass(slots=True)
@@ -553,12 +562,20 @@ class AsyncAgentPipeline:
         try:
             plan = AgentPlan.from_json(raw)
         except PlanError:
-            try:
-                repaired = await self.brain.repair(snapshot, raw)
-                plan = AgentPlan.from_json(repaired)
-            except (PlanError, OSError):
-                return PlanRejected("plan_parse_failed")
-        return self.reducer.reduce(snapshot, plan, stage=stage)
+            return await self._repair_and_reduce(snapshot, raw, stage)
+        result = self.reducer.reduce(snapshot, plan, stage=stage)
+        if isinstance(result, PlanAccepted):
+            return result
+        return await self._repair_and_reduce(snapshot, raw, stage)
+
+    async def _repair_and_reduce(
+        self, snapshot: BrainStateSnapshot, raw: str, stage: PlanStage
+    ) -> PlanResult:
+        try:
+            repaired = AgentPlan.from_json(await self.brain.repair(snapshot, raw))
+        except (PlanError, OSError):
+            return PlanRejected("plan_parse_failed")
+        return self.reducer.reduce(snapshot, repaired, stage=stage)
 
 
 def _strings(value: JsonValue, field: str) -> tuple[str, ...]:
