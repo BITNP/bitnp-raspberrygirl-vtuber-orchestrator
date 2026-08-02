@@ -185,6 +185,44 @@ def test_mcp_observation_is_available_to_final_brain_but_not_persisted() -> None
     assert tuple(entry.text for entry in entries) == ("查询", "answer")
 
 
+def test_next_brain_snapshot_includes_materialized_frontend_state() -> None:
+    brain = _FrontendStateBrain()
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-frontend-state"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        agent_pipeline=AgentPipeline(_AcceptGate(), brain, _NoTools()),
+    )
+
+    first = runtime.receive_comment(
+        CommentProposal(
+            "展示字幕",
+            EventCorrelation(
+                TraceId("frontend-1"),
+                SessionId("session-frontend-state"),
+                EventSequence(1),
+            ),
+        )
+    )
+    second = runtime.receive_comment(
+        CommentProposal(
+            "继续",
+            EventCorrelation(
+                TraceId("frontend-2"),
+                SessionId("session-frontend-state"),
+                EventSequence(2),
+            ),
+        )
+    )
+
+    assert first.accepted
+    assert second.accepted
+    assert brain.snapshots[1].frontend_caption == "已显示"
+    assert brain.snapshots[1].frontend_animation == "talk"
+    assert brain.snapshots[1].ppt_deck_id == "deck-demo"
+    assert brain.snapshots[1].ppt_page == 1
+
+
 class _AcceptGate:
     def evaluate(self, *args: object, **kwargs: object) -> GateDecision:
         _ = args, kwargs
@@ -217,6 +255,33 @@ class _PlanBrain:
                 ],
                 "media_operations": [{"kind": "synthesize", "text": "answer"}],
                 "frontend_operations": [{"kind": "caption", "value": "answer"}],
+            }
+        )
+
+    def repair(self, snapshot: object, invalid_plan: str) -> str:
+        _ = snapshot, invalid_plan
+        return "{}"
+
+
+class _FrontendStateBrain:
+    def __init__(self) -> None:
+        self.snapshots: list[BrainStateSnapshot] = []
+
+    def plan(self, snapshot: BrainStateSnapshot, **kwargs: object) -> str:
+        _ = kwargs
+        self.snapshots.append(snapshot)
+        operations: list[dict[str, object]] = []
+        if len(self.snapshots) == 1:
+            operations = [
+                {"kind": "caption", "value": "已显示"},
+                {"kind": "animation", "value": "talk"},
+                {"kind": "ppt.load", "value": "deck-demo"},
+            ]
+        return json.dumps(
+            {
+                "response_text": "",
+                "expected_revision": snapshot.revision,
+                "frontend_operations": operations,
             }
         )
 

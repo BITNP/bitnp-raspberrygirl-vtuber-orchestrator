@@ -235,6 +235,14 @@ class SessionRuntime:
 
     _voice_evidence_ranges: list[tuple[str, int, int]] = field(default_factory=list)
 
+    _frontend_caption: str = ""
+
+    _frontend_animation: str | None = None
+
+    _planned_ppt_deck_id: str | None = None
+
+    _planned_ppt_page: int | None = None
+
     _ended: bool = False
 
     operational_journal: OperationalJournal = field(default_factory=OperationalJournal)
@@ -449,6 +457,12 @@ class SessionRuntime:
         memory = self.interaction_ingress.data.memory.snapshot
         retrieval = self.interaction_ingress.data.retrieval.snapshot
         presentation = self.interaction_ingress.reducer.presentation_state
+        ppt_deck_id = (
+            presentation[0] if presentation is not None else self._planned_ppt_deck_id
+        )
+        ppt_page = (
+            presentation[2] if presentation is not None else self._planned_ppt_page
+        )
         corpus_version = f"{retrieval.corpus_id}@{retrieval.corpus_revision}"
         index_version = f"{retrieval.index_id}@{retrieval.index_revision}"
         knowledge_reference = (
@@ -466,8 +480,10 @@ class SessionRuntime:
                 memory, self.scheduler.snapshot.session_id
             ),
             capabilities=self.agent_capabilities,
-            ppt_deck_id=None if presentation is None else presentation[0],
-            ppt_page=None if presentation is None else presentation[2],
+            frontend_caption=self._frontend_caption,
+            frontend_animation=self._frontend_animation,
+            ppt_deck_id=ppt_deck_id,
+            ppt_page=ppt_page,
             tasks=tuple(
                 TaskSnapshot(
                     task_id=str(record.request.task_id),
@@ -508,6 +524,12 @@ class SessionRuntime:
         memory = self.interaction_ingress.data.memory.snapshot
         retrieval = self.interaction_ingress.data.retrieval.snapshot
         presentation = self.interaction_ingress.reducer.presentation_state
+        ppt_deck_id = (
+            presentation[0] if presentation is not None else self._planned_ppt_deck_id
+        )
+        ppt_page = (
+            presentation[2] if presentation is not None else self._planned_ppt_page
+        )
         corpus_version = f"{retrieval.corpus_id}@{retrieval.corpus_revision}"
         index_version = f"{retrieval.index_id}@{retrieval.index_revision}"
         snapshot = BrainStateSnapshot(
@@ -522,8 +544,10 @@ class SessionRuntime:
                 memory, self.scheduler.snapshot.session_id
             ),
             capabilities=self.agent_capabilities,
-            ppt_deck_id=None if presentation is None else presentation[0],
-            ppt_page=None if presentation is None else presentation[2],
+            frontend_caption=self._frontend_caption,
+            frontend_animation=self._frontend_animation,
+            ppt_deck_id=ppt_deck_id,
+            ppt_page=ppt_page,
             tasks=tuple(
                 TaskSnapshot(
                     task_id=str(record.request.task_id),
@@ -609,6 +633,7 @@ class SessionRuntime:
         self._dispatch_agent_effects(accepted, turn_id)
 
     def _dispatch_agent_effects(self, accepted: PlanAccepted, turn_id: TurnId) -> None:
+        self._materialize_frontend_operations(accepted.plan.frontend_operations)
         dispatcher = self.agent_effect_dispatcher
         if dispatcher is None:
             return
@@ -626,6 +651,20 @@ class SessionRuntime:
                 session_id=session_id,
                 turn_id=turn_id,
             )
+
+    def _materialize_frontend_operations(
+        self, operations: tuple[FrontendOperation, ...]
+    ) -> None:
+        for operation in operations:
+            if operation.kind == "caption" and isinstance(operation.value, str):
+                self._frontend_caption = operation.value
+            elif operation.kind == "animation" and isinstance(operation.value, str):
+                self._frontend_animation = operation.value
+            elif operation.kind == "ppt.load" and isinstance(operation.value, str):
+                self._planned_ppt_deck_id = operation.value
+                self._planned_ppt_page = 1
+            elif operation.kind == "ppt.navigate" and isinstance(operation.value, int):
+                self._planned_ppt_page = operation.value
 
     def _apply_context_compaction(
         self, accepted: PlanAccepted, composition: ContextComposition
