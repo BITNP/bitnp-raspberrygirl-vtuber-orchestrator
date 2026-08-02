@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import hmac
@@ -25,6 +24,8 @@ MAX_SSRC = 4_294_967_295
 
 MAX_UDP_PORT = 65_535
 
+MAX_VOICE_EMBEDDING_DIMENSIONS = 1_024
+
 
 type ControlEvent = (
     SourceRegistration
@@ -33,12 +34,12 @@ type ControlEvent = (
     | StreamState
     | StreamFlush
     | FlushAcknowledgement
+    | VoiceEvidence
 )
 
 
 @dataclass(frozen=True, slots=True)
 class ControlEnvelopeError(Exception):
-
     field_name: str
 
     @override
@@ -48,7 +49,6 @@ class ControlEnvelopeError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class EnvelopeCorrelation:
-
     trace_id: str
 
     session_id: str
@@ -58,7 +58,6 @@ class EnvelopeCorrelation:
 
 @dataclass(frozen=True, slots=True)
 class SourceRegistration:
-
     session_id: str
 
     stream_id: str
@@ -70,7 +69,6 @@ class SourceRegistration:
 
 @dataclass(frozen=True, slots=True)
 class SinkRegistration:
-
     session_id: str
 
     stream_id: str
@@ -82,7 +80,6 @@ class SinkRegistration:
 
 @dataclass(frozen=True, slots=True)
 class StreamReady:
-
     session_id: str
 
     stream_id: str
@@ -92,7 +89,6 @@ class StreamReady:
 
 @dataclass(frozen=True, slots=True)
 class StreamState:
-
     session_id: str
 
     stream_id: str
@@ -108,15 +104,27 @@ class StreamState:
     cancellation_epoch: CancellationEpoch | None = None
 
 
-class ControlReceiver(Protocol):
+@dataclass(frozen=True, slots=True)
+class VoiceEvidence:
+    """Ephemeral CAM++ evidence; callers must not persist raw embeddings."""
 
-    def register_control(self, raw_message: str, peer_ip: str) -> None:
-        ...
+    session_id: str
+    stream_id: str
+    rtp_start_timestamp: int
+    rtp_end_timestamp: int
+    embedding_model_revision: str
+    embedding: tuple[float, ...]
+    speech_ms: int
+    quality_score: float
+    correlation: EnvelopeCorrelation
+
+
+class ControlReceiver(Protocol):
+    def register_control(self, raw_message: str, peer_ip: str) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class AuthenticatedControl:
-
     receiver: ControlReceiver
 
     token: TrustedLanToken | None
@@ -243,6 +251,21 @@ def parse_control_event(raw_message: str) -> ControlEvent:
                 target_generated_ssrc=GeneratedSsrc(
                     _ssrc_field(data, "target_generated_ssrc")
                 ),
+                correlation=correlation,
+            )
+
+        case "voice.evidence":
+            _validate_voice_evidence(data, _text(value, "source"))
+            quality = _mapping(data, "quality")
+            parsed = VoiceEvidence(
+                session_id=_text(value, "session_id"),
+                stream_id=_text(data, "stream_id"),
+                rtp_start_timestamp=_nonnegative_int(data, "rtp_start_timestamp"),
+                rtp_end_timestamp=_nonnegative_int(data, "rtp_end_timestamp"),
+                embedding_model_revision=_text(data, "embedding_model_revision"),
+                embedding=tuple(_embedding(data)),
+                speech_ms=_nonnegative_int(quality, "speech_ms"),
+                quality_score=_quality_score(quality),
                 correlation=correlation,
             )
 
@@ -405,6 +428,58 @@ def _validate_flush(
     _ = _text(data, "request_id")
 
     _ = _ssrc_field(data, "target_generated_ssrc")
+
+
+def _validate_voice_evidence(data: dict[str, JsonValue], source: str) -> None:
+    required = {
+        "stream_id",
+        "rtp_start_timestamp",
+        "rtp_end_timestamp",
+        "embedding_model_revision",
+        "embedding",
+        "quality",
+    }
+    if source != "mic" or set(data) != required:
+        raise ControlEnvelopeError(field_name="data")
+    _ = _text(data, "stream_id")
+    start = _nonnegative_int(data, "rtp_start_timestamp")
+    if _nonnegative_int(data, "rtp_end_timestamp") < start:
+        raise ControlEnvelopeError(field_name="data.rtp_end_timestamp")
+    _ = _text(data, "embedding_model_revision")
+    _ = _embedding(data)
+    quality = _mapping(data, "quality")
+    if set(quality) != {"speech_ms", "score"}:
+        raise ControlEnvelopeError(field_name="data.quality")
+    _ = _nonnegative_int(quality, "speech_ms")
+    _ = _quality_score(quality)
+
+
+def _embedding(data: dict[str, JsonValue]) -> tuple[float, ...]:
+    value = data.get("embedding")
+    if (
+        not isinstance(value, list)
+        or not 1 <= len(value) <= MAX_VOICE_EMBEDDING_DIMENSIONS
+        or any(not _is_number(item) for item in value)
+    ):
+        raise ControlEnvelopeError(field_name="data.embedding")
+    return tuple(_number(item) for item in value)
+
+
+def _quality_score(quality: dict[str, JsonValue]) -> float:
+    value = quality.get("score")
+    if not _is_number(value) or not 0 <= _number(value) <= 1:
+        raise ControlEnvelopeError(field_name="data.quality.score")
+    return _number(value)
+
+
+def _is_number(value: JsonValue | None) -> bool:
+    return isinstance(value, (float, int)) and not isinstance(value, bool)
+
+
+def _number(value: JsonValue | None) -> float:
+    if not isinstance(value, (float, int)) or isinstance(value, bool):
+        raise ControlEnvelopeError(field_name="number")
+    return float(value)
 
 
 def _ssrc(data: dict[str, JsonValue]) -> int:

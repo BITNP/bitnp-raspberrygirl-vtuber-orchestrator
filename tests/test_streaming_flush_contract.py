@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -21,6 +20,7 @@ from orchestrator.streaming_contracts import (
 from orchestrator.transport_control import (
     ControlEnvelopeError,
     EnvelopeCorrelation,
+    VoiceEvidence,
     parse_control_event,
 )
 
@@ -54,7 +54,6 @@ def test_flush_envelope_parses_every_epoch_correlated_identity() -> None:
 
     # When: the WSS boundary parses it.
 
-
     flush = parse_control_event(_flush_envelope())
 
     # Then: all replacement-admission correlation identities survive parsing.
@@ -84,7 +83,6 @@ def test_flush_envelope_parses_every_epoch_correlated_identity() -> None:
 
 def test_flush_acknowledgement_parses_every_envelope_and_command_correlation() -> None:
     # Given: a Sound acknowledgement preserving a generated-media flush identity.
-
 
     acknowledgement_envelope = (
         _flush_envelope()
@@ -124,7 +122,6 @@ def test_flush_acknowledgement_parses_every_envelope_and_command_correlation() -
 def test_flush_envelope_rejects_missing_epoch() -> None:
     # Given: a flush missing its cancellation epoch.
 
-
     envelope = _flush_envelope().replace('"cancellation_epoch": 3, ', "")
 
     # When: the boundary parses the malformed event.
@@ -137,9 +134,45 @@ def test_flush_envelope_rejects_missing_epoch() -> None:
     assert error.value.field_name == "data.cancellation_epoch"
 
 
+def test_voice_evidence_is_bounded_and_keeps_rtp_correlation() -> None:
+    envelope = json.dumps(
+        {
+            "schema_version": "1.0.0",
+            "event_type": "voice.evidence",
+            "event_id": "voice-1",
+            "source": "mic",
+            "time": "2026-08-02T00:00:00Z",
+            "trace_id": "trace-001",
+            "session_id": "session-001",
+            "seq": 7,
+            "data": {
+                "stream_id": "stream-001",
+                "rtp_start_timestamp": 1_000,
+                "rtp_end_timestamp": 4_200,
+                "embedding_model_revision": "camplusplus-onnx-v1",
+                "embedding": [0.25, -0.5],
+                "quality": {"speech_ms": 200, "score": 0.91},
+            },
+        }
+    )
+
+    evidence = parse_control_event(envelope)
+
+    assert evidence == VoiceEvidence(
+        session_id="session-001",
+        stream_id="stream-001",
+        rtp_start_timestamp=1_000,
+        rtp_end_timestamp=4_200,
+        embedding_model_revision="camplusplus-onnx-v1",
+        embedding=(0.25, -0.5),
+        speech_ms=200,
+        quality_score=0.91,
+        correlation=EnvelopeCorrelation("trace-001", "session-001", 7),
+    )
+
+
 @dataclass
 class _FakeClock:
-
     now_ms: int = 0
 
     def advance(self, milliseconds: int) -> None:
@@ -149,7 +182,6 @@ class _FakeClock:
 
 @dataclass
 class _RecordingFlushSender:
-
     sent: list[StreamFlush] = field(default_factory=list)
 
     def send_flush(self, flush: StreamFlush) -> None:
@@ -171,7 +203,6 @@ def _flush() -> StreamFlush:
 
 def test_replacement_admission_retries_once_then_accepts_matching_ack() -> None:
     # Given: a flush request whose Sound acknowledgement is delayed past its retry.
-
 
     clock = _FakeClock()
 
@@ -202,7 +233,6 @@ def test_replacement_admission_retries_once_then_accepts_matching_ack() -> None:
 
 def test_replacement_admission_rejects_invalid_ack_and_fake_clock_timeout() -> None:
     # Given: a pending flush and an acknowledgement for a different session.
-
 
     clock = _FakeClock()
 
