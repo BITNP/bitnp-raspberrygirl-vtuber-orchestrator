@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 import pytest
@@ -18,13 +17,16 @@ from orchestrator.memory import (
     MutableMemory,
     ProposalRevision,
 )
-from orchestrator.memory_store import JsonMemoryStore, MemoryStoreBoundaryError
+from orchestrator.memory_store import (
+    JsonMemoryStore,
+    MarkdownMemoryStore,
+    MemoryStoreBoundaryError,
+)
 from orchestrator.state_snapshots import ConsentRevision, ProfileRevision
 
 
 def test_ordinary_supported_preference_auto_commits_with_provenance() -> None:
     # Given: a scheduler-owned store and a confident, typed agent proposal.
-
 
     memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
 
@@ -79,7 +81,6 @@ def test_memory_policy_rejects_stale_restricted_and_unsupported_proposals(
 ) -> None:
     # Given: a store and one policy-relevant proposal type.
 
-
     memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
 
     match reason:
@@ -113,7 +114,6 @@ def test_memory_policy_rejects_stale_restricted_and_unsupported_proposals(
 def test_profile_or_consent_revision_invalidates_task_snapshot() -> None:
     # Given: task work captured with the current memory/profile/consent revisions.
 
-
     memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
 
     captured = memory.task_snapshot(
@@ -133,7 +133,6 @@ def test_profile_or_consent_revision_invalidates_task_snapshot() -> None:
 
 def test_memory_rejects_conflicts_and_prohibited_biometric_categories() -> None:
     # Given: an already accepted ordinary preference with its provenance retained.
-
 
     memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
 
@@ -245,6 +244,24 @@ def test_memory_store_rejects_a_second_session_before_saving_the_owner_memory(
     # Then: the rejected reuse cannot redirect A's root session ownership.
     assert error.value.field == "session_id"
     assert '"session_id": "session-1"' in path.read_text(encoding="utf-8")
+
+
+def test_markdown_memory_store_is_human_readable_and_session_isolated(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "memory.md"
+    store = MarkdownMemoryStore(path)
+    memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
+    _ = memory.reduce(_proposal(value="小莓", confidence=95))
+    _ = store.load(SessionId("session-1"))
+
+    store.save(memory.snapshot)
+
+    document = path.read_text(encoding="utf-8")
+    assert "# 会话记忆" in document
+    assert "## preferred_name" in document
+    restored = store.load(SessionId("session-1"))
+    assert restored == memory.snapshot
 
 
 def _proposal(

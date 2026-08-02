@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass, field
 from hashlib import sha256
 from os import environ
@@ -20,7 +19,7 @@ from orchestrator.interactions import (
     SessionInteractionReducer,
 )
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
-from orchestrator.memory_store import JsonMemoryStore
+from orchestrator.memory_store import MarkdownMemoryStore
 from orchestrator.profile_store import JsonVoiceProfileStore
 from orchestrator.retrieval import RetrievalFixtureProvider
 from orchestrator.session_data import ProfilePersistence, SessionDataState
@@ -30,7 +29,6 @@ from orchestrator.voice_profile_service import VoiceProfileService
 
 @dataclass(frozen=True, slots=True)
 class SessionInteractionIngress:
-
     data: SessionDataState
 
     profiles: VoiceProfileService
@@ -46,7 +44,7 @@ class SessionInteractionIngress:
         data = SessionDataState.create(
             session_id=scheduler.snapshot.session_id,
             retrieval=RetrievalFixtureProvider(refs=()),
-            memory_store=JsonMemoryStore(session_root / "memory.json"),
+            memory_store=MarkdownMemoryStore(session_root / "memory.md"),
             profile_persistence=ProfilePersistence(
                 store=JsonVoiceProfileStore(session_root / "voice-profiles.json"),
                 vault_directory=session_root / "voice-templates",
