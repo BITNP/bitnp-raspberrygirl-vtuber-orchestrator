@@ -4,6 +4,13 @@ import json
 from dataclasses import replace
 from typing import final
 
+from orchestrator.agent_pipeline import (
+    AsyncAgentPipeline,
+    AudienceInput,
+    BrainStateSnapshot,
+    GateDecision,
+    ToolRequest,
+)
 from orchestrator.asr_semantic_gate import AsrSemanticGate
 from orchestrator.identity import (
     EncryptedVoiceTemplate,
@@ -220,6 +227,28 @@ def test_runtime_opens_one_turn_only_for_semantically_accepted_asr_final() -> No
     assert runtime.observables.rejections[-1].correlation == _correlation(
         "session-1", "trace-asr-2", 2
     )
+
+
+def test_async_asr_final_uses_the_same_gate_and_brain_pipeline_as_comments() -> None:
+    gate = _AsyncAsrGate()
+    brain = _AsyncAsrBrain()
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-async-asr"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        async_agent_pipeline=AsyncAgentPipeline(gate, brain, _AsyncNoTools()),
+    )
+    event = ASRAudienceEvent("请介绍 BitNet", 20, "asr-1", 1)
+    correlation = _correlation("session-async-asr", "trace-asr-1", 1)
+
+    outcome = asyncio.run(runtime.receive_asr_final_async(event, correlation))
+
+    assert outcome.accepted
+    assert gate.inputs == ("请介绍 BitNet",)
+    assert len(brain.snapshots) == 1
+    assert brain.snapshots[0].input.source.value == "asr"
+    entries = runtime.interaction_ingress.data.context.snapshot.entries
+    assert entries[0].text == "请介绍 BitNet"
 
 
 def test_runtime_rejects_stale_task_before_lane_enqueue() -> None:
@@ -908,6 +937,43 @@ def _result(request: TaskRequest) -> TaskResult:
         snapshot_revision=request.snapshot_revision,
         effect=TaskEffect("answer", "accepted"),
     )
+
+
+class _AsyncAsrGate:
+    def __init__(self) -> None:
+        self.inputs: tuple[str, ...] = ()
+
+    async def evaluate(
+        self, audience_input: AudienceInput, *, active_summary: str
+    ) -> GateDecision:
+        _ = active_summary
+        self.inputs = (*self.inputs, audience_input.text)
+        return GateDecision.ACCEPT
+
+
+class _AsyncAsrBrain:
+    def __init__(self) -> None:
+        self.snapshots: list[BrainStateSnapshot] = []
+
+    async def plan(
+        self, snapshot: BrainStateSnapshot, *, observations: tuple[str, ...] = ()
+    ) -> str:
+        _ = observations
+        self.snapshots.append(snapshot)
+        return json.dumps(
+            {"response_text": "已收到", "expected_revision": snapshot.revision}
+        )
+
+    async def repair(self, snapshot: BrainStateSnapshot, invalid_plan: str) -> str:
+        _ = snapshot, invalid_plan
+        return "{}"
+
+
+class _AsyncNoTools:
+    async def execute(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> None:
+        _ = request, snapshot
 
 
 class _Clock:

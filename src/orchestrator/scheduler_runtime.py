@@ -856,7 +856,7 @@ class SessionRuntime:
         self,
         event: ASRAudienceEvent,
         correlation: EventCorrelation,
-        gate: AsrSemanticGate,
+        gate: AsrSemanticGate | None = None,
     ) -> RuntimeOutcome:
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
@@ -878,7 +878,11 @@ class SessionRuntime:
         ):
             return self._reject(correlation, "agent_gate_discarded")
 
-        if pipeline is None and gate.evaluate(event.text) is AsrGateDecision.DISCARD:
+        if (
+            pipeline is None
+            and gate is not None
+            and gate.evaluate(event.text) is AsrGateDecision.DISCARD
+        ):
             return self._reject(correlation, "asr_gate_discarded")
 
         transition = self.scheduler.apply(
@@ -908,6 +912,47 @@ class SessionRuntime:
 
             case _:
                 return self._reject(correlation, "scheduler_rejected")
+
+    async def receive_asr_final_async(
+        self,
+        event: ASRAudienceEvent,
+        correlation: EventCorrelation,
+    ) -> RuntimeOutcome:
+        """Run finalized ASR through the same async Gate and Brain as comments."""
+        pipeline = self.async_agent_pipeline
+        if pipeline is None:
+            return self.receive_asr_final(event, correlation)
+        if correlation in self._correlations:
+            return self._reject(correlation, "duplicate_correlation")
+        if self._ended:
+            return self._reject(correlation, "session_ended")
+        audience_input = BrainAudienceInput(
+            session_id=str(correlation.session_id),
+            trace_id=str(correlation.trace_id),
+            sequence=int(correlation.sequence),
+            source=BrainAudienceSource.ASR,
+            received_at_ms=event.received_at_ms,
+            text=event.text,
+        )
+        if await pipeline.submit(audience_input) is GateDecision.DISCARD:
+            return self._reject(correlation, "agent_gate_discarded")
+        transition = self.scheduler.apply(
+            StartTurn(
+                expected_revision=self.scheduler.snapshot.revision,
+                event=SchedulerEvent(event_type="asr.final", correlation=correlation),
+            )
+        )
+        if not isinstance(transition, TransitionAccepted):
+            return self._reject(correlation, "scheduler_rejected")
+        accepted_turn = transition.accepted_event.turn_id
+        self._correlations.add(correlation)
+        self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
+        await self._run_async_agent_plan(
+            pipeline, audience_input, accepted_turn, correlation
+        )
+        return RuntimeOutcome(
+            accepted=True, correlation=correlation, turn_id=accepted_turn
+        )
 
     def enroll_profile(
         self, enrollment: ProfileEnrollment, correlation: EventCorrelation
