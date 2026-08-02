@@ -76,7 +76,7 @@ class SchedulerOutputFence:
         *,
         stream: StreamKey,
         segment_id: SegmentId,
-        target_generated_ssrc: GeneratedSsrc,
+        target_generated_ssrc: GeneratedSsrc | None = None,
         correlation: EnvelopeCorrelation,
     ) -> OutputLease:
         previous = self._leases.get(stream)
@@ -88,6 +88,9 @@ class SchedulerOutputFence:
         )
 
         epoch = CancellationEpoch(generation)
+
+        if target_generated_ssrc is None:
+            target_generated_ssrc = GeneratedSsrc(generated_ssrc(stream, epoch))
 
         lease = OutputLease(
             stream=stream,

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +8,7 @@ import wave
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from orchestrator.ids import ConnectionId
+from orchestrator.ids import ConnectionId, SessionId
 from orchestrator.llm import MockLLMAdapter
 from orchestrator.media_adapters import SynthesizedAudio
 from orchestrator.modes import AdaptiveAgentPolicy
@@ -17,6 +16,9 @@ from orchestrator.onsite_bridge import OnsiteExplainerBridge
 from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
 from orchestrator.pipeline_contracts import ASRAudienceEvent, PipelineConfig
 from orchestrator.retrieval import RetrievalFixtureProvider
+from orchestrator.scheduler_reflex import SchedulerOutputFence
+from orchestrator.sessions import SessionScheduler
+from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_hub import RtpHub
 from orchestrator.transport_runtime import ControlHandler, TransportRuntime
@@ -24,12 +26,10 @@ from orchestrator.transport_runtime import ControlHandler, TransportRuntime
 if TYPE_CHECKING:
     from orchestrator.json_boundary import JsonValue
     from orchestrator.provider_streaming import ProviderCancellationHandle
-    from orchestrator.transport_hub import RtpHub
 
 
 @dataclass(slots=True)
 class _Datagrams:
-
     sent: list[tuple[bytes, tuple[str, int]]] = field(default_factory=list)
 
     def sendto(self, data: bytes, addr: tuple[str, int]) -> None:
@@ -43,7 +43,6 @@ class _Datagrams:
 
 @dataclass(frozen=True, slots=True)
 class _ControlServer:
-
     def close(self) -> None:
 
         return
@@ -55,7 +54,6 @@ class _ControlServer:
 
 @dataclass(slots=True)
 class _DatagramListener:
-
     transport: _Datagrams
 
     hub: RtpHub | None = None
@@ -69,7 +67,6 @@ class _DatagramListener:
 
 @dataclass(slots=True)
 class _DelayedAsr:
-
     started: threading.Event = field(default_factory=threading.Event)
 
     release: threading.Event = field(default_factory=threading.Event)
@@ -111,7 +108,6 @@ class _DelayedAsr:
 
 @dataclass(frozen=True, slots=True)
 class _Tts:
-
     def synthesize(
         self,
         *,
@@ -136,7 +132,6 @@ def test_runtime_processes_cancellation_while_provider_runs_and_drops_stale_rtp(
 
 async def _cancellation_proof() -> None:
     # Given: a registered onsite route whose provider work waits on an explicit signal.
-
 
     transport = _Datagrams()
 
@@ -188,7 +183,6 @@ def test_runtime_close_cancels_blocking_asr_and_drops_its_late_output() -> None:
 async def _close_before_release_proof() -> None:
     # Given: an onsite ASR worker blocked until its provider resource is cancelled.
 
-
     transport = _Datagrams()
 
     listener = _DatagramListener(transport)
@@ -234,9 +228,57 @@ def test_mic_source_disconnect_finalizes_active_streaming_utterance() -> None:
     asyncio.run(_source_disconnect_finalizes_proof())
 
 
+def test_agent_plan_tts_uses_allocated_output_epoch_after_prior_playback() -> None:
+
+    asyncio.run(_agent_plan_output_epoch_proof())
+
+
+async def _agent_plan_output_epoch_proof() -> None:
+    # Given: a completed output lease at generation zero while Mic input remains
+    # at epoch zero for the next ASR final.
+
+    transport = _Datagrams()
+    bridge = _bridge(_DelayedAsr())
+    hub = RtpHub(transport, onsite_bridge=bridge)
+    hub.set_output_fence(
+        SchedulerOutputFence(
+            SessionScheduler(
+                session_id=SessionId("session-onsite-runtime"),
+                turn_id_prefix="turn-agent-plan-output",
+            )
+        )
+    )
+    command_epochs: list[int] = []
+
+    async def record_command(_stream: StreamKey, epoch: int) -> None:
+        command_epochs.append(epoch)
+
+    hub.set_output_command_callback(record_command)
+    hub.register_control(_source_registration(), "127.0.0.1")
+    hub.register_control(_sink_registration(), "127.0.0.1")
+    stream = StreamKey("session-onsite-runtime", "stream-onsite-runtime")
+
+    assert hub.authorize_onsite_output(stream, CancellationEpoch(0)) is True
+
+    # When: a new accepted Brain reply is synthesized from the unchanged Mic
+    # input epoch.
+
+    emitted = await bridge.speak_agent_plan(stream, "agent reply", CancellationEpoch(0))
+    await asyncio.sleep(0)
+
+    # Then: the hub's fresh lease is used consistently for both the command and
+    # outgoing RTP instead of treating the Mic input epoch as an output epoch.
+
+    assert emitted is True
+    assert command_epochs == [0, 1]
+    assert len(transport.sent) == 1
+    packet, endpoint = transport.sent[0]
+    assert endpoint == ("127.0.0.1", 5006)
+    assert int.from_bytes(packet[8:12], "big") == hub.output_ssrc(stream, 1)
+
+
 async def _source_disconnect_finalizes_proof() -> None:
     # Given: a non-legacy onsite route with one voiced RTP frame below forced endpoint.
-
 
     transport = _Datagrams()
 

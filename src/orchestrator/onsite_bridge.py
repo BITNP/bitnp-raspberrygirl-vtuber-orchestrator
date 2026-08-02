@@ -83,13 +83,15 @@ type OnsiteOutputFinished = Callable[[StreamKey, CancellationEpoch], Awaitable[N
 
 type OnsiteOutputAuthorization = Callable[[StreamKey, CancellationEpoch], bool]
 
+type OnsiteAgentPlanOutputLease = Callable[
+    [StreamKey, CancellationEpoch], CancellationEpoch | None
+]
+
 type OnsiteReplacement = Callable[
     [StreamKey, SegmentId], Awaitable[CancellationEpoch | None]
 ]
 
-type OnsiteAsrFinal = Callable[
-    [StreamKey, ASRAudienceEvent], Awaitable[bool]
-]
+type OnsiteAsrFinal = Callable[[StreamKey, ASRAudienceEvent], Awaitable[bool]]
 
 
 async def _discard_output(
@@ -106,6 +108,13 @@ def _allow_output(stream: StreamKey, epoch: CancellationEpoch) -> bool:
     _ = (stream, epoch)
 
     return True
+
+
+def _reuse_requested_output_epoch(
+    stream: StreamKey, epoch: CancellationEpoch
+) -> CancellationEpoch:
+    _ = stream
+    return epoch
 
 
 async def _discard_replacement(
@@ -219,6 +228,10 @@ class OnsiteExplainerBridge:
 
     authorize_output: OnsiteOutputAuthorization = field(default=_allow_output)
 
+    allocate_agent_plan_output: OnsiteAgentPlanOutputLease = field(
+        default=_reuse_requested_output_epoch
+    )
+
     observability: OnsiteObservability | None = None
 
     asr_final_handler: OnsiteAsrFinal | None = None
@@ -232,6 +245,12 @@ class OnsiteExplainerBridge:
     def set_output_authorizer(self, callback: OnsiteOutputAuthorization) -> None:
         """Install the transport's scheduler-owned output admission callback."""
         self.authorize_output = callback
+
+    def set_agent_plan_output_allocator(
+        self, callback: OnsiteAgentPlanOutputLease
+    ) -> None:
+        """Install the scheduler-owned lease allocator for Brain-originated TTS."""
+        self.allocate_agent_plan_output = callback
 
     def set_replacement_callback(self, callback: OnsiteReplacement) -> None:
         self.begin_replacement = callback
@@ -647,9 +666,7 @@ class OnsiteExplainerBridge:
         self, text: str, cancellation: CancellationToken
     ) -> tuple[Pcm16leChunk, ...] | None:
         started_at = perf_counter()
-        _LOGGER.debug(
-            "onsite_tts_request text=%r voice=%s", text, self.voice
-        )
+        _LOGGER.debug("onsite_tts_request text=%r voice=%s", text, self.voice)
         for attempt in range(2):
             try:
                 response = self.tts.synthesize(
@@ -691,20 +708,21 @@ class OnsiteExplainerBridge:
         """Synthesize one accepted Brain reply and deliver paced RTP to Sound."""
         cancellation = CancellationToken()
         chunks = await asyncio.to_thread(self.synthesize, text, cancellation)
-        if not chunks or not self.authorize_output(stream, epoch):
+        output_epoch = self.allocate_agent_plan_output(stream, epoch)
+        if not chunks or output_epoch is None:
             return False
-        packetizer = TtsPcmRtpPacketizer(stream=stream, cancellation_epoch=epoch)
+        packetizer = TtsPcmRtpPacketizer(stream=stream, cancellation_epoch=output_epoch)
         packets = tuple(packet for chunk in chunks for packet in packetizer.push(chunk))
         packets += packetizer.finish()
         loop = asyncio.get_running_loop()
         deadline = loop.time()
         for packet in packets:
-            await self.output(stream, epoch, packet)
+            await self.output(stream, output_epoch, packet)
             deadline += 0.02
             delay = deadline - loop.time()
             if delay > 0:
                 await asyncio.sleep(delay)
-        await self.output_finished(stream, epoch)
+        await self.output_finished(stream, output_epoch)
         return True
 
     def stream_synthesize(
@@ -799,9 +817,7 @@ class _BridgeStages(OnsiteStages):
     ) -> TurnResult | None:
         return await self.bridge.answer_async(self.pipeline, event, cancellation)
 
-    async def on_asr_final(
-        self, stream: StreamKey, event: ASRAudienceEvent
-    ) -> bool:
+    async def on_asr_final(self, stream: StreamKey, event: ASRAudienceEvent) -> bool:
         handler = self.bridge.asr_final_handler
         if handler is None:
             return False

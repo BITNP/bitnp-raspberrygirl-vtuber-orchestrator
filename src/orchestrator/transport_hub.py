@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Protocol, cast, final, override
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
     FlushAcknowledgement,
-    GeneratedSsrc,
     SegmentId,
     StreamFlush,
     StreamKey,
@@ -68,6 +67,11 @@ class OnsiteBridge(Protocol):
     def set_output_authorizer(
         self,
         callback: Callable[[StreamKey, CancellationEpoch], bool],
+    ) -> None: ...
+
+    def set_agent_plan_output_allocator(
+        self,
+        callback: Callable[[StreamKey, CancellationEpoch], CancellationEpoch | None],
     ) -> None: ...
 
     def set_replacement_callback(
@@ -274,6 +278,9 @@ class RtpHub:
 
         if bridge is not None:
             bridge.set_output_authorizer(self.authorize_onsite_output)
+            bridge.set_agent_plan_output_allocator(
+                self.allocate_onsite_agent_plan_output
+            )
 
     def authorize_onsite_output(
         self, stream: StreamKey, epoch: CancellationEpoch
@@ -292,7 +299,6 @@ class RtpHub:
         lease = output_fence.activate(
             stream=stream,
             segment_id=SegmentId(f"onsite-{stream.stream_id}-{int(epoch)}"),
-            target_generated_ssrc=GeneratedSsrc(generated_ssrc(stream, epoch)),
             correlation=correlation,
         )
 
@@ -305,6 +311,36 @@ class RtpHub:
             task.add_done_callback(self._output_command_tasks.discard)
 
         return lease.cancellation_epoch == epoch
+
+    def allocate_onsite_agent_plan_output(
+        self, stream: StreamKey, input_epoch: CancellationEpoch
+    ) -> CancellationEpoch | None:
+        """Allocate the output lease epoch for a finalized Brain reply.
+
+        Mic's input epoch only validates incoming ASR.  It is deliberately
+        independent from the monotonically increasing output lease generation.
+        """
+        output_fence = self._output_fence
+        if output_fence is None:
+            return input_epoch
+        correlation = self._correlations.get(stream)
+        if correlation is None:
+            return None
+        lease = output_fence.activate(
+            stream=stream,
+            segment_id=SegmentId(
+                f"onsite-agent-plan-{stream.stream_id}-{int(input_epoch)}"
+            ),
+            correlation=correlation,
+        )
+        callback = self._output_command_callback
+        if callback is not None:
+            task = asyncio.ensure_future(
+                callback(stream, int(lease.cancellation_epoch))
+            )
+            self._output_command_tasks.add(task)
+            task.add_done_callback(self._output_command_tasks.discard)
+        return lease.cancellation_epoch
 
     @property
     def route_ready(self) -> bool:
