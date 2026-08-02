@@ -6,6 +6,8 @@ from typing import Final, Protocol, final, override
 from orchestrator.ids import SessionId, TraceId, TurnId
 from orchestrator.json_boundary import JsonBoundaryError, JsonValue, parse_json_value
 from orchestrator.memory import (
+    MemoryCategory,
+    MemoryConfidence,
     MemoryEntry,
     MemoryKey,
     MemoryProvenance,
@@ -115,7 +117,10 @@ class MarkdownMemoryStore:
                 (
                     f"## {entry.key}",
                     f"- 值: {entry.value}",
+                    f"- 类别: {entry.category}",
                     f"- 来源轮次: {entry.provenance.turn_id}",
+                    f"- 置信度: {entry.confidence}",
+                    f"- 更新时间(毫秒): {entry.updated_at_ms}",
                     f"- 证据: {entry.provenance.evidence_id}",
                 )
             )
@@ -165,6 +170,9 @@ def _document_for_snapshot(
             {
                 "key": entry.key,
                 "value": entry.value,
+                "category": entry.category,
+                "confidence": entry.confidence,
+                "updated_at_ms": entry.updated_at_ms,
                 "source": entry.provenance.source,
                 "trace_id": entry.provenance.trace_id,
                 "session_id": entry.provenance.session_id,
@@ -187,6 +195,9 @@ def _snapshot_from_document(
         MemoryEntry(
             key=MemoryKey(_text(entry, "key")),
             value=_text(entry, "value"),
+            category=_category(entry.get("category"), index),
+            confidence=MemoryConfidence(_optional_integer(entry, "confidence", 100)),
+            updated_at_ms=_optional_integer(entry, "updated_at_ms", 0),
             provenance=MemoryProvenance(
                 source=_source(_text(entry, "source"), index),
                 trace_id=TraceId(_text(entry, "trace_id")),
@@ -242,6 +253,25 @@ def _integer(document: dict[str, JsonValue], field: str) -> int:
         raise MemoryStoreBoundaryError(field)
 
     return value
+
+
+def _optional_integer(document: dict[str, JsonValue], field: str, default: int) -> int:
+    value = document.get(field, default)
+    if type(value) is not int:
+        raise MemoryStoreBoundaryError(field)
+    return value
+
+
+def _category(value: JsonValue | None, index: int) -> MemoryCategory:
+    field = f"preferences[{index}].category"
+    if value is None:
+        return MemoryCategory.ORDINARY_PREFERENCE
+    if not isinstance(value, str):
+        raise MemoryStoreBoundaryError(field)
+    try:
+        return MemoryCategory(value)
+    except ValueError as error:
+        raise MemoryStoreBoundaryError(field) from error
 
 
 def _source(value: str, index: int) -> MemorySource:

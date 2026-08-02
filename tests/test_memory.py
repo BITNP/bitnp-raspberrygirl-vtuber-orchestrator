@@ -173,6 +173,31 @@ def test_memory_rejects_conflicts_and_prohibited_biometric_categories() -> None:
     assert memory.snapshot.entries[0].value == "小莓"
 
 
+def test_higher_confidence_evidence_replaces_conflict_with_audit() -> None:
+    memory = MutableMemory(
+        session_id=SessionId("session-1"), policy=MemoryPolicy(), clock=lambda: 42
+    )
+    initial = memory.reduce(_proposal(value="小莓", confidence=95))
+    assert isinstance(initial, MemoryCommitAccepted)
+
+    replacement = memory.reduce(
+        MemoryProposal(
+            key=MemoryKey("preferred_name"),
+            value="莓莓",
+            category=MemoryCategory.ORDINARY_PREFERENCE,
+            confidence=MemoryConfidence(96),
+            base_revision=ProposalRevision(1),
+            provenance=_proposal(value="莓莓", confidence=96).provenance,
+        )
+    )
+
+    assert isinstance(replacement, MemoryCommitAccepted)
+    assert memory.snapshot.entries[0].value == "莓莓"
+    assert memory.snapshot.entries[0].confidence == MemoryConfidence(96)
+    assert memory.snapshot.entries[0].updated_at_ms == 42
+    assert memory.conflict_audit[0].replaced_value == "小莓"
+
+
 def test_memory_store_rejects_an_empty_snapshot_for_another_session(
     tmp_path: Path,
 ) -> None:
@@ -260,6 +285,8 @@ def test_markdown_memory_store_is_human_readable_and_session_isolated(
     document = path.read_text(encoding="utf-8")
     assert "# 会话记忆" in document
     assert "## preferred_name" in document
+    assert "- 类别: ordinary_preference" in document
+    assert "- 置信度: 95" in document
     restored = store.load(SessionId("session-1"))
     assert restored == memory.snapshot
 

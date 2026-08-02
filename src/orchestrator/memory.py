@@ -1,6 +1,7 @@
-
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum, unique
+from time import time_ns
 from typing import NewType, final
 
 from orchestrator.ids import SessionId, TraceId, TurnId
@@ -14,6 +15,11 @@ from orchestrator.state_snapshots import (
     TaskStateSnapshot,
 )
 
+
+def _now_ms() -> int:
+    return time_ns() // 1_000_000
+
+
 MemoryKey = NewType("MemoryKey", str)
 
 MemoryConfidence = NewType("MemoryConfidence", int)
@@ -23,7 +29,6 @@ ProposalRevision = NewType("ProposalRevision", int)
 
 @unique
 class MemoryCategory(StrEnum):
-
     ORDINARY_PREFERENCE = "ordinary_preference"
 
     RESTRICTED = "restricted"
@@ -37,7 +42,6 @@ class MemoryCategory(StrEnum):
 
 @unique
 class MemorySource(StrEnum):
-
     AGENT_PROPOSAL = "agent_proposal"
 
     USER_REQUEST = "user_request"
@@ -45,7 +49,6 @@ class MemorySource(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class MemoryProvenance:
-
     source: MemorySource
 
     trace_id: TraceId
@@ -59,7 +62,6 @@ class MemoryProvenance:
 
 @dataclass(frozen=True, slots=True)
 class MemoryProposal:
-
     key: MemoryKey
 
     value: str
@@ -75,17 +77,36 @@ class MemoryProposal:
 
 @dataclass(frozen=True, slots=True)
 class MemoryEntry:
-
     key: MemoryKey
 
     value: str
 
     provenance: MemoryProvenance
 
+    category: MemoryCategory = MemoryCategory.ORDINARY_PREFERENCE
+
+    confidence: MemoryConfidence = MemoryConfidence(100)
+
+    updated_at_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryConflictAudit:
+    """Retained in-memory evidence that a higher-confidence fact replaced one."""
+
+    key: MemoryKey
+
+    replaced_value: str
+
+    replacement_value: str
+
+    replaced_confidence: MemoryConfidence
+
+    replacement_confidence: MemoryConfidence
+
 
 @dataclass(frozen=True, slots=True)
 class MutableMemorySnapshot:
-
     revision: MemoryRevision
 
     entries: tuple[MemoryEntry, ...]
@@ -97,13 +118,11 @@ class MutableMemorySnapshot:
 
 @dataclass(frozen=True, slots=True)
 class MemoryPolicy:
-
     minimum_confidence: MemoryConfidence = MemoryConfidence(90)
 
 
 @unique
 class MemoryCommitRejection(StrEnum):
-
     STALE_PROPOSAL = "stale_proposal"
 
     SESSION_MISMATCH = "session_mismatch"
@@ -117,13 +136,11 @@ class MemoryCommitRejection(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class MemoryCommitAccepted:
-
     snapshot: MutableMemorySnapshot
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryCommitRejected:
-
     reason: MemoryCommitRejection
 
 
@@ -132,8 +149,13 @@ type MemoryCommitResult = MemoryCommitAccepted | MemoryCommitRejected
 
 @final
 class MutableMemory:
-
-    def __init__(self, *, session_id: SessionId, policy: MemoryPolicy) -> None:
+    def __init__(
+        self,
+        *,
+        session_id: SessionId,
+        policy: MemoryPolicy,
+        clock: Callable[[], int] = _now_ms,
+    ) -> None:
         self._session_id = session_id
 
         self._policy = policy
@@ -145,6 +167,10 @@ class MutableMemory:
         self._profile_revision = ProfileRevision(0)
 
         self._consent_revision = ConsentRevision(0)
+
+        self._clock = clock
+
+        self._conflict_audit: list[MemoryConflictAudit] = []
 
     @classmethod
     def restore(
@@ -175,6 +201,10 @@ class MutableMemory:
             consent_revision=self._consent_revision,
         )
 
+    @property
+    def conflict_audit(self) -> tuple[MemoryConflictAudit, ...]:
+        return tuple(self._conflict_audit)
+
     def reduce(self, proposal: MemoryProposal) -> MemoryCommitResult:
         rejection = self._rejection(proposal)
 
@@ -183,10 +213,25 @@ class MutableMemory:
 
         self._revision = MemoryRevision(self._revision + 1)
 
+        existing = self._entries.get(proposal.key)
+        if existing is not None and existing.value != proposal.value:
+            self._conflict_audit.append(
+                MemoryConflictAudit(
+                    key=proposal.key,
+                    replaced_value=existing.value,
+                    replacement_value=proposal.value,
+                    replaced_confidence=existing.confidence,
+                    replacement_confidence=proposal.confidence,
+                )
+            )
+
         self._entries[proposal.key] = MemoryEntry(
             key=proposal.key,
             value=proposal.value,
             provenance=proposal.provenance,
+            category=proposal.category,
+            confidence=proposal.confidence,
+            updated_at_ms=self._clock(),
         )
 
         return MemoryCommitAccepted(self.snapshot)
@@ -247,7 +292,11 @@ class MutableMemory:
 
         existing = self._entries.get(proposal.key)
 
-        if existing is not None and existing.value != proposal.value:
+        if (
+            existing is not None
+            and existing.value != proposal.value
+            and proposal.confidence <= existing.confidence
+        ):
             return MemoryCommitRejection.CONFLICT
 
         return None
