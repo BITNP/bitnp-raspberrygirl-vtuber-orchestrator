@@ -51,11 +51,11 @@ def test_runtime_reducer_resets_context_and_deletes_memory_key() -> None:
     )
     _ = runtime.receive_comment(CommentProposal("hello", correlation))
     data = runtime.interaction_ingress.data
-    assert data.context.snapshot.entries == ()
+    assert len(data.context.snapshot.entries) == 1
 
     reset = parse_session_control(_envelope("context.reset.command", {}, 2))
     assert isinstance(reset, ContextResetControl)
     outcome = runtime.receive_session_control(reset)
 
     assert outcome.accepted
-    assert data.context.snapshot.generation == 1
+    assert data.context.snapshot.generation == 2

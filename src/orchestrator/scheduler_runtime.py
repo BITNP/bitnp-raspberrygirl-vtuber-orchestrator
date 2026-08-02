@@ -20,6 +20,7 @@ from orchestrator.agent_pipeline import (
     AudienceSource as BrainAudienceSource,
 )
 from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
+from orchestrator.brain_runtime import build_mock_agent_pipeline
 from orchestrator.control_ingress import (
     ActionControl,
     ContextResetControl,
@@ -226,7 +227,7 @@ class SessionRuntime:
         task_config: SchedulerTaskConfig,
         clock: Callable[[], int] = _monotonic_ms,
         agent_pipeline: AgentPipeline | None = None,
-        agent_capabilities: frozenset[str] = frozenset(),
+        agent_capabilities: frozenset[str] | None = None,
         agent_effect_dispatcher: AgentEffectDispatcher | None = None,
     ) -> "SessionRuntime":
         scheduler = SessionScheduler(
@@ -260,8 +261,14 @@ class SessionRuntime:
             ),
             mode_policy=AdaptiveAgentPolicy(),
             clock=clock,
-            agent_pipeline=agent_pipeline,
-            agent_capabilities=agent_capabilities,
+            agent_pipeline=(
+                build_mock_agent_pipeline()
+                if agent_pipeline is None
+                else agent_pipeline
+            ),
+            agent_capabilities=(
+                frozenset() if agent_capabilities is None else agent_capabilities
+            ),
             agent_effect_dispatcher=agent_effect_dispatcher,
         )
 
