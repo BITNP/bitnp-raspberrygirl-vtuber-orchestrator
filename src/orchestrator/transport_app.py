@@ -38,22 +38,30 @@ async def run_transport() -> None:
 
     transport_config = load_transport_config_from_env(os.environ)
 
-    session_runtime = SessionRuntime.create(
-        session_id=SessionId(f"{config.session_id_prefix}-control"),
-        turn_id_prefix="turn-control",
-        task_config=SchedulerTaskConfig(frozenset(TaskKind), 1),
-    )
     brain_completion = getattr(bridge, "llm", None)
-    if brain_completion is not None:
-        session_runtime.async_agent_pipeline = build_async_agent_pipeline(
-            cast("AsyncJsonCompletion", brain_completion),
-            session_runtime.interaction_ingress.data.retrieval,
+
+    def create_session_runtime(session_id: SessionId) -> SessionRuntime:
+        session_runtime = SessionRuntime.create(
+            session_id=session_id,
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset(TaskKind), 1),
         )
+        if brain_completion is not None:
+            session_runtime.async_agent_pipeline = build_async_agent_pipeline(
+                cast("AsyncJsonCompletion", brain_completion),
+                session_runtime.interaction_ingress.data.retrieval,
+            )
+        return session_runtime
+
+    session_runtime = create_session_runtime(
+        SessionId(f"{config.session_id_prefix}-control")
+    )
 
     runtime = TransportRuntime(transport_config, onsite_bridge=bridge)
 
     try:
         runtime.set_session_runtime(session_runtime)
+        runtime.set_session_runtime_factory(create_session_runtime)
 
         if observability is not None:
             runtime.set_observability(observability)
