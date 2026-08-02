@@ -160,6 +160,31 @@ def test_runtime_commits_brain_compaction_against_its_snapshot() -> None:
     assert data.context.snapshot.summary == "稳定事实: 已压缩"
 
 
+def test_mcp_observation_is_available_to_final_brain_but_not_persisted() -> None:
+    pipeline = AgentPipeline(_AcceptGate(), _McpBrain(), _McpTools())
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-mcp"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        agent_pipeline=pipeline,
+        agent_capabilities=frozenset({"mcp:web/search"}),
+        agent_mcp_allowlist=frozenset({"web/search"}),
+    )
+
+    outcome = runtime.receive_comment(
+        CommentProposal(
+            "查询",
+            EventCorrelation(
+                TraceId("mcp"), SessionId("session-mcp"), EventSequence(1)
+            ),
+        )
+    )
+
+    assert outcome.accepted
+    entries = runtime.interaction_ingress.data.context.snapshot.entries
+    assert tuple(entry.text for entry in entries) == ("查询", "answer")
+
+
 class _AcceptGate:
     def evaluate(self, *args: object, **kwargs: object) -> GateDecision:
         _ = args, kwargs
@@ -220,6 +245,39 @@ class _CompactingBrain:
     def repair(self, snapshot: object, invalid_plan: str) -> str:
         _ = snapshot, invalid_plan
         return "{}"
+
+
+class _McpBrain:
+    def plan(self, snapshot: BrainStateSnapshot, **kwargs: object) -> str:
+        observations = kwargs.get("observations", ())
+        assert isinstance(observations, tuple)
+        if observations:
+            assert observations == ('{"source":"mcp"}',)
+            tools: list[dict[str, object]] = []
+        else:
+            tools = [{"kind": "mcp", "name": "web/search", "arguments": {}}]
+        return json.dumps(
+            {
+                "response_text": "answer",
+                "expected_revision": snapshot.revision,
+                "state_operations": [],
+                "media_operations": [],
+                "frontend_operations": [],
+                "tool_requests": tools,
+                "citations": [],
+                "memory_patches": [],
+            }
+        )
+
+    def repair(self, snapshot: object, invalid_plan: str) -> str:
+        _ = snapshot, invalid_plan
+        return "{}"
+
+
+class _McpTools:
+    def execute(self, request: object, snapshot: object) -> str:
+        _ = request, snapshot
+        return '{"source":"mcp"}'
 
 
 class _NoTools:
