@@ -108,6 +108,26 @@ class _DiscardingGateStages(_Stages):
 
 
 @dataclass(slots=True)
+class _HandledFinalStages(_Stages):
+
+    handled: list[tuple[StreamKey, ASRAudienceEvent]] = field(default_factory=list)
+
+    async def on_asr_final(
+        self, stream: StreamKey, event: ASRAudienceEvent
+    ) -> bool:
+        self.handled.append((stream, event))
+        return True
+
+    @override
+    def answer(
+        self, event: ASRAudienceEvent, cancellation: CancellationToken
+    ) -> TurnResult:
+        _ = event, cancellation
+        message = "a handled final must not enter the legacy answer lane"
+        raise AssertionError(message)
+
+
+@dataclass(slots=True)
 class _StreamingStages(_Stages):
 
     streamed: list[int] = field(default_factory=list)
@@ -204,6 +224,22 @@ def test_actor_tags_generated_rtp_with_admission_epoch() -> None:
 
 def test_actor_drops_asr_final_when_semantic_gate_rejects_it() -> None:
     asyncio.run(_semantic_gate_proof())
+
+
+def test_actor_routes_handled_asr_final_without_legacy_gate_or_answer() -> None:
+    async def proof() -> None:
+        stages = _HandledFinalStages()
+        stream = StreamKey("session", "stream")
+        actor = OnsiteStreamActor(stream, CancellationEpoch(0), stages)
+        actor.submit(_endpoint(stream), CancellationEpoch(0))
+
+        await actor.wait_quiescent()
+
+        expected = ASRAudienceEvent("question", 0, "segment", 1)
+        assert stages.handled == [(stream, expected)]
+        assert stages.outputs == []
+
+    asyncio.run(proof())
 
 
 def test_actor_emits_streaming_tts_chunks_without_materializing_clip() -> None:

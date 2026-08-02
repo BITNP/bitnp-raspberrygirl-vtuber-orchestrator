@@ -12,7 +12,9 @@ from orchestrator.config import TrustedLanToken
 from orchestrator.ids import SessionId
 from orchestrator.json_boundary import parse_json_value
 from orchestrator.mcp_adapters import DeckJournalKind
+from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.scheduler_runtime import SessionRuntime
+from orchestrator.streaming_contracts import StreamKey
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import (
@@ -526,6 +528,26 @@ def test_control_connection_dispatches_brain_frontend_effect_to_registered_clien
     data = envelope["data"]
     assert isinstance(data, dict)
     assert data["text"] == "欢迎来到活动"
+
+
+def test_onsite_asr_final_is_routed_to_matching_session_runtime() -> None:
+    runtime = TransportRuntime(_loopback_config())
+    session_runtime = SessionRuntime.create(
+        session_id=SessionId(SESSION_ID),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+    )
+    runtime.set_session_runtime(session_runtime)
+
+    async def run() -> bool:
+        return await runtime.receive_onsite_asr_final(
+            StreamKey(SESSION_ID, STREAM_ID),
+            ASRAudienceEvent("请介绍 BitNet", 20, "asr-1", 1),
+        )
+
+    assert asyncio.run(run())
+    dispatch = session_runtime.observables.dispatches[0]
+    assert dispatch.correlation.session_id == SessionId(SESSION_ID)
 
 
 def test_control_connection_refuses_comments_without_valid_credential() -> None:

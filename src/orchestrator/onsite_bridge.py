@@ -88,6 +88,10 @@ type OnsiteReplacement = Callable[
     [StreamKey, SegmentId], Awaitable[CancellationEpoch | None]
 ]
 
+type OnsiteAsrFinal = Callable[
+    [StreamKey, ASRAudienceEvent], Awaitable[bool]
+]
+
 
 async def _discard_output(
     stream: StreamKey, epoch: CancellationEpoch, packet: bytes
@@ -210,6 +214,8 @@ class OnsiteExplainerBridge:
 
     observability: OnsiteObservability | None = None
 
+    asr_final_handler: OnsiteAsrFinal | None = None
+
     def set_output_callback(self, callback: OnsiteOutput) -> None:
         self.output = callback
 
@@ -222,6 +228,10 @@ class OnsiteExplainerBridge:
 
     def set_replacement_callback(self, callback: OnsiteReplacement) -> None:
         self.begin_replacement = callback
+
+    def set_asr_final_handler(self, handler: OnsiteAsrFinal) -> None:
+        """Route finalized speech to the session-owned Agent Pipeline."""
+        self.asr_final_handler = handler
 
     def set_observability(self, observability: OnsiteObservability) -> None:
         self.observability = observability
@@ -755,6 +765,14 @@ class _BridgeStages(OnsiteStages):
         self, event: ASRAudienceEvent, cancellation: CancellationToken
     ) -> TurnResult | None:
         return await self.bridge.answer_async(self.pipeline, event, cancellation)
+
+    async def on_asr_final(
+        self, stream: StreamKey, event: ASRAudienceEvent
+    ) -> bool:
+        handler = self.bridge.asr_final_handler
+        if handler is None:
+            return False
+        return await handler(stream, event)
 
     async def gate(
         self,

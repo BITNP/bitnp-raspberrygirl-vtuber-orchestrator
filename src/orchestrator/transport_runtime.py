@@ -23,9 +23,11 @@ from orchestrator.frontend_effects import (
     FrontendEffectDispatcher,
     send_frontend_operation,
 )
+from orchestrator.ids import SessionId, TraceId
 from orchestrator.interaction_ingress import parse_comment_proposal
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
+from orchestrator.sessions import EventCorrelation, EventSequence
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import ControlEnvelopeError, bearer_token_matches
 from orchestrator.transport_dispatch import TransportControlDispatch
@@ -41,8 +43,9 @@ if TYPE_CHECKING:
     from websockets.http11 import Request, Response
 
     from orchestrator.agent_pipeline import FrontendOperation
-    from orchestrator.ids import SessionId, TurnId
+    from orchestrator.ids import TurnId
     from orchestrator.observability import OnsiteObservability
+    from orchestrator.pipeline_contracts import ASRAudienceEvent
     from orchestrator.scheduler_reflex import SchedulerOutputFence
     from orchestrator.scheduler_runtime import SessionRuntime
     from orchestrator.streaming_contracts import (
@@ -149,9 +152,27 @@ class TransportRuntime:
 
         self._hub.set_voice_evidence_callback(session_runtime.receive_voice_evidence)
 
+        bridge = self._onsite_bridge
+        if isinstance(bridge, OnsiteExplainerBridge):
+            bridge.set_asr_final_handler(self.receive_onsite_asr_final)
+
         session_runtime.agent_effect_dispatcher = FrontendEffectDispatcher(
             self._send_frontend_operation
         )
+
+    async def receive_onsite_asr_final(
+        self, stream: StreamKey, event: ASRAudienceEvent
+    ) -> bool:
+        session_runtime = self._session_runtime
+        if session_runtime is None:
+            return False
+        correlation = EventCorrelation(
+            TraceId(f"asr-{stream.stream_id}-{event.segment_id}"),
+            SessionId(stream.session_id),
+            EventSequence(event.seq),
+        )
+        outcome = await session_runtime.receive_asr_final_async(event, correlation)
+        return outcome.accepted
 
     def set_observability(self, observability: OnsiteObservability) -> None:
         self._hub.set_observability(observability)

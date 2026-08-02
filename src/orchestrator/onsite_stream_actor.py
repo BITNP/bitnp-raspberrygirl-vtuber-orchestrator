@@ -364,6 +364,14 @@ class OnsiteStreamActor:
             if item.epoch == self.epoch and event is not None:
                 correlation = self._correlation(item.endpoint, item.epoch)
                 self._record_correlation("asr_final", correlation, latency_ms)
+                final_handler = cast(
+                    "Callable[[StreamKey, ASRAudienceEvent], Awaitable[bool]] | None",
+                    getattr(self.stages, "on_asr_final", None),
+                )
+                if final_handler is not None:
+                    handled = await final_handler(self.stream, event)
+                    if handled:
+                        continue
                 gate = getattr(self.stages, "gate", None)
                 if gate is None:
                     decision = AsrGateDecision.ACCEPT
