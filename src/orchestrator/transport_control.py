@@ -31,6 +31,7 @@ MAX_ASR_TEXT_LENGTH = 4_000
 
 type ControlEvent = (
     MicInputRegistration
+    | SourceRegistration
     | SinkRegistration
     | StreamReady
     | StreamState
@@ -188,7 +189,7 @@ def bearer_token_matches(
     return hmac.compare_digest(authorization.removeprefix(prefix), token)
 
 
-def parse_control_event(raw_message: str) -> ControlEvent:
+def parse_control_event(raw_message: str) -> ControlEvent:  # noqa: C901
     value = parse_json_value(raw_message)
 
     if not isinstance(value, dict):
@@ -213,6 +214,18 @@ def parse_control_event(raw_message: str) -> ControlEvent:
                 _text(value, "session_id"), _text(data, "stream_id"), correlation
             )
 
+        # Read-only wire compatibility for an already-deployed Mic. The RTP
+        # hub rejects all UDP ingress, so accepting this envelope cannot
+        # recreate an audio path.
+        case "media.rtp.source.register":
+            _validate_source_registration(data, _text(value, "source"))
+            parsed = SourceRegistration(
+                _text(value, "session_id"),
+                _text(data, "stream_id"),
+                _ssrc(data),
+                correlation,
+            )
+
         case "media.rtp.sink.register":
             _validate_sink_registration(data, _text(value, "source"))
 
@@ -226,6 +239,12 @@ def parse_control_event(raw_message: str) -> ControlEvent:
         case "media.rtp.sink.ready":
             _validate_sink_ready(data, _text(value, "source"))
 
+            parsed = StreamReady(
+                _text(value, "session_id"), _text(data, "stream_id"), correlation
+            )
+
+        case "media.rtp.source.ready":
+            _validate_source_ready(data, _text(value, "source"))
             parsed = StreamReady(
                 _text(value, "session_id"), _text(data, "stream_id"), correlation
             )
@@ -357,6 +376,14 @@ def _validate_mic_input_registration(
     _ = _text(data, "stream_id")
 
 
+def _validate_source_registration(data: dict[str, JsonValue], source: str) -> None:
+    if source != "mic" or set(data) != {"stream_id", "ssrc", "codec", "rtp_endpoint"}:
+        raise ControlEnvelopeError(field_name="source")
+    _ = _text(data, "stream_id")
+    _ = _ssrc(data)
+    _ = _endpoint_port(data)
+
+
 def _validate_sink_registration(data: dict[str, JsonValue], source: str) -> None:
     if source != "sound" or set(data) != {"stream_id", "codec", "rtp_endpoint"}:
         raise ControlEnvelopeError(field_name="source")
@@ -364,6 +391,13 @@ def _validate_sink_registration(data: dict[str, JsonValue], source: str) -> None
     _ = _text(data, "stream_id")
 
     _ = _endpoint_port(data)
+
+
+def _validate_source_ready(data: dict[str, JsonValue], source: str) -> None:
+    if source != "mic" or set(data) != {"stream_id", "ssrc"}:
+        raise ControlEnvelopeError(field_name="source")
+    _ = _text(data, "stream_id")
+    _ = _ssrc(data)
 
 
 def _validate_sink_ready(data: dict[str, JsonValue], source: str) -> None:
