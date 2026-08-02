@@ -146,11 +146,7 @@ def test_vllm_omni_builds_opt_in_fake_local_speech_request() -> None:
 
     assert request.url == "http://127.0.0.1:8001/v1/audio/speech"
 
-    assert request.json == {
-        "model": "vllm-omni",
-        "input": "欢迎来到 BitNet 讲解。",
-        "voice": "raspberry",
-    }
+    assert request.json == {"model": "vllm-omni", "input": "欢迎来到 BitNet 讲解。"}
     assert request.extra_body == {
         "task_type": "Base",
         "ref_audio": "https://media.example.test/raspberry.wav",

@@ -6,11 +6,12 @@ import logging
 import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypedDict, override
+from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, cast, override
 from urllib.parse import unquote, urlsplit
 
 import httpx
 from openai import (
+    NOT_GIVEN,
     APIConnectionError,
     APIError,
     APIStatusError,
@@ -83,7 +84,7 @@ class VllmOmniSpeechPayload(TypedDict):
 
     input: str
 
-    voice: str
+    voice: NotRequired[str]
 
 
 class VllmOmniExtensionParameters(TypedDict):
@@ -370,13 +371,15 @@ class VllmOmniTTSAdapter:
         ref_audio: str,
         ref_text: str,
     ) -> HttpSpeechRequest:
+        # Qwen voice cloning selects the speaker solely from ref_audio/ref_text.
+        # Its OpenAI-compatible endpoint rejects every named ``voice`` value.
+        _ = voice
         return HttpSpeechRequest(
             method="POST",
             url=f"{self.endpoint.rstrip('/')}/audio/speech",
             json={
                 "model": self.model.strip(),
                 "input": text,
-                "voice": voice,
             },
             extra_body={
                 "task_type": "Base",
@@ -407,7 +410,9 @@ class VllmOmniTTSAdapter:
         data = b""
         try:
             response = client.audio.speech.create(
-                **speech.json,
+                model=speech.json["model"],
+                input=speech.json["input"],
+                voice=cast("str", cast("object", NOT_GIVEN)),
                 response_format="wav",
                 extra_body=speech.extra_body,
                 timeout=self.timeout_seconds,
@@ -457,7 +462,9 @@ class VllmOmniTTSAdapter:
         response = None
         try:
             response = client.audio.speech.create(
-                **speech.json,
+                model=speech.json["model"],
+                input=speech.json["input"],
+                voice=cast("str", cast("object", NOT_GIVEN)),
                 response_format="pcm",
                 speed=1.0,
                 stream_format="sse",
@@ -592,10 +599,9 @@ def _audio_data_url(path: Path) -> str:
 def _log_tts_request(speech: HttpSpeechRequest) -> None:
     """Log request text while keeping reference audio out of the record."""
     _LOGGER.debug(
-        "tts_request url=%s model=%s voice=%s input=%r ref_audio=(%s) ref_text=%r",
+        "tts_request url=%s model=%s mode=voice_clone input=%r ref_audio=(%s) ref_text=%r",  # noqa: E501
         speech.url,
         speech.json["model"],
-        speech.json["voice"],
         speech.json["input"],
         reference_audio_summary(speech.extra_body["ref_audio"]),
         speech.extra_body["ref_text"],

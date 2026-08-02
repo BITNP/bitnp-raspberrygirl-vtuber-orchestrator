@@ -361,6 +361,7 @@ def test_qwen_shaped_tts_response_becomes_canonical_generated_rtp(
     assert len(speech_bodies) == 1
     payload = cast("dict[str, str]", json.loads(speech_bodies[0]))
     assert payload["ref_audio"].startswith("data:audio/wav;base64,")
+    assert "voice" not in payload
     assert generated[0][0:2] == b"\x80\x60"
     assert len(generated[0][12:]) == 640
     assert generated[0][12:] == b"\x20\x10" * 320
