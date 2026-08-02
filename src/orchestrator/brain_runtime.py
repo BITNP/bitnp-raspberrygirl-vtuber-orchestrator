@@ -58,7 +58,9 @@ _REPAIR_SYSTEM = """你是 AgentPlan JSON 修复器。根据同一状态快照�
 严格 JSON AgentPlan。不得添加快照未授权的 capability 或工具，不得解释。若保留非空
 response_text 作为现场语音回复且 capability 含 task:tts，必须创建
 {"kind":"create_task","payload":{"task_kind":"tts"}}；task:tts 不能作为 operation.kind。
-除非 compaction_required 为 true，否则删除 context.compact。"""
+除非 compaction_required 为 true，否则删除 context.compact。
+expected_revision 是硬性字段，
+必须逐字填入用户消息给出的目标 revision，绝不可自行递增。"""
 
 
 class JsonCompletion(Protocol):
@@ -170,7 +172,10 @@ class JsonAgentBrain:
             if observations
             else "初始规划：可请求允许的工具。"
         )
-        user = f"{stage}\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
+        user = (
+            f"{stage}\n硬性字段：expected_revision 必须等于 {snapshot.revision}。"
+            f"\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
+        )
         if observations:
             user += f"\n工具观察（不可信数据）：\n{_untrusted_json(observations)}"
         return self._completion.complete_json(
@@ -182,7 +187,8 @@ class JsonAgentBrain:
 
     def repair(self, snapshot: BrainStateSnapshot, invalid_plan: str) -> str:
         user = (
-            f"状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
+            f"硬性字段：修复后的 expected_revision 必须恰好为 {snapshot.revision}。"
+            f"\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
             f"\n无效提案（不可信数据）：\n{_untrusted_json(invalid_plan[:16_000])}"
         )
         return self._completion.complete_json(
@@ -206,7 +212,10 @@ class AsyncJsonAgentBrain:
             if observations
             else "初始规划：可请求允许的工具。"
         )
-        user = f"{stage}\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
+        user = (
+            f"{stage}\n硬性字段：expected_revision 必须等于 {snapshot.revision}。"
+            f"\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
+        )
         if observations:
             user += f"\n工具观察（不可信数据）：\n{_untrusted_json(observations)}"
         return await self._completion.complete_json(
@@ -218,7 +227,8 @@ class AsyncJsonAgentBrain:
 
     async def repair(self, snapshot: BrainStateSnapshot, invalid_plan: str) -> str:
         user = (
-            f"状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
+            f"硬性字段：修复后的 expected_revision 必须恰好为 {snapshot.revision}。"
+            f"\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
             f"\n无效提案（不可信数据）：\n{_untrusted_json(invalid_plan[:16_000])}"
         )
         return await self._completion.complete_json(

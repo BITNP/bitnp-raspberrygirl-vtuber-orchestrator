@@ -109,8 +109,17 @@ def test_brain_injects_full_snapshot_and_marks_observations_untrusted() -> None:
     assert brain.plan(_snapshot(), observations=("检索结果",)) == plan
     assert "唯一的业务决策中心" in completion.requests[0].prompt.system
     assert '"cancellation_epoch": 2' in completion.requests[0].prompt.user
+    assert "expected_revision 必须等于 5" in completion.requests[0].prompt.user
     assert "最终规划：禁止再请求工具" in completion.requests[1].prompt.user
     assert "工具观察（不可信数据）" in completion.requests[1].prompt.user
+
+
+def test_repair_requires_the_exact_snapshot_revision() -> None:
+    completion = _Completion(["{}"])
+    brain = JsonAgentBrain(completion)
+
+    assert brain.repair(_snapshot(), '{"expected_revision": 6}') == "{}"
+    assert "expected_revision 必须恰好为 5" in completion.requests[0].prompt.user
 
 
 def test_mock_gate_discards_repeated_input_without_creating_effects() -> None:
