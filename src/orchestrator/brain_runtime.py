@@ -10,11 +10,13 @@ can directly issue an effect.
 from __future__ import annotations
 
 import json
+from asyncio import to_thread
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Protocol, cast, final
 
 from orchestrator.agent_pipeline import (
     AgentPipeline,
+    AsyncAgentPipeline,
     AudienceInput,
     BrainStateSnapshot,
     GateDecision,
@@ -65,6 +67,17 @@ class JsonCompletion(Protocol):
     ) -> str: ...
 
 
+class AsyncJsonCompletion(Protocol):
+    async def complete_json(
+        self,
+        request: LLMRequest,
+        *,
+        schema_name: str,
+        schema: dict[str, object],
+        timeout_seconds: float,
+    ) -> str: ...
+
+
 @final
 class JsonAgentGate:
     def __init__(self, completion: JsonCompletion) -> None:
@@ -78,6 +91,42 @@ class JsonAgentGate:
             "current_activity_summary": active_summary[:1_000],
         }
         raw = self._completion.complete_json(
+            LLMRequest(
+                LLMPrompt(_GATE_SYSTEM, _untrusted_json(payload)),
+                temperature=0.0,
+                timeout_seconds=5.0,
+            ),
+            schema_name="audience_gate",
+            schema=_GATE_SCHEMA,
+            timeout_seconds=5.0,
+        )
+        try:
+            result = parse_json_value(raw)
+        except JsonBoundaryError:
+            return GateDecision.DISCARD
+        if not isinstance(result, dict) or set(result) != {"decision"}:
+            return GateDecision.DISCARD
+        parsed = cast("dict[str, object]", result)
+        return (
+            GateDecision.ACCEPT
+            if parsed.get("decision") == GateDecision.ACCEPT
+            else GateDecision.DISCARD
+        )
+
+
+@final
+class AsyncJsonAgentGate:
+    def __init__(self, completion: AsyncJsonCompletion) -> None:
+        self._completion = completion
+
+    async def evaluate(
+        self, audience_input: AudienceInput, *, active_summary: str
+    ) -> GateDecision:
+        payload = {
+            "input": asdict(audience_input),
+            "current_activity_summary": active_summary[:1_000],
+        }
+        raw = await self._completion.complete_json(
             LLMRequest(
                 LLMPrompt(_GATE_SYSTEM, _untrusted_json(payload)),
                 temperature=0.0,
@@ -136,6 +185,41 @@ class JsonAgentBrain:
             timeout_seconds=10.0,
         )
 
+
+@final
+class AsyncJsonAgentBrain:
+    def __init__(self, completion: AsyncJsonCompletion) -> None:
+        self._completion = completion
+
+    async def plan(
+        self, snapshot: BrainStateSnapshot, *, observations: tuple[str, ...] = ()
+    ) -> str:
+        stage = (
+            "最终规划：禁止再请求工具。"
+            if observations
+            else "初始规划：可请求允许的工具。"
+        )
+        user = f"{stage}\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
+        if observations:
+            user += f"\n工具观察（不可信数据）：\n{_untrusted_json(observations)}"
+        return await self._completion.complete_json(
+            LLMRequest(LLMPrompt(_BRAIN_SYSTEM, user), temperature=0.0),
+            schema_name="agent_plan",
+            schema=_AGENT_PLAN_SCHEMA,
+            timeout_seconds=30.0,
+        )
+
+    async def repair(self, snapshot: BrainStateSnapshot, invalid_plan: str) -> str:
+        user = (
+            f"状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
+            f"\n无效提案（不可信数据）：\n{_untrusted_json(invalid_plan[:16_000])}"
+        )
+        return await self._completion.complete_json(
+            LLMRequest(LLMPrompt(_REPAIR_SYSTEM, user), temperature=0.0),
+            schema_name="agent_plan_repair",
+            schema=_AGENT_PLAN_SCHEMA,
+            timeout_seconds=10.0,
+        )
 
 @dataclass(slots=True)
 class MockAgentGate:
@@ -223,6 +307,26 @@ class ReadonlyKnowledgeToolExecutor:
         )
 
 
+@final
+class AsyncReadonlyKnowledgeToolExecutor:
+    def __init__(self, executor: ReadonlyKnowledgeToolExecutor) -> None:
+        self._executor = executor
+
+    async def execute(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> str | None:
+        return await to_thread(self._executor.execute, request, snapshot)
+
+
+@final
+class AsyncNoopToolExecutor:
+    async def execute(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> str | None:
+        _ = request, snapshot
+        return None
+
+
 def build_mock_agent_pipeline(
     retrieval: VersionedRetrievalProvider | None = None,
 ) -> AgentPipeline:
@@ -232,6 +336,22 @@ def build_mock_agent_pipeline(
         else ReadonlyKnowledgeToolExecutor(retrieval)
     )
     return AgentPipeline(MockAgentGate(), MockAgentBrain(), tools)
+
+
+def build_async_agent_pipeline(
+    completion: AsyncJsonCompletion,
+    retrieval: VersionedRetrievalProvider | None = None,
+) -> AsyncAgentPipeline:
+    tools = (
+        AsyncNoopToolExecutor()
+        if retrieval is None
+        else AsyncReadonlyKnowledgeToolExecutor(
+            ReadonlyKnowledgeToolExecutor(retrieval)
+        )
+    )
+    return AsyncAgentPipeline(
+        AsyncJsonAgentGate(completion), AsyncJsonAgentBrain(completion), tools
+    )
 
 
 def _empty_plan(revision: int) -> str:

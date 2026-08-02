@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from orchestrator.brain_runtime import AsyncJsonCompletion, build_async_agent_pipeline
 from orchestrator.config import OrchestratorConfig, load_config_from_env
 from orchestrator.ids import SessionId
 from orchestrator.observability import OnsiteObservability
@@ -42,6 +43,12 @@ async def run_transport() -> None:
         turn_id_prefix="turn-control",
         task_config=SchedulerTaskConfig(frozenset(TaskKind), 1),
     )
+    brain_completion = getattr(bridge, "llm", None)
+    if brain_completion is not None:
+        session_runtime.async_agent_pipeline = build_async_agent_pipeline(
+            cast("AsyncJsonCompletion", brain_completion),
+            session_runtime.interaction_ingress.data.retrieval,
+        )
 
     runtime = TransportRuntime(transport_config, onsite_bridge=bridge)
 

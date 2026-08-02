@@ -1,14 +1,19 @@
 # ruff: noqa: RUF001
+import asyncio
 import json
 from dataclasses import dataclass, field
 
 from orchestrator.agent_pipeline import (
+    AsyncAgentPipeline,
     AudienceInput,
     AudienceSource,
     BrainStateSnapshot,
+    PlanAccepted,
     ToolRequest,
 )
 from orchestrator.brain_runtime import (
+    AsyncJsonAgentBrain,
+    AsyncJsonAgentGate,
     JsonAgentBrain,
     JsonAgentGate,
     MockAgentGate,
@@ -24,6 +29,24 @@ class _Completion:
     requests: list[LLMRequest] = field(default_factory=list)
 
     def complete_json(
+        self,
+        request: LLMRequest,
+        *,
+        schema_name: str,
+        schema: dict[str, object],
+        timeout_seconds: float,
+    ) -> str:
+        _ = schema_name, schema, timeout_seconds
+        self.requests.append(request)
+        return self.responses.pop(0)
+
+
+@dataclass
+class _AsyncCompletion:
+    responses: list[str]
+    requests: list[LLMRequest] = field(default_factory=list)
+
+    async def complete_json(
         self,
         request: LLMRequest,
         *,
@@ -111,3 +134,56 @@ def test_readonly_knowledge_tool_returns_versioned_untrusted_observation() -> No
     assert observation is not None
     assert '"source": "local_knowledge"' in observation
     assert "product.md:1" in observation
+
+
+def test_async_json_brain_runs_gate_and_final_tool_plan_without_blocking() -> None:
+    initial = json.dumps(
+        {
+            "response_text": "",
+            "expected_revision": 5,
+            "state_operations": [],
+            "media_operations": [],
+            "frontend_operations": [],
+            "tool_requests": [
+                {"kind": "knowledge", "name": "local", "arguments": {}}
+            ],
+            "citations": [],
+            "memory_patches": [],
+        }
+    )
+    final = json.dumps(
+        {
+            "response_text": "已查到资料",
+            "expected_revision": 5,
+            "state_operations": [],
+            "media_operations": [],
+            "frontend_operations": [],
+            "tool_requests": [],
+            "citations": [],
+            "memory_patches": [],
+        }
+    )
+    completion = _AsyncCompletion(['{"decision":"accept"}', initial, final])
+    pipeline = AsyncAgentPipeline(
+        AsyncJsonAgentGate(completion),
+        AsyncJsonAgentBrain(completion),
+        _AsyncTools(),
+    )
+
+    async def run() -> object:
+        decision = await pipeline.submit(_input())
+        assert decision.value == "accept"
+        return await pipeline.run(_snapshot())
+
+    result = asyncio.run(run())
+
+    assert isinstance(result, PlanAccepted)
+    assert result.plan.response_text == "已查到资料"
+    assert len(completion.requests) == 3
+    assert "工具观察" in completion.requests[2].prompt.user
+
+
+class _AsyncTools:
+    async def execute(self, request: ToolRequest, snapshot: BrainStateSnapshot) -> str:
+        _ = request, snapshot
+        return "本地知识 observation"

@@ -260,7 +260,9 @@ class TransportRuntime:
                         _LOGGER.debug(
                             "control_received kind=audience.input peer=%s", peer_ip
                         )
-                        self._receive_comment(connection, session_runtime, message)
+                        await self._receive_comment(
+                            connection, session_runtime, message
+                        )
 
                         continue
 
@@ -298,7 +300,7 @@ class TransportRuntime:
 
             self._control_dispatch.remove_connection(connection)
 
-    def _receive_comment(
+    async def _receive_comment(
         self,
         connection: ControlConnection,
         session_runtime: SessionRuntime,
@@ -322,7 +324,7 @@ class TransportRuntime:
             return
 
         while (proposal := ingress.take_next()) is not None:
-            _ = session_runtime.receive_comment(proposal)
+            _ = await session_runtime.receive_comment_async(proposal)
 
     def route_datagram(self, data: bytes, peer: tuple[str, int]) -> bool:
         routed = self._hub.route_datagram(data, peer)

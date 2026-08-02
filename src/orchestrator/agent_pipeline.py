@@ -372,6 +372,26 @@ class ToolExecutor(Protocol):
     ) -> str | None: ...
 
 
+class AsyncGate(Protocol):
+    async def evaluate(
+        self, audience_input: AudienceInput, *, active_summary: str
+    ) -> GateDecision: ...
+
+
+class AsyncBrain(Protocol):
+    async def plan(
+        self, snapshot: BrainStateSnapshot, *, observations: tuple[str, ...] = ()
+    ) -> str: ...
+
+    async def repair(self, snapshot: BrainStateSnapshot, invalid_plan: str) -> str: ...
+
+
+class AsyncToolExecutor(Protocol):
+    async def execute(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> str | None: ...
+
+
 @dataclass(slots=True)
 class AgentPipeline:
     """One bounded, voice-priority scheduler for comments and ASR finals."""
@@ -439,6 +459,90 @@ class AgentPipeline:
             try:
                 plan = AgentPlan.from_json(self.brain.repair(snapshot, raw))
             except PlanError:
+                return PlanRejected("plan_parse_failed")
+        return self.reducer.reduce(snapshot, plan, stage=stage)
+
+
+@dataclass(slots=True)
+class AsyncAgentPipeline:
+    """Async equivalent used by the live OpenAI-compatible Brain runtime."""
+
+    gate: AsyncGate
+    brain: AsyncBrain
+    tools: AsyncToolExecutor
+    reducer: AgentPlanReducer = field(default_factory=AgentPlanReducer)
+    comment_capacity: int = 16
+    _voice: deque[AudienceInput] = field(default_factory=deque, init=False)
+    _comments: deque[AudienceInput] = field(default_factory=deque, init=False)
+
+    async def submit(
+        self, audience_input: AudienceInput, *, active_summary: str = ""
+    ) -> GateDecision:
+        decision = await self.gate.evaluate(
+            audience_input, active_summary=active_summary
+        )
+        if decision is GateDecision.DISCARD:
+            return decision
+        target = (
+            self._voice
+            if audience_input.source is AudienceSource.ASR
+            else self._comments
+        )
+        if target is self._comments and len(target) >= self.comment_capacity:
+            return GateDecision.DISCARD
+        target.append(audience_input)
+        return decision
+
+    def peek_input(self) -> AudienceInput | None:
+        if self._voice:
+            return self._voice[0]
+        return self._comments[0] if self._comments else None
+
+    def next_input(self) -> AudienceInput | None:
+        if self._voice:
+            return self._voice.popleft()
+        return self._comments.popleft() if self._comments else None
+
+    async def run(self, snapshot: BrainStateSnapshot) -> PlanResult:
+        if snapshot.input != self.peek_input():
+            return PlanRejected("input_not_scheduled")
+        _ = self.next_input()
+        try:
+            raw = await self.brain.plan(snapshot)
+        except OSError:
+            return PlanRejected("brain_unavailable")
+        result = await self._reduce_or_repair(snapshot, raw, PlanStage.INITIAL)
+        if not isinstance(result, PlanAccepted) or not result.plan.tool_requests:
+            return result
+        observations: list[ToolExecutionObservation] = []
+        for request in result.plan.tool_requests:
+            try:
+                observation = await self.tools.execute(request, snapshot)
+            except (OSError, TimeoutError, ValueError):
+                observation = None
+            if observation is not None:
+                observations.append(ToolExecutionObservation(request, observation))
+        try:
+            raw_final = await self.brain.plan(
+                snapshot, observations=tuple(item.text for item in observations)
+            )
+        except OSError:
+            return PlanRejected("brain_unavailable")
+        final = await self._reduce_or_repair(snapshot, raw_final, PlanStage.FINAL)
+        if isinstance(final, PlanAccepted):
+            return PlanAccepted(final.plan, final.effects, tuple(observations))
+        return final
+
+    async def _reduce_or_repair(
+        self, snapshot: BrainStateSnapshot, raw: str, stage: PlanStage
+    ) -> PlanResult:
+        try:
+            plan = AgentPlan.from_json(raw)
+        except PlanError:
+            try:
+                repaired = await self.brain.repair(snapshot, raw)
+                plan = AgentPlan.from_json(repaired)
+            except (PlanError, OSError):
                 return PlanRejected("plan_parse_failed")
         return self.reducer.reduce(snapshot, plan, stage=stage)
 

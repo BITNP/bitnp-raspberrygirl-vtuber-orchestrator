@@ -5,6 +5,7 @@ from typing import Protocol
 
 from orchestrator.agent_pipeline import (
     AgentPipeline,
+    AsyncAgentPipeline,
     BrainStateSnapshot,
     FrontendOperation,
     GateDecision,
@@ -204,6 +205,8 @@ class SessionRuntime:
 
     agent_pipeline: AgentPipeline | None = None
 
+    async_agent_pipeline: AsyncAgentPipeline | None = None
+
     agent_capabilities: frozenset[str] = frozenset()
 
     agent_mcp_allowlist: frozenset[str] = frozenset()
@@ -245,6 +248,7 @@ class SessionRuntime:
         task_config: SchedulerTaskConfig,
         clock: Callable[[], int] = _monotonic_ms,
         agent_pipeline: AgentPipeline | None = None,
+        async_agent_pipeline: AsyncAgentPipeline | None = None,
         agent_capabilities: frozenset[str] | None = None,
         agent_mcp_allowlist: frozenset[str] | None = None,
         agent_effect_dispatcher: AgentEffectDispatcher | None = None,
@@ -285,6 +289,7 @@ class SessionRuntime:
                 if agent_pipeline is None
                 else agent_pipeline
             ),
+            async_agent_pipeline=async_agent_pipeline,
             agent_capabilities=(
                 _DEFAULT_AGENT_CAPABILITIES
                 if agent_capabilities is None
@@ -370,6 +375,40 @@ class SessionRuntime:
             case _:
                 return self._reject(correlation, "scheduler_rejected")
 
+    async def receive_comment_async(self, proposal: CommentProposal) -> RuntimeOutcome:
+        pipeline = self.async_agent_pipeline
+        if pipeline is None:
+            return self.receive_comment(proposal)
+        correlation = proposal.correlation
+        if self._ended:
+            return self._reject(correlation, "session_ended")
+        if correlation in self._correlations:
+            return self._reject(correlation, "duplicate_correlation")
+        audience_input = BrainAudienceInput(
+            session_id=str(correlation.session_id),
+            trace_id=str(correlation.trace_id),
+            sequence=int(correlation.sequence),
+            source=BrainAudienceSource.COMMENT,
+            received_at_ms=self.clock(),
+            text=proposal.text,
+        )
+        if await pipeline.submit(audience_input) is GateDecision.DISCARD:
+            return self._reject(correlation, "agent_gate_discarded")
+        outcome = self.interaction_ingress.receive_comment(
+            text=proposal.text, correlation=correlation
+        )
+        if not isinstance(outcome, InteractionAccepted) or outcome.turn_id is None:
+            return self._reject(correlation, "scheduler_rejected")
+        accepted_turn = TurnId(outcome.turn_id)
+        self._correlations.add(correlation)
+        self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
+        await self._run_async_agent_plan(
+            pipeline, audience_input, accepted_turn, correlation
+        )
+        return RuntimeOutcome(
+            accepted=True, correlation=correlation, turn_id=accepted_turn
+        )
+
     def _submit_agent_comment(
         self, proposal: CommentProposal
     ) -> BrainAudienceInput | None:
@@ -446,6 +485,61 @@ class SessionRuntime:
             mcp_allowlist=self.agent_mcp_allowlist,
         )
         result = pipeline.run(snapshot)
+        self._agent_results.append(result)
+        if isinstance(result, PlanAccepted):
+            self._apply_agent_plan(
+                result, audience_input, turn_id, correlation, composition
+            )
+
+    async def _run_async_agent_plan(
+        self,
+        pipeline: AsyncAgentPipeline,
+        audience_input: BrainAudienceInput,
+        turn_id: TurnId,
+        correlation: EventCorrelation,
+    ) -> None:
+        composition = self.interaction_ingress.data.context.compose(
+            _BRAIN_CONTEXT_MODEL, _BRAIN_CONTEXT_POLICY
+        )
+        context = composition.snapshot
+        memory = self.interaction_ingress.data.memory.snapshot
+        retrieval = self.interaction_ingress.data.retrieval.snapshot
+        corpus_version = f"{retrieval.corpus_id}@{retrieval.corpus_revision}"
+        index_version = f"{retrieval.index_id}@{retrieval.index_revision}"
+        snapshot = BrainStateSnapshot(
+            session_id=str(self.scheduler.snapshot.session_id),
+            turn_id=str(turn_id),
+            revision=int(self.scheduler.snapshot.revision),
+            cancellation_epoch=int(self.cancellation_epoch),
+            input=audience_input,
+            context_summary=context.summary,
+            recent_context=tuple(entry.text for entry in composition.entries),
+            memory_markdown=render_markdown_memory(
+                memory, self.scheduler.snapshot.session_id
+            ),
+            capabilities=self.agent_capabilities,
+            tasks=tuple(
+                TaskSnapshot(
+                    task_id=str(record.request.task_id),
+                    kind=record.request.kind.value,
+                    lane=record.request.kind.value,
+                    status=record.state.value,
+                    deadline_ms=int(record.request.deadline_ms),
+                    owner_turn_id=str(record.request.turn_id),
+                    cancellation_reason=record.cancellation_reason,
+                )
+                for record in self.task_registry.records
+            ),
+            context_revision=int(context.generation),
+            memory_revision=int(memory.revision),
+            context_budget=512,
+            compaction_required=bool(composition.digests),
+            knowledge_references=(
+                f"本地知识库: corpus={corpus_version}, index={index_version}",
+            ),
+            mcp_allowlist=self.agent_mcp_allowlist,
+        )
+        result = await pipeline.run(snapshot)
         self._agent_results.append(result)
         if isinstance(result, PlanAccepted):
             self._apply_agent_plan(
