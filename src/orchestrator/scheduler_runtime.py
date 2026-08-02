@@ -206,6 +206,8 @@ class SessionRuntime:
 
     agent_capabilities: frozenset[str] = frozenset()
 
+    agent_mcp_allowlist: frozenset[str] = frozenset()
+
     agent_effect_dispatcher: AgentEffectDispatcher | None = None
 
     clock: Callable[[], int] = _monotonic_ms
@@ -244,6 +246,7 @@ class SessionRuntime:
         clock: Callable[[], int] = _monotonic_ms,
         agent_pipeline: AgentPipeline | None = None,
         agent_capabilities: frozenset[str] | None = None,
+        agent_mcp_allowlist: frozenset[str] | None = None,
         agent_effect_dispatcher: AgentEffectDispatcher | None = None,
     ) -> "SessionRuntime":
         scheduler = SessionScheduler(
@@ -286,6 +289,9 @@ class SessionRuntime:
                 _DEFAULT_AGENT_CAPABILITIES
                 if agent_capabilities is None
                 else agent_capabilities
+            ),
+            agent_mcp_allowlist=(
+                frozenset() if agent_mcp_allowlist is None else agent_mcp_allowlist
             ),
             agent_effect_dispatcher=agent_effect_dispatcher,
         )
@@ -437,6 +443,7 @@ class SessionRuntime:
             context_budget=512,
             compaction_required=bool(composition.digests),
             knowledge_references=(knowledge_reference,),
+            mcp_allowlist=self.agent_mcp_allowlist,
         )
         result = pipeline.run(snapshot)
         self._agent_results.append(result)
@@ -471,6 +478,8 @@ class SessionRuntime:
             FinalizedInput(provenance, audience_input.text)
         )
         for index, observation in enumerate(accepted.observations):
+            if observation.request.kind != "knowledge":
+                continue
             self.interaction_ingress.data.consider_context(
                 ToolObservation(
                     ContextProvenance(
@@ -482,7 +491,7 @@ class SessionRuntime:
                             f"{audience_input.trace_id}:tool:{index}"
                         ),
                     ),
-                    observation,
+                    observation.text,
                 )
             )
         if accepted.plan.response_text != "":

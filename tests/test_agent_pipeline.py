@@ -138,7 +138,9 @@ def test_tool_plan_requires_a_final_plan_with_no_new_tool_request() -> None:
     assert pipeline.submit(audience_input) is GateDecision.ACCEPT
     result = pipeline.run(_snapshot(audience_input))
     assert isinstance(result, PlanAccepted)
-    assert result.observations == ("可信执行观察: 查到一条引用",)
+    assert tuple(observation.text for observation in result.observations) == (
+        "可信执行观察: 查到一条引用",
+    )
 
 
 def test_final_plan_cannot_request_tools() -> None:

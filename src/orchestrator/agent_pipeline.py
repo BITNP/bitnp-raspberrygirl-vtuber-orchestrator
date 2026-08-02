@@ -124,6 +124,15 @@ class ToolRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolExecutionObservation:
+    """A successful tool result, retained with its request provenance."""
+
+    request: ToolRequest
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class AgentPlan:
     response_text: str
     expected_revision: int
@@ -188,7 +197,7 @@ class AgentPlan:
 class PlanAccepted:
     plan: AgentPlan
     effects: tuple[object, ...]
-    observations: tuple[str, ...] = ()
+    observations: tuple[ToolExecutionObservation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,11 +419,12 @@ class AgentPipeline:
         if not isinstance(result, PlanAccepted) or not result.plan.tool_requests:
             return result
         observations = tuple(
-            observation
+            ToolExecutionObservation(request, observation)
             for request in result.plan.tool_requests
             if (observation := self.tools.execute(request, snapshot)) is not None
         )
-        raw_final = self.brain.plan(snapshot, observations=observations)
+        observation_texts = tuple(observation.text for observation in observations)
+        raw_final = self.brain.plan(snapshot, observations=observation_texts)
         final = self._reduce_or_repair(snapshot, raw_final, PlanStage.FINAL)
         if isinstance(final, PlanAccepted):
             return PlanAccepted(final.plan, final.effects, observations)
