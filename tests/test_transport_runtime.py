@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +13,11 @@ from orchestrator.mcp_adapters import DeckJournalKind
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 from orchestrator.transport_config import TransportConfig
-from orchestrator.transport_control import AuthenticatedControl
+from orchestrator.transport_control import (
+    AuthenticatedControl,
+    EnvelopeCorrelation,
+    VoiceEvidence,
+)
 from orchestrator.transport_dispatch import TransportControlDispatch
 from orchestrator.transport_hub import DuplicateRouteError, RtpHub
 from orchestrator.transport_runtime import (
@@ -46,7 +49,6 @@ SINK_PEER: Final = ("192.0.2.11", 41_001)
 
 @dataclass
 class FakeDatagramTransport:
-
     sent: list[tuple[bytes, tuple[str, int]]] = field(default_factory=list)
 
     closed: bool = False
@@ -62,7 +64,6 @@ class FakeDatagramTransport:
 
 @dataclass
 class FakeControlServer:
-
     closed: bool = False
 
     waited: bool = False
@@ -78,7 +79,6 @@ class FakeControlServer:
 
 @dataclass
 class RecordingControlPeer:
-
     messages: list[str] = field(default_factory=list)
 
     async def send(self, message: str) -> None:
@@ -88,7 +88,6 @@ class RecordingControlPeer:
 
 @dataclass
 class _ControlConnection:
-
     messages: tuple[str, ...]
 
     sent: list[str] = field(default_factory=list)
@@ -120,7 +119,6 @@ class _ControlConnection:
 
 @dataclass
 class _IncrementingClock:
-
     current: int = 0
 
     def now(self) -> int:
@@ -134,7 +132,6 @@ class _IncrementingClock:
 
 def test_hub_does_not_forward_valid_mic_rtp_without_an_onsite_bridge() -> None:
     # Given: authenticated Mic and Sound registrations for one canonical stream.
-
 
     transport = FakeDatagramTransport()
 
@@ -160,7 +157,6 @@ def test_hub_does_not_forward_valid_mic_rtp_without_an_onsite_bridge() -> None:
 def test_hub_accepts_canonical_source_and_sink_ready_events() -> None:
     # Given: registered Mic and Sound routes for a canonical media stream.
 
-
     transport = FakeDatagramTransport()
 
     hub = RtpHub(transport)
@@ -185,7 +181,6 @@ def test_hub_accepts_canonical_source_and_sink_ready_events() -> None:
 def test_hub_rejects_invalid_rtp() -> None:
     # Given: a registered stream with a malformed RTP payload type.
 
-
     transport = FakeDatagramTransport()
 
     hub = RtpHub(transport)
@@ -207,7 +202,6 @@ def test_hub_rejects_invalid_rtp() -> None:
 
 def test_hub_rejects_rtp_from_unregistered_peer() -> None:
     # Given: a registered stream and a valid packet from the Sound peer instead of Mic.
-
 
     transport = FakeDatagramTransport()
 
@@ -231,7 +225,6 @@ def test_hub_rejects_rtp_from_unregistered_peer() -> None:
 def test_hub_registers_authenticated_control_envelopes_and_rejects_duplicates() -> None:
     # Given: a hub receiving the canonical source and sink envelopes from WSS peers.
 
-
     hub = RtpHub(FakeDatagramTransport())
 
     hub.register_control(_source_registration(), SOURCE_PEER[0])
@@ -251,7 +244,6 @@ def test_hub_registers_authenticated_control_envelopes_and_rejects_duplicates() 
 
 def test_authenticated_control_registers_only_matching_bearer_token() -> None:
     # Given: a production bearer token protecting a new Mic source route.
-
 
     transport = FakeDatagramTransport()
 
@@ -284,7 +276,6 @@ def test_authenticated_control_registers_only_matching_bearer_token() -> None:
 
 def test_hub_removes_stream_routes_when_sound_cancels_stream() -> None:
     # Given: a pinned source route and registered sink route.
-
 
     transport = FakeDatagramTransport()
 
@@ -339,7 +330,6 @@ def test_dispatch_waits_for_sound_ready_before_releasing_mic() -> None:
 def test_runtime_reports_ready_after_listeners_start_and_closes_them() -> None:
     # Given: injected control and datagram listeners for an explicit loopback runtime.
 
-
     datagram_transport = FakeDatagramTransport()
 
     control_server = FakeControlServer()
@@ -369,9 +359,33 @@ def test_runtime_reports_ready_after_listeners_start_and_closes_them() -> None:
     assert datagram_transport.closed is True
 
 
+def test_hub_routes_voice_evidence_only_to_the_matching_session_runtime() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId(SESSION_ID),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+    )
+    hub = RtpHub()
+    hub.set_voice_evidence_callback(runtime.receive_voice_evidence)
+    evidence = VoiceEvidence(
+        session_id=SESSION_ID,
+        stream_id=STREAM_ID,
+        rtp_start_timestamp=10,
+        rtp_end_timestamp=330,
+        embedding_model_revision="camplusplus-onnx-v1",
+        embedding=(0.1, 0.2),
+        speech_ms=20,
+        quality_score=0.9,
+        correlation=EnvelopeCorrelation("trace", SESSION_ID, 1),
+    )
+
+    hub.register_control(evidence, SOURCE_PEER[0])
+
+    assert runtime.voice_evidence_ranges == ((STREAM_ID, 10, 330),)
+
+
 def test_control_connection_routes_comments_through_scheduler_runtime() -> None:
     # Given: one real transport control loop bound to its production session runtime.
-
 
     runtime = TransportRuntime(_loopback_config())
 
@@ -420,7 +434,6 @@ def test_control_connection_routes_comments_through_scheduler_runtime() -> None:
 
 def test_control_connection_refuses_comments_without_valid_credential() -> None:
     # Given: a production-token transport and three valid-looking comments.
-
 
     runtime = TransportRuntime(_token_config())
 
@@ -471,7 +484,6 @@ def test_control_connection_routes_authenticated_profile_action_and_presentation
     None
 ):
     # Given: one authenticated control connection carrying only canonical commands.
-
 
     runtime = TransportRuntime(_token_config())
 
@@ -532,7 +544,6 @@ def test_control_connection_routes_authenticated_profile_action_and_presentation
 
 def test_control_connection_skips_expired_presentation_mcp() -> None:
     # Given: an authenticated root runtime whose task deadline expires before selection.
-
 
     clock = _IncrementingClock()
 

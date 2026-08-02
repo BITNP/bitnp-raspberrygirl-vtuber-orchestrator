@@ -21,6 +21,7 @@ from orchestrator.transport_control import (
     SourceRegistration,
     StreamReady,
     StreamState,
+    VoiceEvidence,
     parse_control_event,
 )
 from orchestrator.tts_rtp import generated_ssrc
@@ -161,6 +162,8 @@ class RtpHub:
             Callable[[StreamFlush], Awaitable[bool]] | None
         ) = None
 
+        self._voice_evidence_callback: Callable[[VoiceEvidence], bool] | None = None
+
         if onsite_bridge is not None:
             onsite_bridge.set_output_callback(self.deliver_generated_rtp)
             replacement_callback = cast(
@@ -189,6 +192,11 @@ class RtpHub:
     ) -> None:
         self._replacement_flush_callback = request_flush
         self._replacement_admit_callback = admit_replacement
+
+    def set_voice_evidence_callback(
+        self, callback: Callable[[VoiceEvidence], bool]
+    ) -> None:
+        self._voice_evidence_callback = callback
 
     async def begin_onsite_replacement(
         self, stream: StreamKey, segment_id: SegmentId
@@ -321,6 +329,11 @@ class RtpHub:
                 state="cancelled" | "error",
             ):
                 self._remove_stream(StreamKey(session_id, stream_id))
+
+            case VoiceEvidence():
+                callback = self._voice_evidence_callback
+                if callback is not None:
+                    _ = callback(parsed_event)
 
             # Playback completion is not a disconnect.  Keeping the established
             # Mic/Sound route lets the next scheduler-authorized turn allocate a

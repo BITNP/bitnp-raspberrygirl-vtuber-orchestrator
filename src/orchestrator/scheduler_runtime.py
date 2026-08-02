@@ -116,6 +116,7 @@ from orchestrator.transient_context import (
     StaticContextBudgetPolicy,
     TokenBudget,
 )
+from orchestrator.transport_control import VoiceEvidence
 
 
 def _monotonic_ms() -> int:
@@ -212,6 +213,8 @@ class SessionRuntime:
 
     _agent_results: list[PlanResult] = field(default_factory=list)
 
+    _voice_evidence_ranges: list[tuple[str, int, int]] = field(default_factory=list)
+
     operational_journal: OperationalJournal = field(default_factory=OperationalJournal)
 
     @classmethod
@@ -265,6 +268,23 @@ class SessionRuntime:
     @property
     def agent_results(self) -> tuple[PlanResult, ...]:
         return tuple(self._agent_results)
+
+    @property
+    def voice_evidence_ranges(self) -> tuple[tuple[str, int, int], ...]:
+        """Non-sensitive evidence correlation only; embeddings never persist."""
+        return tuple(self._voice_evidence_ranges)
+
+    def receive_voice_evidence(self, evidence: VoiceEvidence) -> bool:
+        if evidence.session_id != str(self.scheduler.snapshot.session_id):
+            return False
+        self._voice_evidence_ranges.append(
+            (
+                evidence.stream_id,
+                evidence.rtp_start_timestamp,
+                evidence.rtp_end_timestamp,
+            )
+        )
+        return True
 
     @property
     def observables(self) -> RuntimeObservables:

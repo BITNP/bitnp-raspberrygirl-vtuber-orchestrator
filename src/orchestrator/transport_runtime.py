@@ -139,6 +139,8 @@ class TransportRuntime:
 
         self.set_output_fence(session_runtime.output_fence)
 
+        self._hub.set_voice_evidence_callback(session_runtime.receive_voice_evidence)
+
     def set_observability(self, observability: OnsiteObservability) -> None:
         self._hub.set_observability(observability)
 
