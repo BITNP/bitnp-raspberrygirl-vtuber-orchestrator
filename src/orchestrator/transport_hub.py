@@ -490,16 +490,6 @@ class RtpHub:
     def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None:
         return self._correlations.get(stream)
 
-    def advance_onsite_epoch(self, stream: StreamKey, epoch: int) -> None:
-        """Retire a consumed output actor while preserving the live RTP route."""
-        if self._onsite_bridge is None or epoch <= self._route_generations.get(
-            stream, 0
-        ):
-            return
-
-        self._route_generations[stream] = epoch
-        self._onsite_bridge.invalidate_stream(stream, CancellationEpoch(epoch))
-
     def _register_source(
         self,
         stream: StreamKey,

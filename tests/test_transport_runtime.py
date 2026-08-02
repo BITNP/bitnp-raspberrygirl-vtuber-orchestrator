@@ -91,6 +91,24 @@ class RecordingControlPeer:
 
 
 @dataclass
+class _RouteWithoutEpochAdvance:
+    registrations: int = 0
+
+    def register_control(self, *args: object, **kwargs: object) -> None:
+        _ = args, kwargs
+        self.registrations += 1
+
+
+@dataclass
+class _RecordingOutputFence:
+    finishes: list[dict[str, object]] = field(default_factory=list)
+
+    def finish(self, **kwargs: object) -> bool:
+        self.finishes.append(kwargs)
+        return True
+
+
+@dataclass
 class _ControlConnection:
     messages: tuple[str, ...]
 
@@ -380,6 +398,32 @@ def test_dispatch_never_releases_retired_mic_rtp_source() -> None:
         assert source.messages == []
 
     asyncio.run(verify_startup_gate())
+
+
+def test_finished_playback_never_requires_mic_epoch_advance() -> None:
+    route = _RouteWithoutEpochAdvance()
+    dispatcher = TransportControlDispatch(route)  # type: ignore[arg-type]
+    fence = _RecordingOutputFence()
+    dispatcher.set_output_fence(fence)  # type: ignore[arg-type]
+
+    asyncio.run(
+        dispatcher.register(
+            _envelope(
+                "media.stream.state",
+                "sound",
+                {
+                    "stream_id": STREAM_ID,
+                    "state": "finished",
+                    "cancellation_epoch": 0,
+                },
+            ),
+            SINK_PEER[0],
+            RecordingControlPeer(),
+        )
+    )
+
+    assert route.registrations == 1
+    assert len(fence.finishes) == 1
 
 
 def test_runtime_reports_ready_after_listeners_start_and_closes_them() -> None:

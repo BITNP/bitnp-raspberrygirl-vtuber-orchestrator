@@ -147,6 +147,8 @@ class TransportRuntime:
 
         self._flush_driver: asyncio.Task[None] | None = None
 
+        self._agent_tts_tasks: set[asyncio.Task[None]] = set()
+
         self._session_runtime: SessionRuntime | None = None
 
         self._session_runtimes: dict[str, SessionRuntime] = {}
@@ -190,10 +192,21 @@ class TransportRuntime:
             EventSequence(event.seq),
         )
         outcome = await session_runtime.receive_asr_final_async(event, correlation)
-        await self._run_agent_tts(
-            session_runtime, outcome, stream, correlation
-        )
+        self._schedule_agent_tts(session_runtime, outcome, stream, correlation)
         return outcome.accepted
+
+    def _schedule_agent_tts(
+        self,
+        session_runtime: SessionRuntime,
+        outcome: RuntimeOutcome,
+        stream: StreamKey,
+        correlation: EventCorrelation,
+    ) -> None:
+        task = asyncio.create_task(
+            self._run_agent_tts(session_runtime, outcome, stream, correlation)
+        )
+        self._agent_tts_tasks.add(task)
+        task.add_done_callback(self._agent_tts_tasks.discard)
 
     async def _run_agent_tts(
         self,
@@ -291,6 +304,12 @@ class TransportRuntime:
                 await flush_driver
 
             self._flush_driver = None
+
+        agent_tts_tasks = tuple(self._agent_tts_tasks)
+        for task in agent_tts_tasks:
+            _ = task.cancel()
+        if agent_tts_tasks:
+            _ = await asyncio.gather(*agent_tts_tasks, return_exceptions=True)
 
         if self._control_server is not None:
             self._control_server.close()
@@ -395,7 +414,7 @@ class TransportRuntime:
                         outcome = await runtime.receive_asr_final_async(
                             event, correlation
                         )
-                        await self._run_agent_tts(
+                        self._schedule_agent_tts(
                             runtime,
                             outcome,
                             StreamKey(

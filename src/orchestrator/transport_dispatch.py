@@ -65,9 +65,6 @@ class RouteRegistry(Protocol):
 
     def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None: ...
 
-    def advance_onsite_epoch(self, stream: StreamKey, epoch: int) -> None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class _SourcePeer:
     connection: ControlPeer
@@ -178,22 +175,17 @@ class TransportControlDispatch:
                 output_fence = self._output_fence
 
                 if output_fence is not None:
-                    released = output_fence.finish(
+                    _ = output_fence.finish(
                         stream=StreamKey(session_id, stream_id),
                         turn_id=turn_id,
                         segment_id=segment_id,
                         cancellation_epoch=cancellation_epoch,
                     )
 
-                    if released and cancellation_epoch is not None:
-                        # Retire the actor that owns the completed packetizer.
-                        # The next microphone frame constructs a fresh actor whose
-                        # input epoch equals the next scheduler lease epoch.
-                        self._hub.advance_onsite_epoch(
-                            StreamKey(session_id, stream_id),
-                            int(cancellation_epoch) + 1,
-                        )
-
+                    # A normal playback finish releases only its output lease.
+                    # Mic has no epoch-update control message, so advancing the
+                    # route generation here would reject every subsequent ASR
+                    # final still carrying Mic's active input epoch.
                 return
 
             case StreamState():
