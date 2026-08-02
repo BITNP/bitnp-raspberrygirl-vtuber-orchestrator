@@ -84,6 +84,8 @@ type ControlListener = Callable[
     [TransportConfig, ControlHandler], Awaitable[ControlServer]
 ]
 
+type SessionRuntimeFactory = Callable[[SessionId], SessionRuntime]
+
 
 @dataclass(frozen=True, slots=True)
 class TransportReadiness:
@@ -143,6 +145,8 @@ class TransportRuntime:
 
         self._session_runtimes: dict[str, SessionRuntime] = {}
 
+        self._session_runtime_factory: SessionRuntimeFactory | None = None
+
         self._comment_ingresses: dict[int, AuthenticatedCommentIngress] = {}
 
         self._frontend_connections: dict[str, ControlConnection] = {}
@@ -165,10 +169,13 @@ class TransportRuntime:
             self._send_frontend_operation
         )
 
+    def set_session_runtime_factory(self, factory: SessionRuntimeFactory) -> None:
+        self._session_runtime_factory = factory
+
     async def receive_onsite_asr_final(
         self, stream: StreamKey, event: ASRAudienceEvent
     ) -> bool:
-        session_runtime = self._session_runtimes.get(stream.session_id)
+        session_runtime = self._runtime_for_session(stream.session_id)
         if session_runtime is None:
             return False
         correlation = EventCorrelation(
@@ -359,7 +366,20 @@ class TransportRuntime:
         session_id = value.get("session_id")
         if not isinstance(session_id, str):
             return None
-        return self._session_runtimes.get(session_id, self._session_runtime)
+        return self._runtime_for_session(session_id, fallback=self._session_runtime)
+
+    def _runtime_for_session(
+        self, session_id: str, *, fallback: SessionRuntime | None = None
+    ) -> SessionRuntime | None:
+        runtime = self._session_runtimes.get(session_id)
+        if runtime is not None:
+            return runtime
+        factory = self._session_runtime_factory
+        if factory is None:
+            return fallback
+        runtime = factory(SessionId(session_id))
+        self.set_session_runtime(runtime)
+        return runtime
 
     async def _send_frontend_operation(
         self,
