@@ -5,6 +5,7 @@ from orchestrator.llm import LLMFinal, LLMPrompt, LLMRequest, MockLLMAdapter
 from orchestrator.transient_context import (
     AcceptedOutput,
     CancelledMaterial,
+    ContextCompactionError,
     ContextProvenance,
     ContextSequence,
     ContextSessionMismatchError,
@@ -166,6 +167,26 @@ def test_compaction_digests_only_the_oversized_entry_between_retained_entries() 
     )
 
     assert first_composition.digests[0].source_provenances == (oversized.provenance,)
+
+
+def test_compaction_is_atomic_and_rejects_a_stale_source_snapshot() -> None:
+    policy = StaticContextBudgetPolicy(
+        model_id=ModelId("local-model"),
+        budget=ModelContextBudget(input_tokens=TokenBudget(3)),
+    )
+    context = TransientContext(session_id=SessionId("session-1"))
+    _ = context.consider(FinalizedInput(_provenance("old", 1), "old question"))
+    _ = context.consider(FinalizedInput(_provenance("new", 2), "new question"))
+    composition = context.compose(ModelId("local-model"), policy)
+
+    compacted = context.compact(composition, summary="稳定事实: 已开始讲解")
+
+    assert compacted.summary == "稳定事实: 已开始讲解"
+    assert tuple(entry.text for entry in compacted.entries) == ("new question",)
+
+    _ = context.consider(FinalizedInput(_provenance("later", 3), "later"))
+    with pytest.raises(ContextCompactionError):
+        _ = context.compact(composition, summary="迟到摘要")
 
 
 def test_reset_clears_one_session_without_reusing_another_sessions_context() -> None:

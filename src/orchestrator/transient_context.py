@@ -19,6 +19,8 @@ ModelId = NewType("ModelId", str)
 
 TokenBudget = NewType("TokenBudget", int)
 
+MAX_CONTEXT_SUMMARY_CHARS = 4_000
+
 
 @dataclass(frozen=True, slots=True)
 class ContextProvenance:
@@ -101,6 +103,8 @@ class TransientContextSnapshot:
 
     entries: tuple[ContextEntry, ...]
 
+    summary: str = ""
+
 
 @dataclass(frozen=True, slots=True)
 class ModelContextBudget:
@@ -175,6 +179,12 @@ class ModelBudgetUnavailableError(Exception):
         return "transient context model budget is unavailable"
 
 
+@dataclass(frozen=True, slots=True)
+class ContextCompactionError(Exception):
+    def __str__(self) -> str:
+        return "transient context compaction source is stale or invalid"
+
+
 @final
 class TransientContext:
     def __init__(self, *, session_id: SessionId) -> None:
@@ -184,12 +194,15 @@ class TransientContext:
 
         self._entries: list[ContextEntry] = []
 
+        self._summary = ""
+
     @property
     def snapshot(self) -> TransientContextSnapshot:
         return TransientContextSnapshot(
             session_id=self._session_id,
             generation=self._generation,
             entries=tuple(self._entries),
+            summary=self._summary,
         )
 
     def consider(self, material: ContextMaterial) -> TransientContextSnapshot:
@@ -216,8 +229,31 @@ class TransientContext:
     def reset(self) -> TransientContextSnapshot:
         self._entries.clear()
 
+        self._summary = ""
+
         self._generation += 1
 
+        return self.snapshot
+
+    def compact(
+        self,
+        composition: ContextComposition,
+        *,
+        summary: str,
+    ) -> TransientContextSnapshot:
+        """Atomically retain recent raw material and replace compacted source.
+
+        The caller must pass the exact composition used by Brain.  This makes
+        late summaries harmless after another accepted context write.
+        """
+        if composition.snapshot != self.snapshot or not composition.digests:
+            raise ContextCompactionError
+        normalized = summary.strip()
+        if normalized == "" or len(normalized) > MAX_CONTEXT_SUMMARY_CHARS:
+            raise ContextCompactionError
+        self._entries = list(composition.entries)
+        self._summary = normalized
+        self._generation += 1
         return self.snapshot
 
     def compose(

@@ -1,4 +1,3 @@
-
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,7 +36,6 @@ def _monotonic_ms() -> int:
 
 @dataclass(frozen=True, slots=True)
 class ProfilePersistence:
-
     store: VoiceProfileStore | None = None
 
     vault_directory: Path | None = None
@@ -47,7 +45,6 @@ class ProfilePersistence:
 
 @dataclass(slots=True)
 class SessionDataState:
-
     memory: MutableMemory
 
     context: TransientContext
@@ -197,10 +194,17 @@ class SessionDataState:
         self.invalidate_pending(f"identity_deleted:{profile_id}")
 
     def prompt_snapshot(self, *, max_context_chars: int) -> PromptSnapshot:
+        context_snapshot = self.context.snapshot
+
         return PromptSnapshot(
             task_state=self.task_snapshot,
-            context_entries=tuple(
-                entry.text for entry in self.context.snapshot.entries
+            context_entries=(
+                *(
+                    (context_snapshot.summary,)
+                    if context_snapshot.summary != ""
+                    else ()
+                ),
+                *(entry.text for entry in context_snapshot.entries),
             ),
             max_context_chars=max_context_chars,
             memory_entries=tuple(
