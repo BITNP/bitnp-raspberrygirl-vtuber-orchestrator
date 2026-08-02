@@ -308,6 +308,8 @@ class AgentPlanReducer:
 
     @staticmethod
     def _memory_is_valid(snapshot: BrainStateSnapshot, plan: AgentPlan) -> bool:
+        if len(plan.memory_patches) > 1:
+            return False
         for patch in plan.memory_patches:
             if set(patch) - {
                 "op",
@@ -324,6 +326,8 @@ class AgentPlanReducer:
             ):
                 return False
             if patch.get("base_revision") != snapshot.memory_revision:
+                return False
+            if patch.get("source_turn") != snapshot.turn_id:
                 return False
             if patch.get("op") != "delete" and (
                 patch.get("category")

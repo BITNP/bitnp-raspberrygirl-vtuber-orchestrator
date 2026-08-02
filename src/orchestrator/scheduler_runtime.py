@@ -44,6 +44,15 @@ from orchestrator.mcp_adapters import (
     DeckEffectDispatcher,
     LocalDeckEffectExecutor,
 )
+from orchestrator.memory import (
+    MemoryCategory,
+    MemoryConfidence,
+    MemoryKey,
+    MemoryProposal,
+    MemoryProvenance,
+    MemorySource,
+    ProposalRevision,
+)
 from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.operational_journal import OperationalJournal, OperationalRecord
 from orchestrator.pipeline_contracts import ASRAudienceEvent
@@ -359,6 +368,7 @@ class SessionRuntime:
             self.interaction_ingress.data.consider_context(
                 AcceptedOutput(provenance, accepted.plan.response_text)
             )
+        self._apply_memory_patch(accepted, correlation, turn_id)
         for index, operation in enumerate(accepted.plan.state_operations):
             if operation.kind == "create_task":
                 self._create_brain_task(operation.payload, turn_id, correlation, index)
@@ -366,6 +376,50 @@ class SessionRuntime:
                 task_id = operation.payload.get("task_id")
                 if isinstance(task_id, str):
                     _ = self.cancel_task(TaskId(task_id), correlation)
+
+    def _apply_memory_patch(
+        self,
+        accepted: PlanAccepted,
+        correlation: EventCorrelation,
+        turn_id: TurnId,
+    ) -> None:
+        if not accepted.plan.memory_patches:
+            return
+        patch = accepted.plan.memory_patches[0]
+        key = patch.get("id")
+        operation = patch.get("op")
+        if not isinstance(key, str) or not isinstance(operation, str):
+            return
+        if operation == "delete":
+            self.interaction_ingress.data.delete_memory(MemoryKey(key))
+            return
+        value = patch.get("value")
+        confidence = patch.get("confidence")
+        base_revision = patch.get("base_revision")
+        if (
+            operation not in {"add", "update"}
+            or patch.get("category") != "preference"
+            or not isinstance(value, str)
+            or type(confidence) is not int
+            or type(base_revision) is not int
+        ):
+            return
+        _ = self.interaction_ingress.data.reduce_memory(
+            MemoryProposal(
+                key=MemoryKey(key),
+                value=value,
+                category=MemoryCategory.ORDINARY_PREFERENCE,
+                confidence=MemoryConfidence(confidence),
+                base_revision=ProposalRevision(base_revision),
+                provenance=MemoryProvenance(
+                    source=MemorySource.AGENT_PROPOSAL,
+                    trace_id=correlation.trace_id,
+                    session_id=correlation.session_id,
+                    turn_id=turn_id,
+                    evidence_id=f"brain:{correlation.trace_id}:{correlation.sequence}",
+                ),
+            )
+        )
 
     def _create_brain_task(
         self,

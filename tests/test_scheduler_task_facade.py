@@ -107,6 +107,7 @@ def test_runtime_routes_comment_through_agent_gate_and_brain_snapshot() -> None:
         "answer",
     )
     assert runtime.task_registry.records[0].request.kind is TaskKind.INTERACTIVE
+    assert runtime.interaction_ingress.data.memory.snapshot.entries[0].value == "小莓"
 
 
 class _AcceptGate:
@@ -124,6 +125,17 @@ class _PlanBrain:
                 "expected_revision": snapshot.revision,
                 "state_operations": [
                     {"kind": "create_task", "payload": {"task_kind": "tts"}}
+                ],
+                "memory_patches": [
+                    {
+                        "op": "add",
+                        "id": "preferred_name",
+                        "category": "preference",
+                        "value": "小莓",
+                        "source_turn": snapshot.turn_id,
+                        "confidence": 95,
+                        "base_revision": snapshot.memory_revision,
+                    }
                 ],
             }
         )
