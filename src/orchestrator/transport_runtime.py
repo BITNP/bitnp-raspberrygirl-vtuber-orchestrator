@@ -141,12 +141,17 @@ class TransportRuntime:
 
         self._session_runtime: SessionRuntime | None = None
 
+        self._session_runtimes: dict[str, SessionRuntime] = {}
+
         self._comment_ingresses: dict[int, AuthenticatedCommentIngress] = {}
 
         self._frontend_connections: dict[str, ControlConnection] = {}
 
     def set_session_runtime(self, session_runtime: SessionRuntime) -> None:
         self._session_runtime = session_runtime
+        self._session_runtimes[str(session_runtime.scheduler.snapshot.session_id)] = (
+            session_runtime
+        )
 
         self.set_output_fence(session_runtime.output_fence)
 
@@ -163,7 +168,7 @@ class TransportRuntime:
     async def receive_onsite_asr_final(
         self, stream: StreamKey, event: ASRAudienceEvent
     ) -> bool:
-        session_runtime = self._session_runtime
+        session_runtime = self._session_runtimes.get(stream.session_id)
         if session_runtime is None:
             return False
         correlation = EventCorrelation(
@@ -294,7 +299,7 @@ class TransportRuntime:
                         self._frontend_connections[frontend_session] = connection
                         continue
 
-                    session_runtime = self._session_runtime
+                    session_runtime = self._runtime_for_message(message)
 
                     if session_runtime is not None and parse_comment_proposal(message):
                         _LOGGER.debug(
@@ -343,6 +348,18 @@ class TransportRuntime:
                     del self._frontend_connections[session_id]
 
             self._control_dispatch.remove_connection(connection)
+
+    def _runtime_for_message(self, raw_message: str) -> SessionRuntime | None:
+        try:
+            value = parse_json_value(raw_message)
+        except JsonBoundaryError:
+            return None
+        if not isinstance(value, dict):
+            return None
+        session_id = value.get("session_id")
+        if not isinstance(session_id, str):
+            return None
+        return self._session_runtimes.get(session_id, self._session_runtime)
 
     async def _send_frontend_operation(
         self,
