@@ -19,8 +19,12 @@ from orchestrator.comment_ingress import (
     CommentTokenValue,
 )
 from orchestrator.control_ingress import parse_session_control
+from orchestrator.frontend_effects import (
+    FrontendEffectDispatcher,
+    send_frontend_operation,
+)
 from orchestrator.interaction_ingress import parse_comment_proposal
-from orchestrator.json_boundary import JsonBoundaryError
+from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import ControlEnvelopeError, bearer_token_matches
@@ -36,6 +40,8 @@ _LOGGER = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from websockets.http11 import Request, Response
 
+    from orchestrator.agent_pipeline import FrontendOperation
+    from orchestrator.ids import SessionId, TurnId
     from orchestrator.observability import OnsiteObservability
     from orchestrator.scheduler_reflex import SchedulerOutputFence
     from orchestrator.scheduler_runtime import SessionRuntime
@@ -134,12 +140,18 @@ class TransportRuntime:
 
         self._comment_ingresses: dict[int, AuthenticatedCommentIngress] = {}
 
+        self._frontend_connections: dict[str, ControlConnection] = {}
+
     def set_session_runtime(self, session_runtime: SessionRuntime) -> None:
         self._session_runtime = session_runtime
 
         self.set_output_fence(session_runtime.output_fence)
 
         self._hub.set_voice_evidence_callback(session_runtime.receive_voice_evidence)
+
+        session_runtime.agent_effect_dispatcher = FrontendEffectDispatcher(
+            self._send_frontend_operation
+        )
 
     def set_observability(self, observability: OnsiteObservability) -> None:
         self._hub.set_observability(observability)
@@ -239,7 +251,9 @@ class TransportRuntime:
 
         self._control_dispatch.clear()
 
-    async def handle_control(self, connection: ControlConnection) -> None:
+    async def handle_control(  # noqa: C901, PLR0912
+        self, connection: ControlConnection
+    ) -> None:
         peer_ip = _peer_ip(connection)
 
         try:
@@ -252,6 +266,11 @@ class TransportRuntime:
                         self._config.control_token,
                         _connection_authorization(connection),
                     ):
+                        continue
+
+                    frontend_session = _frontend_registration(message)
+                    if frontend_session is not None:
+                        self._frontend_connections[frontend_session] = connection
                         continue
 
                     session_runtime = self._session_runtime
@@ -298,7 +317,25 @@ class TransportRuntime:
             if comment_ingress is not None:
                 comment_ingress.cancel_pending()
 
+            for session_id, frontend in tuple(self._frontend_connections.items()):
+                if frontend is connection:
+                    del self._frontend_connections[session_id]
+
             self._control_dispatch.remove_connection(connection)
+
+    async def _send_frontend_operation(
+        self,
+        event_type: str,
+        operation: FrontendOperation,
+        session_id: SessionId,
+        turn_id: TurnId,
+    ) -> None:
+        connection = self._frontend_connections.get(str(session_id))
+        if connection is None:
+            return
+        await send_frontend_operation(
+            connection.send, event_type, operation, session_id, turn_id
+        )
 
     async def _receive_comment(
         self,
@@ -436,6 +473,23 @@ def _ssl_context(config: TransportConfig) -> ssl.SSLContext | None:
     context.load_cert_chain(config.tls_cert_path, config.tls_key_path)
 
     return context
+
+
+def _frontend_registration(raw_message: str) -> str | None:
+    try:
+        value = parse_json_value(raw_message)
+    except JsonBoundaryError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    if (
+        value.get("event_type") != "frontend.register"
+        or value.get("source") != "frontend"
+        or value.get("data") != {}
+    ):
+        return None
+    session_id = value.get("session_id")
+    return session_id if isinstance(session_id, str) and session_id.strip() else None
 
 
 def _peer_ip(connection: ControlConnection) -> str:

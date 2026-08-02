@@ -115,6 +115,7 @@ class MediaOperation:
 class FrontendOperation:
     kind: str
     value: str | int | None = None
+    deck_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +310,10 @@ class AgentPlanReducer:
     @staticmethod
     def _frontend_is_valid(snapshot: BrainStateSnapshot, plan: AgentPlan) -> bool:
         for operation in plan.frontend_operations:
+            if operation.kind == "caption" and (
+                not isinstance(operation.value, str) or not operation.value.strip()
+            ):
+                return False
             if operation.kind == "animation" and operation.value not in {
                 "idle",
                 "talk",
@@ -316,8 +321,13 @@ class AgentPlanReducer:
                 "nod",
             }:
                 return False
+            if operation.kind == "ppt.load" and (
+                not isinstance(operation.value, str) or not operation.value.strip()
+            ):
+                return False
             if operation.kind == "ppt.navigate" and (
                 snapshot.ppt_deck_id is None
+                or operation.deck_id != snapshot.ppt_deck_id
                 or not isinstance(operation.value, int)
                 or operation.value < 1
             ):
@@ -603,14 +613,21 @@ def _media_operations(value: JsonValue) -> tuple[MediaOperation, ...]:
 def _frontend_operations(value: JsonValue) -> tuple[FrontendOperation, ...]:
     result: list[FrontendOperation] = []
     for item in _objects(value, "frontend_operations"):
-        if set(item) - {"kind", "value"} or not isinstance(item.get("kind"), str):
+        if set(item) - {"kind", "value", "deck_id"} or not isinstance(
+            item.get("kind"), str
+        ):
             raise PlanError("frontend operation is invalid")
         item_value = item.get("value")
+        deck_id = item.get("deck_id")
         if item_value is not None and (
             not isinstance(item_value, str) and type(item_value) is not int
         ):
             raise PlanError("frontend operation payload is invalid")
-        result.append(FrontendOperation(cast("str", item["kind"]), item_value))
+        if deck_id is not None and not isinstance(deck_id, str):
+            raise PlanError("frontend operation deck id is invalid")
+        result.append(
+            FrontendOperation(cast("str", item["kind"]), item_value, deck_id)
+        )
     return tuple(result)
 
 

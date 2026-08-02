@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from orchestrator.agent_pipeline import (
     AgentPipeline,
@@ -145,8 +145,13 @@ def test_tool_plan_requires_a_final_plan_with_no_new_tool_request() -> None:
 
 def test_final_plan_cannot_request_tools() -> None:
     audience_input = _input(AudienceSource.ASR, "question", 0)
+    tool_request: dict[str, object] = {
+        "kind": "knowledge",
+        "name": "local",
+        "arguments": {},
+    }
     initial = _plan(
-        tool_requests=[{"kind": "knowledge", "name": "local", "arguments": {}}]
+        tool_requests=[tool_request]
     )
     pipeline = AgentPipeline(_Gate(set()), _Brain(initial, final=initial), _Tools())
     assert pipeline.submit(audience_input) is GateDecision.ACCEPT
@@ -172,3 +177,17 @@ def test_stop_is_rejected_until_replacement_has_frame_and_flush_ack() -> None:
         stage=PlanStage.FINAL,
     )
     assert result == PlanRejected("unsafe_media_operation")
+
+
+def test_ppt_navigation_requires_the_snapshot_deck_id() -> None:
+    audience_input = _input(AudienceSource.COMMENT, "下一页", 0)
+    snapshot = replace(_snapshot(audience_input), ppt_deck_id="deck-1", ppt_page=1)
+    plan = _plan(
+        frontend_operations=[
+            {"kind": "ppt.navigate", "value": 2, "deck_id": "other-deck"}
+        ]
+    )
+
+    assert AgentPlanReducer().reduce(
+        snapshot, AgentPlan.from_json(plan), stage=PlanStage.INITIAL
+    ) == PlanRejected("invalid_frontend_operation")

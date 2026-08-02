@@ -448,6 +448,7 @@ class SessionRuntime:
         context = composition.snapshot
         memory = self.interaction_ingress.data.memory.snapshot
         retrieval = self.interaction_ingress.data.retrieval.snapshot
+        presentation = self.interaction_ingress.reducer.presentation_state
         corpus_version = f"{retrieval.corpus_id}@{retrieval.corpus_revision}"
         index_version = f"{retrieval.index_id}@{retrieval.index_revision}"
         knowledge_reference = (
@@ -465,6 +466,8 @@ class SessionRuntime:
                 memory, self.scheduler.snapshot.session_id
             ),
             capabilities=self.agent_capabilities,
+            ppt_deck_id=None if presentation is None else presentation[0],
+            ppt_page=None if presentation is None else presentation[2],
             tasks=tuple(
                 TaskSnapshot(
                     task_id=str(record.request.task_id),
@@ -504,6 +507,7 @@ class SessionRuntime:
         context = composition.snapshot
         memory = self.interaction_ingress.data.memory.snapshot
         retrieval = self.interaction_ingress.data.retrieval.snapshot
+        presentation = self.interaction_ingress.reducer.presentation_state
         corpus_version = f"{retrieval.corpus_id}@{retrieval.corpus_revision}"
         index_version = f"{retrieval.index_id}@{retrieval.index_revision}"
         snapshot = BrainStateSnapshot(
@@ -518,6 +522,8 @@ class SessionRuntime:
                 memory, self.scheduler.snapshot.session_id
             ),
             capabilities=self.agent_capabilities,
+            ppt_deck_id=None if presentation is None else presentation[0],
+            ppt_page=None if presentation is None else presentation[2],
             tasks=tuple(
                 TaskSnapshot(
                     task_id=str(record.request.task_id),

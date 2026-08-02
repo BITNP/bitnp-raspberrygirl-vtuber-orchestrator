@@ -7,8 +7,10 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 
+from orchestrator.agent_pipeline import AgentPipeline, BrainStateSnapshot, GateDecision
 from orchestrator.config import TrustedLanToken
 from orchestrator.ids import SessionId
+from orchestrator.json_boundary import parse_json_value
 from orchestrator.mcp_adapters import DeckJournalKind
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
@@ -115,6 +117,60 @@ class _ControlConnection:
         _ = text
 
         raise AssertionError
+
+
+@dataclass
+class _HeldControlConnection:
+    messages: tuple[str, ...]
+
+    release: asyncio.Event
+
+    sent: list[str] = field(default_factory=list)
+
+    @property
+    def remote_address(self) -> tuple[str, int]:
+        return ("127.0.0.1", 443)
+
+    async def __aiter__(self) -> AsyncIterator[str]:
+        for message in self.messages:
+            yield message
+        _ = await self.release.wait()
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    def respond(self, status: HTTPStatus, text: str) -> Response:
+        _ = status, text
+        raise AssertionError
+
+
+class _AcceptGate:
+    def evaluate(self, *args: object, **kwargs: object) -> GateDecision:
+        _ = args, kwargs
+        return GateDecision.ACCEPT
+
+
+class _CaptionBrain:
+    def plan(self, snapshot: BrainStateSnapshot, **kwargs: object) -> str:
+        _ = kwargs
+        return json.dumps(
+            {
+                "response_text": "欢迎来到活动",
+                "expected_revision": snapshot.revision,
+                "frontend_operations": [
+                    {"kind": "caption", "value": "欢迎来到活动"}
+                ],
+            }
+        )
+
+    def repair(self, snapshot: BrainStateSnapshot, invalid_plan: str) -> str:
+        _ = snapshot, invalid_plan
+        return "{}"
+
+
+class _NoTools:
+    def execute(self, *args: object, **kwargs: object) -> None:
+        _ = args, kwargs
 
 
 @dataclass
@@ -430,6 +486,46 @@ def test_control_connection_routes_comments_through_scheduler_runtime() -> None:
     assert observables.sound_transitions == ()
 
     assert connection.sent == []
+
+
+def test_control_connection_dispatches_brain_frontend_effect_to_registered_client() -> (
+    None
+):
+    runtime = TransportRuntime(_loopback_config())
+    session_runtime = SessionRuntime.create(
+        session_id=SessionId(SESSION_ID),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        agent_pipeline=AgentPipeline(_AcceptGate(), _CaptionBrain(), _NoTools()),
+    )
+    runtime.set_session_runtime(session_runtime)
+    async def run() -> _HeldControlConnection:
+        release = asyncio.Event()
+        connection = _HeldControlConnection(
+            (
+                _envelope("frontend.register", "frontend", {}),
+                _audience_comment(SESSION_ID, "trace-caption", 1),
+            ),
+            release,
+        )
+        task = asyncio.create_task(runtime.handle_control(connection))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        release.set()
+        await task
+        return connection
+
+    connection = asyncio.run(run())
+
+    assert len(connection.sent) == 1
+    envelope = parse_json_value(connection.sent[0])
+    assert isinstance(envelope, dict)
+    assert envelope["event_type"] == "vtuber.caption.command"
+    assert envelope["source"] == "orchestrator"
+    assert envelope["session_id"] == SESSION_ID
+    data = envelope["data"]
+    assert isinstance(data, dict)
+    assert data["text"] == "欢迎来到活动"
 
 
 def test_control_connection_refuses_comments_without_valid_credential() -> None:
