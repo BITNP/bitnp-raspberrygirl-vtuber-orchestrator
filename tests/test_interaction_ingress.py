@@ -1,7 +1,12 @@
 
+from pathlib import Path
+
+import pytest
+
 from orchestrator.ids import SessionId, TraceId
 from orchestrator.interaction_ingress import SessionInteractionIngress
 from orchestrator.interactions import InteractionAccepted
+from orchestrator.retrieval import ReadonlyLlamaIndexProvider
 from orchestrator.sessions import EventCorrelation, EventSequence, SessionScheduler
 
 
@@ -90,3 +95,26 @@ def test_duplicate_correlated_comment_opens_only_one_turn() -> None:
     assert (first, duplicate) == (True, True)
 
     assert [event.turn_id for event in scheduler.event_history] == ["turn-0001"]
+
+
+def test_ingress_uses_configured_readonly_knowledge_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given: deployment explicitly supplies the controlled, startup-only corpus.
+
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    _ = (knowledge / "product.md").write_text("树莓女孩", encoding="utf-8")
+    monkeypatch.setenv("ORCHESTRATOR_KNOWLEDGE_DIR", str(knowledge))
+    monkeypatch.setenv("ORCHESTRATOR_STATE_DIR", str(tmp_path / "state"))
+    scheduler = SessionScheduler(
+        session_id=SessionId("session-knowledge"), turn_id_prefix="turn"
+    )
+
+    # When: the production ingress is built for the session.
+
+    ingress = SessionInteractionIngress.create(scheduler)
+
+    # Then: it owns an immutable LlamaIndex-core corpus, never a fixture corpus.
+
+    assert isinstance(ingress.data.retrieval, ReadonlyLlamaIndexProvider)
