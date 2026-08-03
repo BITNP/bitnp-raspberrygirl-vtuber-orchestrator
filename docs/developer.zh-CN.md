@@ -58,6 +58,21 @@ LLM、MCP、TTS、flush、字幕投递、记忆提取和上下文压缩必须由
 
 Orchestrator 的调度器把工作分为 reflex、interactive、deliberative 和 maintenance lane。反射类行为，如打断、TTS gate 和 RTP 输出 gate，不能等待 LLM、检索、MCP 或后台任务。
 
+### TurnCoordinator 状态与执行信封
+
+每个接受的输入由协调器从不可变快照生成内部 `ExecutionEnvelope`。它固定
+`session_id`、`turn_id`、`segment_id`、revision、cancellation epoch、deadline、媒体
+替换策略以及动作/表情 allowlist；这些字段绝不来自模型。正常状态为
+`QUEUED → REASONING → WAITING_TOOL（可选）→ SYNTHESIZING → PLAYING → COMPLETED`，
+任一未完成状态都可因新输入、deadline、能力撤销或会话结束进入 `CANCELLED`。
+
+初始 LLM、受控工具、最终 LLM、TTS、记忆提取和上下文压缩分别登记为 task。初始与
+最终 LLM 最多各一次；最终调用仅允许 `answer`。工具、LLM 或维护 provider 的返回先
+经过 task/revision/data-snapshot/epoch/deadline 栅栏，再允许创建下一任务或提交结果。
+音频首帧被接受后才写入 transient context，并才会安排 memory/compaction maintenance
+任务。替换播放必须先获首帧和匹配的 Sound flush ACK；成功时先取消旧字幕 timeline，
+失败则旧音频与旧 timeline 都保持。
+
 Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 保持回放和健康检查能力。Frontend 不参与 onsite audio loop；字幕 cue 在协议层准备就绪，但不要把同步字幕渲染描述为已完成能力。
 
 ## 关键技术细节
