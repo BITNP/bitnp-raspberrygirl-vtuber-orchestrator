@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import ssl
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Self
 
 import pytest
 
@@ -283,7 +284,7 @@ def test_tts_sse_uses_unbuffered_openai_streaming_response(
     pcm_24khz = base64.b64encode(b"\x10\x20" * 480).decode()
 
     class Response:
-        def __enter__(self) -> "Response":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *_args: object) -> None:
@@ -293,8 +294,13 @@ def test_tts_sse_uses_unbuffered_openai_streaming_response(
             return None
 
         def iter_lines(self) -> list[str]:
+            delta = {
+                "type": "speech.audio.delta",
+                "response_format": "pcm",
+                "audio": pcm_24khz,
+            }
             return [
-                f'data: {{"type":"speech.audio.delta","response_format":"pcm","audio":"{pcm_24khz}"}}',
+                f"data: {json.dumps(delta)}",
                 'data: {"type":"speech.audio.done"}',
             ]
 
@@ -310,7 +316,10 @@ def test_tts_sse_uses_unbuffered_openai_streaming_response(
         ),
         close=lambda: None,
     )
-    monkeypatch.setattr(VllmOmniTTSAdapter, "_client", lambda _adapter: client)
+    def build_client(_adapter: VllmOmniTTSAdapter) -> SimpleNamespace:
+        return client
+
+    monkeypatch.setattr(VllmOmniTTSAdapter, "_client", build_client)
 
     # When: the adapter consumes provider SSE.
 

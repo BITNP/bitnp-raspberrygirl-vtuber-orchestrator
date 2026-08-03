@@ -739,7 +739,7 @@ class OnsiteExplainerBridge:
         await self.output_finished(stream, output_epoch)
         return True
 
-    async def _speak_streaming_agent_plan(
+    async def _speak_streaming_agent_plan(  # noqa: C901, PLR0911, PLR0912, PLR0913
         self,
         stream: StreamKey,
         epoch: CancellationEpoch,
@@ -783,7 +783,9 @@ class OnsiteExplainerBridge:
                 if len(buffered) < L16_FRAME_BYTES:
                     continue
                 if packetizer is None:
-                    output_epoch = self.allocate_agent_plan_output(stream, epoch, turn_id)
+                    output_epoch = self.allocate_agent_plan_output(
+                        stream, epoch, turn_id
+                    )
                     if output_epoch is None:
                         return False
                     packetizer = TtsPcmRtpPacketizer(stream, output_epoch)
@@ -800,13 +802,17 @@ class OnsiteExplainerBridge:
                 if output_epoch is None:
                     return False
                 packetizer = TtsPcmRtpPacketizer(stream, output_epoch)
-            packets = packetizer.push(Pcm16leChunk(bytes(buffered))) + packetizer.finish()
+            packets = (
+                packetizer.push(Pcm16leChunk(bytes(buffered))) + packetizer.finish()
+            )
             if not await emit(packets):
                 return False
         finally:
-            close = getattr(synthesis, "close", None)
+            close = cast(
+                "Callable[[], object] | None", getattr(synthesis, "close", None)
+            )
             if close is not None:
-                await asyncio.to_thread(close)
+                _ = await asyncio.to_thread(close)
         if not committed or output_epoch is None:
             return False
         await self.output_finished(stream, output_epoch)
