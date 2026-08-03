@@ -41,6 +41,8 @@ class TaskState(StrEnum):
 
     COMPLETED = "completed"
 
+    FAILED = "failed"
+
 
 @unique
 class TaskRegistrationRejection(StrEnum):
@@ -283,6 +285,20 @@ class TaskRegistry:
                 record,
                 state=TaskState.COMPLETED,
                 cancellation_reason=None,
+                superseded_by=None,
+            )
+        )
+
+    def fail(self, task_id: TaskId, *, reason: str) -> TaskRecord | None:
+        """Mark a running task terminal without admitting a later result."""
+        record = self._records.get(task_id)
+        if record is None or record.state is not TaskState.RUNNING:
+            return None
+        return self._store(
+            replace(
+                record,
+                state=TaskState.FAILED,
+                cancellation_reason=reason,
                 superseded_by=None,
             )
         )

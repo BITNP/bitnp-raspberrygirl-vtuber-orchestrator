@@ -132,6 +132,9 @@ def _lifecycle_rejection(record: TaskRecord) -> TaskResultRejection | None:
         case TaskState.COMPLETED:
             return TaskResultRejection.ALREADY_COMPLETED
 
+        case TaskState.FAILED:
+            return TaskResultRejection.CANCELLED
+
 
 def _snapshot_rejection(
     record: TaskRecord,

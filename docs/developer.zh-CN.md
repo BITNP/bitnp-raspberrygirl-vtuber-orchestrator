@@ -48,6 +48,14 @@ Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口
 
 ## 模块行为
 
+### 精简回复契约与异步任务
+
+新回复路径使用 `{"reply":"...","intent":"answer"}`：模型不得生成状态操作、媒体命令、MCP 参数或记忆 patch。无法解析的输出按普通文本回复处理，不触发 JSON 修复请求。工具 intent 必须由 Orchestrator 的可信 `IntentSpec` 映射为参数，并且工具观察返回后只允许一次最终 `answer` 回复。
+
+回复可含 `<action name="..."/>` 和 `<expression name="..."/>`。Orchestrator 只保留 allowlist 内的标记；TTS 接收去标记文本。未来 Frontend 使用 canonical `vtuber.caption.timeline.command` / `vtuber.caption.timeline.cancel` 事件按 `inline-cue/v1` 渲染字幕与 cue。
+
+LLM、MCP、TTS、flush、字幕投递、记忆提取和上下文压缩必须由 `TaskRegistry` 生命周期管理。任务结果提交前需校验 session、turn、revision、epoch 和 deadline；取消先关闭结果栅栏，再取消 provider，因此迟到结果不得产生媒体、上下文、记忆或前端效果。replacement TTS 必须持有首个有效 RTP 帧并等待 Sound flush ACK，失败时原播放保持不变。
+
 Orchestrator 的调度器把工作分为 reflex、interactive、deliberative 和 maintenance lane。反射类行为，如打断、TTS gate 和 RTP 输出 gate，不能等待 LLM、检索、MCP 或后台任务。
 
 Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 保持回放和健康检查能力。Frontend 不参与 onsite audio loop；字幕 cue 在协议层准备就绪，但不要把同步字幕渲染描述为已完成能力。

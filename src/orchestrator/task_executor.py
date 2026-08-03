@@ -52,6 +52,7 @@ class TaskLaneExecutor:
                 | TaskState.SUPERSEDED
                 | TaskState.TIMED_OUT
                 | TaskState.COMPLETED
+                | TaskState.FAILED
                 | TaskState.RUNNING
             ):
                 return False
@@ -93,6 +94,7 @@ class TaskLaneExecutor:
                         | TaskState.SUPERSEDED
                         | TaskState.TIMED_OUT
                         | TaskState.COMPLETED
+                        | TaskState.FAILED
                         | TaskState.RUNNING
                     ):
                         continue

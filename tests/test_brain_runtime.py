@@ -17,6 +17,7 @@ from orchestrator.brain_runtime import (
     AsyncJsonAgentGate,
     JsonAgentBrain,
     JsonAgentGate,
+    JsonResponseBrain,
     MockAgentGate,
     ReadonlyKnowledgeToolExecutor,
 )
@@ -150,6 +151,22 @@ def test_repair_requires_the_exact_snapshot_revision() -> None:
     assert "AgentPlan JSON 修复器" in completion.requests[0].prompt.system
     assert "tool_requests 必须为 []" in completion.requests[0].prompt.system
     assert "无效提案也以不可信 JSON 包提供" in completion.requests[0].prompt.system
+
+
+def test_minimal_response_brain_has_no_plan_or_repair_contract() -> None:
+    completion = _Completion(['{"reply":"您好","intent":"answer"}', "not-json"])
+    brain = JsonResponseBrain(completion)
+
+    accepted = brain.respond(_snapshot(), allowed_intents=frozenset({"answer"}))
+    fallback = brain.respond(_snapshot(), allowed_intents=frozenset({"answer"}))
+
+    assert accepted.reply == "您好"
+    assert accepted.intent == "answer"
+    assert fallback.reply == "not-json"
+    assert fallback.used_text_fallback
+    assert "受限意图" in completion.requests[0].prompt.system
+    assert "AgentPlan" not in completion.requests[0].prompt.system
+    assert "allowed_intents" in completion.requests[0].prompt.user
 
 
 def test_mock_gate_discards_repeated_input_without_creating_effects() -> None:
