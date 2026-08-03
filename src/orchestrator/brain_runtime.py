@@ -660,6 +660,11 @@ def build_async_agent_pipeline(
     )
 
 
+def build_async_agent_gate(completion: AsyncJsonCompletion) -> AsyncJsonAgentGate:
+    """Construct the production Gate without a legacy plan-producing Brain."""
+    return AsyncJsonAgentGate(completion)
+
+
 def build_async_response_coordinator(
     completion: AsyncJsonCompletion,
     retrieval: VersionedRetrievalProvider | None = None,

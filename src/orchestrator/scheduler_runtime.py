@@ -177,6 +177,16 @@ class AgentEffectDispatcher(Protocol):
     ) -> None: ...
 
 
+class AsyncAudienceGate(Protocol):
+    async def evaluate(
+        self,
+        audience_input: BrainAudienceInput,
+        *,
+        active_summary: str,
+        recent_turn_context: tuple[str, ...] = (),
+    ) -> GateDecision: ...
+
+
 _BRAIN_CONTEXT_MODEL = ModelId("agent-brain")
 
 _BRAIN_CONTEXT_POLICY = StaticContextBudgetPolicy(
@@ -233,6 +243,8 @@ class SessionRuntime:
     agent_pipeline: AgentPipeline | None = None
 
     async_agent_pipeline: AsyncAgentPipeline | None = None
+
+    async_agent_gate: AsyncAudienceGate | None = None
 
     async_response_coordinator: AsyncResponseCoordinator | None = None
 
@@ -300,6 +312,7 @@ class SessionRuntime:
         clock: Callable[[], int] = _monotonic_ms,
         agent_pipeline: AgentPipeline | None = None,
         async_agent_pipeline: AsyncAgentPipeline | None = None,
+        async_agent_gate: AsyncAudienceGate | None = None,
         async_response_coordinator: AsyncResponseCoordinator | None = None,
         memory_candidate_extractor: AsyncMemoryCandidateExtractor | None = None,
         context_compactor: AsyncContextCompactor | None = None,
@@ -344,6 +357,7 @@ class SessionRuntime:
                 else agent_pipeline
             ),
             async_agent_pipeline=async_agent_pipeline,
+            async_agent_gate=async_agent_gate,
             async_response_coordinator=async_response_coordinator,
             memory_candidate_extractor=memory_candidate_extractor,
             context_compactor=context_compactor,
@@ -432,9 +446,13 @@ class SessionRuntime:
             case _:
                 return self._reject(correlation, "scheduler_rejected")
 
-    async def receive_comment_async(self, proposal: CommentProposal) -> RuntimeOutcome:
+    async def receive_comment_async(  # noqa: PLR0911
+        self, proposal: CommentProposal
+    ) -> RuntimeOutcome:
         pipeline = self.async_agent_pipeline
-        if pipeline is None:
+        coordinator = self.async_response_coordinator
+        gate = self.async_agent_gate
+        if pipeline is None and not (coordinator is not None and gate is not None):
             return self.receive_comment(proposal)
         correlation = proposal.correlation
         if self._ended:
@@ -449,10 +467,20 @@ class SessionRuntime:
             received_at_ms=self.clock(),
             text=proposal.text,
         )
-        if await pipeline.submit(
-            audience_input,
-            recent_turn_context=self.interaction_ingress.data.recent_turn_context,
-        ) is GateDecision.DISCARD:
+        if gate is not None and coordinator is not None:
+            decision = await gate.evaluate(
+                audience_input,
+                active_summary=self._frontend_caption,
+                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+            )
+        elif pipeline is not None:
+            decision = await pipeline.submit(
+                audience_input,
+                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+            )
+        else:
+            return self._reject(correlation, "async_gate_missing")
+        if decision is GateDecision.DISCARD:
             return self._reject(correlation, "agent_gate_discarded")
         outcome = self.interaction_ingress.receive_comment(
             text=proposal.text, correlation=correlation
@@ -462,8 +490,9 @@ class SessionRuntime:
         accepted_turn = TurnId(outcome.turn_id)
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
-        coordinator = self.async_response_coordinator
         if coordinator is None:
+            if pipeline is None:
+                return self._reject(correlation, "async_pipeline_missing")
             await self._run_async_agent_plan(
                 pipeline, audience_input, accepted_turn, correlation
             )
@@ -1573,14 +1602,16 @@ class SessionRuntime:
             case _:
                 return self._reject(correlation, "scheduler_rejected")
 
-    async def receive_asr_final_async(
+    async def receive_asr_final_async(  # noqa: PLR0911
         self,
         event: ASRAudienceEvent,
         correlation: EventCorrelation,
     ) -> RuntimeOutcome:
         """Run finalized ASR through the same async Gate and Brain as comments."""
         pipeline = self.async_agent_pipeline
-        if pipeline is None:
+        coordinator = self.async_response_coordinator
+        gate = self.async_agent_gate
+        if pipeline is None and not (coordinator is not None and gate is not None):
             return self.receive_asr_final(event, correlation)
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
@@ -1594,10 +1625,20 @@ class SessionRuntime:
             received_at_ms=event.received_at_ms,
             text=event.text,
         )
-        if await pipeline.submit(
-            audience_input,
-            recent_turn_context=self.interaction_ingress.data.recent_turn_context,
-        ) is GateDecision.DISCARD:
+        if gate is not None and coordinator is not None:
+            decision = await gate.evaluate(
+                audience_input,
+                active_summary=self._frontend_caption,
+                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+            )
+        elif pipeline is not None:
+            decision = await pipeline.submit(
+                audience_input,
+                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+            )
+        else:
+            return self._reject(correlation, "async_gate_missing")
+        if decision is GateDecision.DISCARD:
             return self._reject(correlation, "agent_gate_discarded")
         transition = self.scheduler.apply(
             StartTurn(
@@ -1610,8 +1651,9 @@ class SessionRuntime:
         accepted_turn = transition.accepted_event.turn_id
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
-        coordinator = self.async_response_coordinator
         if coordinator is None:
+            if pipeline is None:
+                return self._reject(correlation, "async_pipeline_missing")
             await self._run_async_agent_plan(
                 pipeline, audience_input, accepted_turn, correlation
             )
