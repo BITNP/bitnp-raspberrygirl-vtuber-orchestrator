@@ -105,6 +105,11 @@ class TaskRequest:
 
     data_snapshot: TaskStateSnapshot = field(default_factory=TaskStateSnapshot.initial)
 
+    @property
+    def deadline_monotonic_ms(self) -> TaskDeadlineMs:
+        """Absolute deadline measured against the runtime monotonic clock."""
+        return self.deadline_ms
+
 
 @dataclass(frozen=True, slots=True)
 class TaskRecord:
