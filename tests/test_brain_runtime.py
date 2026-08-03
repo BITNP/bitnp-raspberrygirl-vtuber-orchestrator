@@ -15,6 +15,7 @@ from orchestrator.agent_pipeline import (
 from orchestrator.brain_runtime import (
     AsyncJsonAgentBrain,
     AsyncJsonAgentGate,
+    AsyncJsonMemoryCandidateExtractor,
     JsonAgentBrain,
     JsonAgentGate,
     JsonResponseBrain,
@@ -258,6 +259,22 @@ def test_async_json_brain_runs_gate_and_final_tool_plan_without_blocking() -> No
     assert result.plan.response_text == "已查到资料"
     assert len(completion.requests) == 3
     assert "工具观察" in completion.requests[2].prompt.user
+
+
+def test_async_memory_extractor_uses_the_bounded_chinese_contract() -> None:
+    completion = _AsyncCompletion(
+        ['{"key":"drink_preference","value":"喜欢绿茶","confidence":95}']
+    )
+
+    raw = asyncio.run(
+        AsyncJsonMemoryCandidateExtractor(completion).extract(
+            user_text="我喜欢绿茶", reply_text="好的，我记住了。"
+        )
+    )
+
+    assert raw is not None
+    request = completion.requests[0]
+    assert "低优先级记忆候选提取器" in request.prompt.system
 
 
 class _AsyncTools:

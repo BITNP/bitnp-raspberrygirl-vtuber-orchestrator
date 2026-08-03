@@ -133,6 +133,9 @@ _RESPONSE_SYSTEM = _inline_prompt("""你是现场多模态智能体。只生成�
 只输出 JSON，且顶层必须只有 reply 和 intent。intent 必须是给定 allowed_intents 之一。
 若意图是工具，reply 可以为空；工具观察存在时 intent 必须为 answer。不要输出规划、任务、媒体或工具参数。""")
 
+_MEMORY_EXTRACT_SYSTEM = _inline_prompt("""你是低优先级记忆候选提取器。仅从已经确认的用户输入与智能体净回复中提取一个稳定、非敏感的普通偏好；没有合适内容时返回空对象。
+不得推断身份、健康、财务、政治、联系方式或其他敏感信息。只输出 JSON；如有候选，顶层必须只有 key、value、confidence，confidence 为 0 到 100 的整数。""")
+
 
 class JsonCompletion(Protocol):
     """A bounded JSON completion boundary supplied by the LLM runtime."""
@@ -399,6 +402,30 @@ class AsyncJsonResponseBrain:
         )
         return parse_response_proposal(raw, allowed_intents=allowed_intents)
 
+
+@final
+class AsyncJsonMemoryCandidateExtractor:
+    """Separate low-priority Chinese prompt adapter for memory candidates."""
+
+    def __init__(self, completion: AsyncJsonCompletion) -> None:
+        self._completion = completion
+
+    async def extract(self, *, user_text: str, reply_text: str) -> str | None:
+        return await self._completion.complete_json(
+            LLMRequest(
+                LLMPrompt(
+                    _MEMORY_EXTRACT_SYSTEM,
+                    _untrusted_json(
+                        {"user_text": user_text, "reply_text": reply_text}
+                    ),
+                ),
+                temperature=0.0,
+            ),
+            schema_name="memory_candidate",
+            schema=_MEMORY_CANDIDATE_SCHEMA,
+            timeout_seconds=10.0,
+        )
+
 @dataclass(slots=True)
 class MockAgentGate:
     """Deterministic default for tests and offline mock deployments."""
@@ -565,6 +592,12 @@ def build_async_response_coordinator(
     )
 
 
+def build_async_memory_candidate_extractor(
+    completion: AsyncJsonCompletion,
+) -> AsyncJsonMemoryCandidateExtractor:
+    return AsyncJsonMemoryCandidateExtractor(completion)
+
+
 def _empty_plan(revision: int) -> str:
     return json.dumps(
         {
@@ -701,5 +734,16 @@ _RESPONSE_SCHEMA: dict[str, object] = {
     "properties": {
         "reply": {"type": "string", "maxLength": 4000},
         "intent": {"type": "string", "maxLength": 128},
+    },
+}
+
+_MEMORY_CANDIDATE_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["key", "value", "confidence"],
+    "properties": {
+        "key": {"type": "string", "maxLength": 128},
+        "value": {"type": "string", "maxLength": 512},
+        "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
     },
 }
