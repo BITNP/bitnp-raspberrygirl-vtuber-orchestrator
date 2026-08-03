@@ -782,7 +782,7 @@ class SessionRuntime:
             # Agent-plan TTS is executed immediately by TransportRuntime, not
             # by TaskLaneExecutor.next().  Leaving it queued permanently fills
             # the bounded interactive lane after four conversations.
-            if self.executor.discard(task_id):
+            if self.executor.claim(task_id) is not None:
                 self._agent_tts_text[task_id] = response_text
             else:
                 _ = self.cancel_task(task_id, correlation)
@@ -806,7 +806,7 @@ class SessionRuntime:
             if (
                 record is None
                 or record.request.turn_id != turn_id
-                or record.state is not TaskState.PENDING
+                or record.state is not TaskState.RUNNING
             ):
                 continue
             if not text.strip():

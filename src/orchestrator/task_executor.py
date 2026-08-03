@@ -52,17 +52,18 @@ class TaskLaneExecutor:
                 | TaskState.SUPERSEDED
                 | TaskState.TIMED_OUT
                 | TaskState.COMPLETED
+                | TaskState.RUNNING
             ):
                 return False
 
-    def discard(self, task_id: TaskId) -> bool:
-        """Remove work claimed by a dedicated runtime path from its lane queue."""
+    def claim(self, task_id: TaskId) -> TaskRequest | None:
+        """Claim one queued task for a dedicated worker path."""
         for lane in self._pending.values():
             for request in lane:
                 if request.task_id == task_id:
                     lane.remove(request)
-                    return True
-        return False
+                    return request if self.registry.claim(task_id) is not None else None
+        return None
 
     def next(self, *, now_ms: int) -> TaskRequest | None:
         for kind in _LANE_PRIORITY:
@@ -83,13 +84,16 @@ class TaskLaneExecutor:
 
                             continue
 
-                        return request
+                        if self.registry.claim(request.task_id) is not None:
+                            return request
+                        continue
 
                     case (
                         TaskState.CANCELLED
                         | TaskState.SUPERSEDED
                         | TaskState.TIMED_OUT
                         | TaskState.COMPLETED
+                        | TaskState.RUNNING
                     ):
                         continue
 

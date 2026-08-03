@@ -31,6 +31,8 @@ class TaskState(StrEnum):
 
     PENDING = "pending"
 
+    RUNNING = "running"
+
     CANCELLED = "cancelled"
 
     SUPERSEDED = "superseded"
@@ -189,7 +191,7 @@ class TaskRegistry:
     def cancel(self, task_id: TaskId, *, reason: str) -> TaskRecord | None:
         record = self._records.get(task_id)
 
-        if record is None or record.state is not TaskState.PENDING:
+        if record is None or record.state not in {TaskState.PENDING, TaskState.RUNNING}:
             return None
 
         return self._store(
@@ -197,6 +199,20 @@ class TaskRegistry:
                 record,
                 state=TaskState.CANCELLED,
                 cancellation_reason=reason,
+                superseded_by=None,
+            )
+        )
+
+    def claim(self, task_id: TaskId) -> TaskRecord | None:
+        """Atomically transfer an admitted task from a queue to a worker."""
+        record = self._records.get(task_id)
+        if record is None or record.state is not TaskState.PENDING:
+            return None
+        return self._store(
+            replace(
+                record,
+                state=TaskState.RUNNING,
+                cancellation_reason=None,
                 superseded_by=None,
             )
         )
@@ -247,7 +263,7 @@ class TaskRegistry:
     def timeout(self, task_id: TaskId) -> TaskRecord | None:
         record = self._records.get(task_id)
 
-        if record is None or record.state is not TaskState.PENDING:
+        if record is None or record.state not in {TaskState.PENDING, TaskState.RUNNING}:
             return None
 
         return self._store(

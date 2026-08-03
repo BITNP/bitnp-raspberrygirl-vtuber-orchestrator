@@ -117,7 +117,7 @@ class TaskResultReducer:
 
 def _lifecycle_rejection(record: TaskRecord) -> TaskResultRejection | None:
     match record.state:
-        case TaskState.PENDING:
+        case TaskState.PENDING | TaskState.RUNNING:
             return None
 
         case TaskState.CANCELLED:
