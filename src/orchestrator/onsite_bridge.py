@@ -707,37 +707,46 @@ class OnsiteExplainerBridge:
         supersede playback without leaving the task pending forever.
         """
         cancellation = CancellationToken()
-        stream_synthesis = await asyncio.to_thread(
-            self.stream_synthesize, text, cancellation
-        )
-        if stream_synthesis is not None:
-            return await self._speak_streaming_agent_plan(
-                stream,
-                epoch,
-                turn_id,
-                stream_synthesis,
-                cancellation,
-                output_started,
+        try:
+            stream_synthesis = await asyncio.to_thread(
+                self.stream_synthesize, text, cancellation
             )
-        chunks = await asyncio.to_thread(self.synthesize, text, cancellation)
-        output_epoch = self.allocate_agent_plan_output(stream, epoch, turn_id)
-        if not chunks or output_epoch is None:
-            return False
-        packetizer = TtsPcmRtpPacketizer(stream=stream, cancellation_epoch=output_epoch)
-        packets = tuple(packet for chunk in chunks for packet in packetizer.push(chunk))
-        packets += packetizer.finish()
-        if not packets or not output_started():
-            return False
-        loop = asyncio.get_running_loop()
-        deadline = loop.time()
-        for packet in packets:
-            await self.output(stream, output_epoch, packet)
-            deadline += 0.02
-            delay = deadline - loop.time()
-            if delay > 0:
-                await asyncio.sleep(delay)
-        await self.output_finished(stream, output_epoch)
-        return True
+            if stream_synthesis is not None:
+                return await self._speak_streaming_agent_plan(
+                    stream,
+                    epoch,
+                    turn_id,
+                    stream_synthesis,
+                    cancellation,
+                    output_started,
+                )
+            chunks = await asyncio.to_thread(self.synthesize, text, cancellation)
+            output_epoch = self.allocate_agent_plan_output(stream, epoch, turn_id)
+            if not chunks or output_epoch is None:
+                return False
+            packetizer = TtsPcmRtpPacketizer(
+                stream=stream, cancellation_epoch=output_epoch
+            )
+            packets = tuple(
+                packet for chunk in chunks for packet in packetizer.push(chunk)
+            )
+            packets += packetizer.finish()
+            if not packets or not output_started():
+                return False
+            loop = asyncio.get_running_loop()
+            deadline = loop.time()
+            for packet in packets:
+                await self.output(stream, output_epoch, packet)
+                deadline += 0.02
+                delay = deadline - loop.time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+            await self.output_finished(stream, output_epoch)
+        except asyncio.CancelledError:
+            _ = cancellation.cancel(reason="agent_plan_tts_cancelled")
+            raise
+        else:
+            return True
 
     async def _speak_streaming_agent_plan(  # noqa: C901, PLR0911, PLR0912, PLR0913
         self,
