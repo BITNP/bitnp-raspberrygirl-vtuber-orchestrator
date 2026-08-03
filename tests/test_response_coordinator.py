@@ -86,4 +86,4 @@ def test_stale_turn_cannot_commit_a_model_result() -> None:
     )
 
     with pytest.raises(ResponseSupersededError):
-        asyncio.run(coordinator.respond(_snapshot(), is_current=lambda: False))
+        _ = asyncio.run(coordinator.respond(_snapshot(), is_current=lambda: False))
