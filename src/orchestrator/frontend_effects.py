@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from orchestrator.agent_pipeline import FrontendOperation, MediaOperation
+from orchestrator.caption_timeline import CaptionTimelineCancel, CaptionTimelineCommand
 from orchestrator.ids import SessionId, TurnId
 
 if TYPE_CHECKING:
@@ -70,6 +71,34 @@ async def send_frontend_operation(
     turn_id: TurnId,
 ) -> None:
     envelope = _envelope(event_type, operation, session_id, turn_id)
+    payload = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+    await connection_send(payload)
+
+
+async def send_caption_timeline(
+    connection_send: Callable[[str], Awaitable[None]],
+    command: CaptionTimelineCommand | CaptionTimelineCancel,
+    session_id: SessionId,
+    turn_id: TurnId,
+) -> None:
+    event_type = (
+        "vtuber.caption.timeline.command"
+        if isinstance(command, CaptionTimelineCommand)
+        else "vtuber.caption.timeline.cancel"
+    )
+    envelope = {
+        "schema_version": "1.1.0",
+        "event_type": event_type,
+        "event_id": str(uuid4()),
+        "source": "orchestrator",
+        "time": datetime.now(UTC).isoformat(),
+        "trace_id": f"agent-{turn_id}",
+        "session_id": str(session_id),
+        "turn_id": str(turn_id),
+        "segment_id": f"agent-{turn_id}",
+        "seq": 0,
+        "data": command.payload(),
+    }
     payload = json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
     await connection_send(payload)
 

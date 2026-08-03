@@ -1,8 +1,10 @@
 import asyncio
 
 from orchestrator.agent_pipeline import FrontendOperation
+from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.frontend_effects import (
     FrontendEffectDispatcher,
+    send_caption_timeline,
     send_frontend_operation,
 )
 from orchestrator.ids import SessionId, TurnId
@@ -69,3 +71,31 @@ def test_frontend_dispatcher_uses_brain_validated_ppt_deck_id() -> None:
     assert isinstance(data["command_id"], str)
     assert data["deck_id"] == "launch-deck"
     assert data["page"] == 3
+
+
+def test_caption_timeline_keeps_validated_markers() -> None:
+    sent: list[str] = []
+
+    async def send(raw: str) -> None:
+        sent.append(raw)
+
+    async def run() -> None:
+        await send_caption_timeline(
+            send,
+            CaptionTimelineCommand(
+                timeline_id="timeline-1",
+                marked_text='欢迎<action name="wave"/>大家',
+                audio_stream_id="agent-turn-1",
+                cancellation_epoch=2,
+                start_rtp_timestamp=96000,
+            ),
+            SessionId("session-1"),
+            TurnId("turn-1"),
+        )
+
+    asyncio.run(run())
+    envelope = parse_json_value(sent[0])
+    assert isinstance(envelope, dict)
+    assert envelope["event_type"] == "vtuber.caption.timeline.command"
+    assert isinstance(envelope["data"], dict)
+    assert envelope["data"]["marked_text"] == '欢迎<action name="wave"/>大家'
