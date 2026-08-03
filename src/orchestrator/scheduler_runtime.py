@@ -64,6 +64,11 @@ from orchestrator.memory_store import render_markdown_memory
 from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.operational_journal import OperationalJournal, OperationalRecord
 from orchestrator.pipeline_contracts import ASRAudienceEvent
+from orchestrator.response_contracts import parse_inline_cues
+from orchestrator.response_coordinator import (
+    AsyncResponseCoordinator,
+    CoordinatedResponse,
+)
 from orchestrator.runtime_contracts import (
     RuntimeDispatch,
     RuntimeObservables,
@@ -212,6 +217,8 @@ class SessionRuntime:
 
     async_agent_pipeline: AsyncAgentPipeline | None = None
 
+    async_response_coordinator: AsyncResponseCoordinator | None = None
+
     agent_capabilities: frozenset[str] = frozenset()
 
     agent_mcp_allowlist: frozenset[str] = frozenset()
@@ -264,6 +271,7 @@ class SessionRuntime:
         clock: Callable[[], int] = _monotonic_ms,
         agent_pipeline: AgentPipeline | None = None,
         async_agent_pipeline: AsyncAgentPipeline | None = None,
+        async_response_coordinator: AsyncResponseCoordinator | None = None,
         agent_capabilities: frozenset[str] | None = None,
         agent_mcp_allowlist: frozenset[str] | None = None,
         agent_effect_dispatcher: AgentEffectDispatcher | None = None,
@@ -305,6 +313,7 @@ class SessionRuntime:
                 else agent_pipeline
             ),
             async_agent_pipeline=async_agent_pipeline,
+            async_response_coordinator=async_response_coordinator,
             agent_capabilities=(
                 _DEFAULT_AGENT_CAPABILITIES
                 if agent_capabilities is None
@@ -420,9 +429,15 @@ class SessionRuntime:
         accepted_turn = TurnId(outcome.turn_id)
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
-        await self._run_async_agent_plan(
-            pipeline, audience_input, accepted_turn, correlation
-        )
+        coordinator = self.async_response_coordinator
+        if coordinator is None:
+            await self._run_async_agent_plan(
+                pipeline, audience_input, accepted_turn, correlation
+            )
+        else:
+            await self._run_async_response(
+                coordinator, audience_input, accepted_turn, correlation
+            )
         return RuntimeOutcome(
             accepted=True, correlation=correlation, turn_id=accepted_turn
         )
@@ -596,6 +611,133 @@ class SessionRuntime:
             _LOGGER.debug(
                 "agent_plan_rejected turn=%s reason=%s", turn_id, result.reason
             )
+
+    async def _run_async_response(
+        self,
+        coordinator: AsyncResponseCoordinator,
+        audience_input: BrainAudienceInput,
+        turn_id: TurnId,
+        correlation: EventCorrelation,
+    ) -> None:
+        """Run the small response contract; only this runtime creates effects."""
+        composition = self.interaction_ingress.data.context.compose(
+            _BRAIN_CONTEXT_MODEL, _BRAIN_CONTEXT_POLICY
+        )
+        context = composition.snapshot
+        memory = self.interaction_ingress.data.memory.snapshot
+        retrieval = self.interaction_ingress.data.retrieval.snapshot
+        presentation = self.interaction_ingress.reducer.presentation_state
+        ppt_deck_id = (
+            presentation[0] if presentation is not None else self._planned_ppt_deck_id
+        )
+        ppt_page = (
+            presentation[2] if presentation is not None else self._planned_ppt_page
+        )
+        corpus_version = f"{retrieval.corpus_id}@{retrieval.corpus_revision}"
+        index_version = f"{retrieval.index_id}@{retrieval.index_revision}"
+        snapshot = BrainStateSnapshot(
+            session_id=str(self.scheduler.snapshot.session_id),
+            turn_id=str(turn_id),
+            revision=int(self.scheduler.snapshot.revision),
+            cancellation_epoch=int(self.cancellation_epoch),
+            input=audience_input,
+            context_summary=context.summary,
+            recent_context=tuple(entry.text for entry in composition.entries),
+            memory_markdown=render_markdown_memory(
+                memory, self.scheduler.snapshot.session_id
+            ),
+            capabilities=self.agent_capabilities,
+            frontend_caption=self._frontend_caption,
+            frontend_animation=self._frontend_animation,
+            ppt_deck_id=ppt_deck_id,
+            ppt_page=ppt_page,
+            tasks=tuple(
+                TaskSnapshot(
+                    task_id=str(record.request.task_id),
+                    kind=record.request.kind.value,
+                    lane=record.request.kind.value,
+                    status=record.state.value,
+                    deadline_ms=int(record.request.deadline_ms),
+                    owner_turn_id=str(record.request.turn_id),
+                    cancellation_reason=record.cancellation_reason,
+                )
+                for record in self.task_registry.records
+            ),
+            context_revision=int(context.generation),
+            memory_revision=int(memory.revision),
+            context_budget=512,
+            compaction_required=bool(composition.digests),
+            knowledge_references=(
+                f"本地知识库: corpus={corpus_version}, index={index_version}",
+            ),
+            mcp_allowlist=self.agent_mcp_allowlist,
+        )
+        response = await coordinator.respond(snapshot)
+        self._apply_coordinated_response(
+            response, audience_input, turn_id, correlation
+        )
+
+    def _apply_coordinated_response(
+        self,
+        response: CoordinatedResponse,
+        audience_input: BrainAudienceInput,
+        turn_id: TurnId,
+        correlation: EventCorrelation,
+    ) -> None:
+        parsed = parse_inline_cues(
+            response.proposal.reply,
+            allowed_actions=frozenset(
+                {"breathe", "dance", "explain_point", "speak", "wave", "nod"}
+            ),
+            allowed_expressions=frozenset(),
+        )
+        if not parsed.spoken_text.strip():
+            _LOGGER.debug("response_rejected_empty turn=%s", turn_id)
+            return
+        provenance = ContextProvenance(
+            session_id=SessionId(audience_input.session_id),
+            turn_id=turn_id,
+            segment_id=SegmentId(f"agent-{turn_id}"),
+            sequence=ContextSequence(audience_input.sequence),
+            source_id=ContextSourceId(audience_input.trace_id),
+        )
+        self.interaction_ingress.data.consider_context(
+            FinalizedInput(provenance, audience_input.text)
+        )
+        if response.observation is not None and response.tool_request is not None:
+            self.interaction_ingress.data.consider_context(
+                ToolObservation(
+                    ContextProvenance(
+                        session_id=provenance.session_id,
+                        turn_id=turn_id,
+                        segment_id=provenance.segment_id,
+                        sequence=provenance.sequence,
+                        source_id=ContextSourceId(f"{audience_input.trace_id}:tool"),
+                    ),
+                    response.observation,
+                )
+            )
+        self.interaction_ingress.data.consider_context(
+            AcceptedOutput(provenance, parsed.spoken_text)
+        )
+        task_id = TaskId(f"response-tts-{turn_id}")
+        outcome = self.schedule_task(
+            TaskRequest(
+                task_id=task_id,
+                session_id=self.scheduler.snapshot.session_id,
+                turn_id=turn_id,
+                parent_task_id=None,
+                deadline_ms=TaskDeadlineMs(self.clock() + 30_000),
+                snapshot_revision=self.scheduler.snapshot.revision,
+                idempotency_key=IdempotencyKey(str(task_id)),
+                kind=TaskKind.INTERACTIVE,
+            ),
+            correlation,
+        )
+        if outcome.accepted and self.executor.claim(task_id) is not None:
+            self._agent_tts_text[task_id] = parsed.spoken_text
+        else:
+            _ = self.cancel_task(task_id, correlation)
 
     def _apply_agent_plan(
         self,
@@ -1052,9 +1194,15 @@ class SessionRuntime:
         accepted_turn = transition.accepted_event.turn_id
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
-        await self._run_async_agent_plan(
-            pipeline, audience_input, accepted_turn, correlation
-        )
+        coordinator = self.async_response_coordinator
+        if coordinator is None:
+            await self._run_async_agent_plan(
+                pipeline, audience_input, accepted_turn, correlation
+            )
+        else:
+            await self._run_async_response(
+                coordinator, audience_input, accepted_turn, correlation
+            )
         return RuntimeOutcome(
             accepted=True, correlation=correlation, turn_id=accepted_turn
         )

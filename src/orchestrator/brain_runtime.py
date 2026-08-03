@@ -22,6 +22,7 @@ from orchestrator.agent_pipeline import (
     GateDecision,
     ToolRequest,
 )
+from orchestrator.intent_router import IntentRouter, IntentSpec
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.llm import LLMPrompt, LLMRequest
 from orchestrator.modes import (
@@ -34,6 +35,7 @@ from orchestrator.modes import (
     AudienceSource as RetrievalAudienceSource,
 )
 from orchestrator.response_contracts import ResponseProposal, parse_response_proposal
+from orchestrator.response_coordinator import AsyncResponseCoordinator
 
 if TYPE_CHECKING:
     from orchestrator.retrieval import VersionedRetrievalProvider
@@ -531,6 +533,35 @@ def build_async_agent_pipeline(
     )
     return AsyncAgentPipeline(
         AsyncJsonAgentGate(completion), AsyncJsonAgentBrain(completion), tools
+    )
+
+
+def build_async_response_coordinator(
+    completion: AsyncJsonCompletion,
+    retrieval: VersionedRetrievalProvider | None = None,
+) -> AsyncResponseCoordinator:
+    """Build the minimal brain path with only trusted, configured intents."""
+    tools = (
+        AsyncNoopToolExecutor()
+        if retrieval is None
+        else AsyncReadonlyKnowledgeToolExecutor(
+            ReadonlyKnowledgeToolExecutor(retrieval)
+        )
+    )
+    return AsyncResponseCoordinator(
+        AsyncJsonResponseBrain(completion),
+        IntentRouter(
+            (
+                IntentSpec(
+                    "knowledge",
+                    "knowledge",
+                    "local",
+                    "knowledge.lookup",
+                    lambda snapshot: {"query": snapshot.input.text},
+                ),
+            )
+        ),
+        tools,
     )
 
 

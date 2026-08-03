@@ -5,7 +5,11 @@ import logging
 import os
 from typing import TYPE_CHECKING, cast
 
-from orchestrator.brain_runtime import AsyncJsonCompletion, build_async_agent_pipeline
+from orchestrator.brain_runtime import (
+    AsyncJsonCompletion,
+    build_async_agent_pipeline,
+    build_async_response_coordinator,
+)
 from orchestrator.config import OrchestratorConfig, load_config_from_env
 from orchestrator.ids import SessionId
 from orchestrator.observability import OnsiteObservability
@@ -50,6 +54,12 @@ async def run_transport() -> None:
             session_runtime.async_agent_pipeline = build_async_agent_pipeline(
                 cast("AsyncJsonCompletion", brain_completion),
                 session_runtime.interaction_ingress.data.retrieval,
+            )
+            session_runtime.async_response_coordinator = (
+                build_async_response_coordinator(
+                    cast("AsyncJsonCompletion", brain_completion),
+                    session_runtime.interaction_ingress.data.retrieval,
+                )
             )
         return session_runtime
 

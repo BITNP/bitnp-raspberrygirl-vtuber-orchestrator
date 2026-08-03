@@ -63,16 +63,18 @@ def parse_response_proposal(
         value = parse_json_value(raw)
     except JsonBoundaryError:
         return ResponseProposal(raw, "answer", used_text_fallback=True)
+    if not isinstance(value, dict) or set(value) != {"reply", "intent"}:
+        return ResponseProposal(raw, "answer", used_text_fallback=True)
+    reply = value.get("reply")
+    intent = value.get("intent")
     if (
-        not isinstance(value, dict)
-        or set(value) != {"reply", "intent"}
-        or not isinstance(value.get("reply"), str)
-        or not isinstance(value.get("intent"), str)
-        or value["intent"] not in allowed_intents
-        or len(value["reply"]) > _MAX_REPLY_CHARS
+        not isinstance(reply, str)
+        or not isinstance(intent, str)
+        or intent not in allowed_intents
+        or len(reply) > _MAX_REPLY_CHARS
     ):
         return ResponseProposal(raw, "answer", used_text_fallback=True)
-    return ResponseProposal(value["reply"], value["intent"])
+    return ResponseProposal(reply, intent)
 
 
 def parse_inline_cues(
