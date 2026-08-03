@@ -51,6 +51,43 @@ class AsyncResponseCoordinator:
     router: IntentRouter
     tools: AsyncResponseToolExecutor
 
+    async def initial_response(
+        self, snapshot: BrainStateSnapshot
+    ) -> ResponseProposal:
+        """Run only the initial, intent-selecting model call."""
+        return await self.brain.respond(
+            snapshot, allowed_intents=self.router.allowed_intents(snapshot)
+        )
+
+    def tool_request(
+        self, proposal: ResponseProposal, snapshot: BrainStateSnapshot
+    ) -> ToolRequest | None:
+        """Build the trusted request for a previously accepted intent."""
+        if proposal.intent == "answer":
+            return None
+        return self.router.request(proposal.intent, snapshot)
+
+    async def execute_tool(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> str | None:
+        """Execute one already-authorized tool request without model authority."""
+        return await self.tools.execute(request, snapshot)
+
+    async def final_response(
+        self, snapshot: BrainStateSnapshot, observation: str
+    ) -> ResponseProposal:
+        """Run the sole post-observation model call with tools disabled."""
+        final = await self.brain.respond(
+            snapshot,
+            allowed_intents=frozenset({"answer"}),
+            observations=(observation,),
+        )
+        return (
+            final
+            if final.intent == "answer"
+            else ResponseProposal(final.reply, "answer", final.used_text_fallback)
+        )
+
     async def respond(
         self,
         snapshot: BrainStateSnapshot,
@@ -58,32 +95,25 @@ class AsyncResponseCoordinator:
         is_current: Callable[[], bool] | None = None,
     ) -> CoordinatedResponse:
         current = is_current if is_current is not None else lambda: True
-        allowed = self.router.allowed_intents(snapshot)
-        initial = await self.brain.respond(snapshot, allowed_intents=allowed)
+        initial = await self.initial_response(snapshot)
         if not current():
             raise ResponseSupersededError
         if initial.intent == "answer":
             return CoordinatedResponse(initial)
-        request = self.router.request(initial.intent, snapshot)
+        request = self.tool_request(initial, snapshot)
         if request is None:
             return CoordinatedResponse(
                 ResponseProposal("抱歉, 这项功能暂时不可用。", "answer")
             )
         try:
-            observation = await self.tools.execute(request, snapshot)
+            observation = await self.execute_tool(request, snapshot)
         except (OSError, TimeoutError, ValueError):
             observation = None
         if not current():
             raise ResponseSupersededError
         if observation is None:
             observation = "工具调用未成功完成。请基于已知信息简短说明。"
-        final = await self.brain.respond(
-            snapshot,
-            allowed_intents=frozenset({"answer"}),
-            observations=(observation,),
-        )
+        final = await self.final_response(snapshot, observation)
         if not current():
             raise ResponseSupersededError
-        if final.intent != "answer":
-            final = ResponseProposal(final.reply, "answer", final.used_text_fallback)
         return CoordinatedResponse(final, request, observation)

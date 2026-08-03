@@ -66,11 +66,10 @@ from orchestrator.memory_store import render_markdown_memory
 from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.operational_journal import OperationalJournal, OperationalRecord
 from orchestrator.pipeline_contracts import ASRAudienceEvent
-from orchestrator.response_contracts import parse_inline_cues
+from orchestrator.response_contracts import ResponseProposal, parse_inline_cues
 from orchestrator.response_coordinator import (
     AsyncResponseCoordinator,
     CoordinatedResponse,
-    ResponseSupersededError,
 )
 from orchestrator.runtime_contracts import (
     RuntimeDispatch,
@@ -631,7 +630,7 @@ class SessionRuntime:
                 "agent_plan_rejected turn=%s reason=%s", turn_id, result.reason
             )
 
-    async def _run_async_response(
+    async def _run_async_response(  # noqa: C901, PLR0911, PLR0912, PLR0915
         self,
         coordinator: AsyncResponseCoordinator,
         audience_input: BrainAudienceInput,
@@ -704,7 +703,7 @@ class SessionRuntime:
             allowed_expressions=frozenset(),
             replacement=False,
         )
-        response_task_id = TaskId(f"response-llm-{turn_id}")
+        response_task_id = TaskId(f"response-llm-initial-{turn_id}")
         scheduled = self.schedule_task(
             TaskRequest(
                 task_id=response_task_id,
@@ -722,41 +721,156 @@ class SessionRuntime:
             _LOGGER.debug("response_task_not_admitted turn=%s", turn_id)
             return
         try:
-            response = await coordinator.respond(
-                snapshot,
-                is_current=lambda: envelope.is_current(
-                    session_id=self.scheduler.snapshot.session_id,
-                    revision=self.scheduler.snapshot.revision,
-                    cancellation_epoch=int(self.cancellation_epoch),
-                    now_ms=self.clock(),
-                    session_ended=self._ended,
-                ),
+            initial = await coordinator.initial_response(snapshot)
+        except (OSError, TimeoutError, ValueError):
+            _ = self.task_registry.fail(
+                response_task_id, reason="initial_response_provider_failed"
             )
-        except ResponseSupersededError:
+            _LOGGER.exception("initial_response_provider_failed turn=%s", turn_id)
+            return
+        if not self._response_envelope_is_current(envelope):
             _ = self.cancel_task(response_task_id, correlation)
             _LOGGER.debug("response_superseded turn=%s", turn_id)
             return
-        except (OSError, TimeoutError, ValueError):
-            _ = self.task_registry.fail(
-                response_task_id, reason="response_provider_failed"
-            )
-            _LOGGER.exception("response_provider_failed turn=%s", turn_id)
-            return
-        accepted = self.reduce_task(
+        initial_accepted = self.reduce_task(
             TaskResult(
                 response_task_id,
                 envelope.session_id,
                 envelope.turn_id,
                 envelope.revision,
-                TaskEffect("response.proposed", response.proposal.reply[:240]),
+                TaskEffect("llm.initial", initial.reply[:240]),
             ),
             correlation,
         )
-        if not accepted.accepted:
-            _LOGGER.debug("response_result_rejected turn=%s", turn_id)
+        if not initial_accepted.accepted:
+            _LOGGER.debug("initial_response_result_rejected turn=%s", turn_id)
+            return
+
+        if initial.intent == "answer":
+            self._apply_coordinated_response(
+                CoordinatedResponse(initial),
+                audience_input,
+                envelope,
+                correlation,
+                response_task_id,
+            )
+            return
+
+        request = coordinator.tool_request(initial, snapshot)
+        observation = "工具调用未成功完成。请基于已知信息简短说明。"
+        parent_task_id = response_task_id
+        if request is not None:
+            tool_task_id = TaskId(f"response-tool-{turn_id}")
+            tool_scheduled = self.schedule_task(
+                TaskRequest(
+                    task_id=tool_task_id,
+                    session_id=envelope.session_id,
+                    turn_id=envelope.turn_id,
+                    parent_task_id=response_task_id,
+                    deadline_ms=TaskDeadlineMs(envelope.deadline_ms),
+                    snapshot_revision=envelope.revision,
+                    idempotency_key=IdempotencyKey(str(tool_task_id)),
+                    kind=TaskKind.DELIBERATIVE,
+                ),
+                correlation,
+            )
+            if (
+                tool_scheduled.accepted
+                and self.executor.claim(tool_task_id) is not None
+            ):
+                parent_task_id = tool_task_id
+                try:
+                    tool_output = await coordinator.execute_tool(request, snapshot)
+                except (OSError, TimeoutError, ValueError):
+                    tool_output = None
+                    _LOGGER.exception("response_tool_provider_failed turn=%s", turn_id)
+                if not self._response_envelope_is_current(envelope):
+                    _ = self.cancel_task(tool_task_id, correlation)
+                    return
+                if tool_output is None:
+                    _ = self.task_registry.fail(
+                        tool_task_id, reason="response_tool_provider_failed"
+                    )
+                else:
+                    tool_accepted = self.reduce_task(
+                        TaskResult(
+                            tool_task_id,
+                            envelope.session_id,
+                            envelope.turn_id,
+                            envelope.revision,
+                            TaskEffect("tool.observed", tool_output[:240]),
+                        ),
+                        correlation,
+                    )
+                    if not tool_accepted.accepted:
+                        return
+                    observation = tool_output
+
+        final_task_id = TaskId(f"response-llm-final-{turn_id}")
+        final_scheduled = self.schedule_task(
+            TaskRequest(
+                task_id=final_task_id,
+                session_id=envelope.session_id,
+                turn_id=envelope.turn_id,
+                parent_task_id=parent_task_id,
+                deadline_ms=TaskDeadlineMs(envelope.deadline_ms),
+                snapshot_revision=envelope.revision,
+                idempotency_key=IdempotencyKey(str(final_task_id)),
+                kind=TaskKind.INTERACTIVE,
+            ),
+            correlation,
+        )
+        if not final_scheduled.accepted or self.executor.claim(final_task_id) is None:
+            return
+        try:
+            final = await coordinator.final_response(snapshot, observation)
+        except (OSError, TimeoutError, ValueError):
+            _ = self.task_registry.fail(
+                final_task_id, reason="final_response_provider_failed"
+            )
+            if self._response_envelope_is_current(envelope):
+                self._apply_coordinated_response(
+                    CoordinatedResponse(
+                        ResponseProposal("抱歉, 我暂时无法完成这项查询。", "answer"),
+                        request,
+                        observation,
+                    ),
+                    audience_input,
+                    envelope,
+                    correlation,
+                    response_task_id,
+                )
+            return
+        if not self._response_envelope_is_current(envelope):
+            _ = self.cancel_task(final_task_id, correlation)
+            return
+        final_accepted = self.reduce_task(
+            TaskResult(
+                final_task_id,
+                envelope.session_id,
+                envelope.turn_id,
+                envelope.revision,
+                TaskEffect("llm.final", final.reply[:240]),
+            ),
+            correlation,
+        )
+        if not final_accepted.accepted:
             return
         self._apply_coordinated_response(
-            response, audience_input, envelope, correlation, response_task_id
+            CoordinatedResponse(final, request, observation),
+            audience_input,
+            envelope,
+            correlation,
+            final_task_id,
+        )
+
+    def _response_envelope_is_current(self, envelope: ExecutionEnvelope) -> bool:
+        return envelope.is_current(
+            session_id=self.scheduler.snapshot.session_id,
+            revision=self.scheduler.snapshot.revision,
+            cancellation_epoch=int(self.cancellation_epoch),
+            now_ms=self.clock(),
+            session_ended=self._ended,
         )
 
     def _apply_coordinated_response(

@@ -13,7 +13,7 @@ from orchestrator.agent_pipeline import (
     MediaOperation,
 )
 from orchestrator.ids import SegmentId, SessionId, TraceId, TurnId
-from orchestrator.intent_router import IntentRouter
+from orchestrator.intent_router import IntentRouter, IntentSpec
 from orchestrator.interactions import CommentProposal
 from orchestrator.response_contracts import ResponseProposal
 from orchestrator.response_coordinator import AsyncResponseCoordinator
@@ -256,10 +256,61 @@ def test_async_response_is_registry_owned_before_it_can_admit_tts() -> None:
 
     assert outcome.accepted
     records = runtime.task_registry.records
-    assert records[0].request.task_id == TaskId("response-llm-turn-0001")
+    assert records[0].request.task_id == TaskId("response-llm-initial-turn-0001")
     assert records[0].state is TaskState.COMPLETED
     assert records[1].request.parent_task_id == records[0].request.task_id
     assert records[1].state is TaskState.RUNNING
+
+
+def test_async_tool_turn_records_initial_tool_and_final_provider_tasks() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-async-tool"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _ToolResponseBrain(),
+            IntentRouter(
+                (
+                    IntentSpec(
+                        "knowledge",
+                        "knowledge",
+                        "local",
+                        "knowledge.lookup",
+                        lambda snapshot: {"query": snapshot.input.text},
+                    ),
+                )
+            ),
+            _AsyncTools(),
+        ),
+        agent_capabilities=frozenset({"knowledge.lookup"}),
+    )
+    correlation = EventCorrelation(
+        TraceId("async-tool"), SessionId("session-async-tool"), EventSequence(1)
+    )
+
+    outcome = asyncio.run(
+        runtime.receive_comment_async(CommentProposal("查询", correlation))
+    )
+
+    assert outcome.accepted
+    records = runtime.task_registry.records
+    assert [record.request.task_id for record in records] == [
+        TaskId("response-llm-initial-turn-0001"),
+        TaskId("response-tool-turn-0001"),
+        TaskId("response-llm-final-turn-0001"),
+        TaskId("response-tts-turn-0001"),
+    ]
+    assert [record.state for record in records] == [
+        TaskState.COMPLETED,
+        TaskState.COMPLETED,
+        TaskState.COMPLETED,
+        TaskState.RUNNING,
+    ]
+    assert records[1].request.parent_task_id == records[0].request.task_id
+    assert records[2].request.parent_task_id == records[1].request.task_id
 
 
 def test_runtime_commits_brain_compaction_against_its_snapshot() -> None:
@@ -385,6 +436,24 @@ class _AsyncNoTools:
     async def execute(self, *args: object, **kwargs: object) -> str | None:
         _ = args, kwargs
         return None
+
+
+class _ToolResponseBrain:
+    def __init__(self) -> None:
+        self._responses: list[ResponseProposal] = [
+            ResponseProposal("", "knowledge"),
+            ResponseProposal("答案", "answer"),
+        ]
+
+    async def respond(self, *args: object, **kwargs: object) -> ResponseProposal:
+        _ = args, kwargs
+        return self._responses.pop(0)
+
+
+class _AsyncTools:
+    async def execute(self, *args: object, **kwargs: object) -> str:
+        _ = args, kwargs
+        return "受控检索结果"
 
 
 class _PlanBrain:
