@@ -8,6 +8,7 @@ from orchestrator.agent_pipeline import (
     AudienceInput,
     AudienceSource,
     BrainStateSnapshot,
+    GateDecision,
     PlanAccepted,
     ToolRequest,
 )
@@ -91,10 +92,8 @@ def test_gate_uses_chinese_non_streaming_json_prompt_and_fails_closed() -> None:
     )
     assert gate.evaluate(_input(), active_summary="产品讲解中").value == "discard"
     assert "输入相关性门" in completion.requests[0].prompt.system
-    assert "执行回声门控" in completion.requests[0].prompt.system
-    assert "上一轮智能体输出" in completion.requests[0].prompt.system.replace("\n", "")
-    assert "必须输出 discard" in completion.requests[0].prompt.system
-    assert "只能有一个键 decision" in completion.requests[0].prompt.system
+    assert "ASR 回声" in completion.requests[0].prompt.system
+    assert "不得输出思考" in completion.requests[0].prompt.system
     assert '{"decision":"accept"}' in completion.requests[0].prompt.system
     assert "<untrusted-payload>" in completion.requests[0].prompt.user
     assert "recent_turn_context" in completion.requests[0].prompt.user
@@ -121,13 +120,10 @@ def test_brain_injects_full_snapshot_and_marks_observations_untrusted() -> None:
 
     assert brain.plan(_snapshot()) == plan
     assert brain.plan(_snapshot(), observations=("检索结果",)) == plan
-    assert "多模态智能体的大脑" in completion.requests[0].prompt.system
-    assert "对象必须恰好包含以下八个键" in completion.requests[0].prompt.system
-    assert '"memory_patches":[]' in completion.requests[0].prompt.system
-    assert "这是唯一会为 response_text 创建 TTS 合成任务的格式" in (
-        completion.requests[0].prompt.system
-    )
-    assert "字幕不会自动从 response_text 生成" in completion.requests[0].prompt.system
+    assert "多模态智能体大脑" in completion.requests[0].prompt.system
+    assert "顶层键必须且只能是" in completion.requests[0].prompt.system
+    assert "不要展示推理过程" in completion.requests[0].prompt.system
+    assert "若要现场说话" in completion.requests[0].prompt.system
     assert '"cancellation_epoch": 2' in completion.requests[0].prompt.user
     assert "expected_revision 必须等于 5" in completion.requests[0].prompt.user
     assert "最终规划：禁止再请求工具" in completion.requests[1].prompt.user
@@ -140,7 +136,7 @@ def test_repair_requires_the_exact_snapshot_revision() -> None:
 
     assert brain.repair(_snapshot(), '{"expected_revision": 6}') == "{}"
     assert "expected_revision 必须恰好为 5" in completion.requests[0].prompt.user
-    assert "对象必须恰好包含以下八个键" in completion.requests[0].prompt.system
+    assert "顶层键必须且只能是" in completion.requests[0].prompt.system
     assert "tool_requests 必须为 []" in completion.requests[0].prompt.system
 
 
@@ -149,6 +145,27 @@ def test_mock_gate_discards_repeated_input_without_creating_effects() -> None:
 
     assert gate.evaluate(_input(), active_summary="").value == "accept"
     assert gate.evaluate(_input(), active_summary="").value == "discard"
+
+
+def test_gate_discards_substantive_asr_echo_before_calling_the_model() -> None:
+    completion = _Completion(['{"decision":"accept"}'])
+    gate = JsonAgentGate(completion)
+    echo = AudienceInput(
+        "session-1", "trace-echo", 2, AudienceSource.ASR, 2, "你有什么"
+    )
+
+    assert (
+        gate.evaluate(
+            echo,
+            active_summary="",
+            recent_turn_context=(
+                "用户 - 你好",
+                "智能体 - 你好！很高兴见到你。有什么我可以帮你的吗？",
+            ),
+        )
+        is GateDecision.DISCARD
+    )
+    assert completion.requests == []
 
 
 def test_readonly_knowledge_tool_returns_versioned_untrusted_observation() -> None:

@@ -36,6 +36,8 @@ from orchestrator.provider_streaming import ProviderDeadlines, ProviderResponseE
 
 _LOGGER = logging.getLogger(__name__)
 
+_JSON_NON_THINKING_BODY = {"thinking": {"type": "disabled"}}
+
 
 def _noop() -> None:
     return
@@ -134,7 +136,7 @@ class AsyncOpenAICompatibleLLMRuntime:
                 temperature=0.0,
                 stream=False,
                 response_format={"type": "json_object"},
-                extra_body={"thinking": {"type": "disabled"}},
+                extra_body=_JSON_NON_THINKING_BODY,
                 timeout=self._request_timeout(5.0),
             )
             if len(response.choices) != 1:
@@ -181,13 +183,36 @@ class AsyncOpenAICompatibleLLMRuntime:
                 temperature=0.0,
                 stream=False,
                 response_format={"type": "json_object"},
-                extra_body={"thinking": {"type": "disabled"}},
+                extra_body=_JSON_NON_THINKING_BODY,
                 timeout=self._request_timeout(timeout_seconds),
             )
             if len(response.choices) != 1:
+                details = (
+                    f"schema={schema_name} reason=choice_count "
+                    f"count={len(response.choices)}"
+                )
+                _LOGGER.debug(
+                    "llm_json_invalid_response model=%s %s",
+                    self.model,
+                    details,
+                )
                 raise ProviderResponseError(stage="llm", reason="missing_final")
-            content = response.choices[0].message.content
+            choice = response.choices[0]
+            content = choice.message.content
             if not isinstance(content, str) or content.strip() == "":
+                reasoning = getattr(choice.message, "reasoning_content", None)
+                reasoning_chars = len(reasoning) if isinstance(reasoning, str) else 0
+                details = (
+                    f"schema={schema_name} reason=missing_content "
+                    f"finish_reason={choice.finish_reason} "
+                    f"content_type={type(content).__name__} "
+                    f"reasoning_chars={reasoning_chars}"
+                )
+                _LOGGER.debug(
+                    "llm_json_invalid_response model=%s %s",
+                    self.model,
+                    details,
+                )
                 raise ProviderResponseError(stage="llm", reason="missing_final")
             _LOGGER.debug(
                 "llm_json_response model=%s schema=%s text=%r",
