@@ -180,7 +180,7 @@ def test_async_runtime_uses_documented_gate_and_streaming_parameters() -> None:
     assert gate == '{"decision":"accept"}'
     assert captured[0]["stream"] is False
     assert captured[0]["response_format"] == {"type": "json_object"}
-    assert captured[0]["reasoning_effort"] == "none"
+    assert captured[0]["thinking"] == {"type": "disabled"}
     assert captured[1]["stream"] is True
     assert events[-1] == LLMFinal(text="hello world", used_fallback=False)
 
@@ -221,15 +221,8 @@ def test_async_runtime_logs_complete_json_request_and_response(
     assert "llm_json_response model=test-model schema=agent_plan text='{}'" in messages
     assert captured[0]["stream"] is False
     assert captured[0]["temperature"] == 0.0
-    assert captured[0]["reasoning_effort"] == "none"
-    assert captured[0]["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "agent_plan",
-            "strict": True,
-            "schema": {"type": "object"},
-        },
-    }
+    assert captured[0]["thinking"] == {"type": "disabled"}
+    assert captured[0]["response_format"] == {"type": "json_object"}
 
 
 def test_async_gate_discards_rejected_parameters_and_closes_shared_client() -> None:

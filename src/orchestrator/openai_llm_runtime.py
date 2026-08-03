@@ -134,7 +134,7 @@ class AsyncOpenAICompatibleLLMRuntime:
                 temperature=0.0,
                 stream=False,
                 response_format={"type": "json_object"},
-                reasoning_effort="none",
+                extra_body={"thinking": {"type": "disabled"}},
                 timeout=self._request_timeout(5.0),
             )
             if len(response.choices) != 1:
@@ -164,6 +164,9 @@ class AsyncOpenAICompatibleLLMRuntime:
         """Request one non-streaming strict JSON proposal from the LLM Brain."""
         if schema_name.strip() == "":
             raise AdapterConfigError(field_name="schema_name")
+        # DeepSeek JSON Output supports json_object.  The caller still validates
+        # the returned proposal against this schema before it can cause effects.
+        _ = schema
         _LOGGER.debug(
             "llm_json_request model=%s schema=%s system=%r user=%r",
             self.model,
@@ -177,15 +180,8 @@ class AsyncOpenAICompatibleLLMRuntime:
                 messages=chat_messages(request),
                 temperature=0.0,
                 stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": schema_name,
-                        "strict": True,
-                        "schema": schema,
-                    },
-                },
-                reasoning_effort="none",
+                response_format={"type": "json_object"},
+                extra_body={"thinking": {"type": "disabled"}},
                 timeout=self._request_timeout(timeout_seconds),
             )
             if len(response.choices) != 1:
