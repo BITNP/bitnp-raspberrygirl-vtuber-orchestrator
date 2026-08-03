@@ -69,6 +69,7 @@ from orchestrator.response_contracts import parse_inline_cues
 from orchestrator.response_coordinator import (
     AsyncResponseCoordinator,
     CoordinatedResponse,
+    ResponseSupersededError,
 )
 from orchestrator.runtime_contracts import (
     RuntimeDispatch,
@@ -689,7 +690,18 @@ class SessionRuntime:
             ),
             mcp_allowlist=self.agent_mcp_allowlist,
         )
-        response = await coordinator.respond(snapshot)
+        try:
+            response = await coordinator.respond(
+                snapshot,
+                is_current=lambda: (
+                    self.scheduler.snapshot.revision == snapshot.revision
+                    and int(self.cancellation_epoch) == snapshot.cancellation_epoch
+                    and not self._ended
+                ),
+            )
+        except ResponseSupersededError:
+            _LOGGER.debug("response_superseded turn=%s", turn_id)
+            return
         self._apply_coordinated_response(
             response, audience_input, turn_id, correlation
         )

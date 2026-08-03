@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Protocol
 from orchestrator.response_contracts import ResponseProposal
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from orchestrator.agent_pipeline import BrainStateSnapshot, ToolRequest
     from orchestrator.intent_router import IntentRouter
 
@@ -32,6 +34,10 @@ class AsyncResponseToolExecutor(Protocol):
     ) -> str | None: ...
 
 
+class ResponseSupersededError(RuntimeError):
+    """A provider returned after its immutable turn snapshot became stale."""
+
+
 @dataclass(frozen=True, slots=True)
 class CoordinatedResponse:
     proposal: ResponseProposal
@@ -45,9 +51,17 @@ class AsyncResponseCoordinator:
     router: IntentRouter
     tools: AsyncResponseToolExecutor
 
-    async def respond(self, snapshot: BrainStateSnapshot) -> CoordinatedResponse:
+    async def respond(
+        self,
+        snapshot: BrainStateSnapshot,
+        *,
+        is_current: Callable[[], bool] | None = None,
+    ) -> CoordinatedResponse:
+        current = is_current if is_current is not None else lambda: True
         allowed = self.router.allowed_intents(snapshot)
         initial = await self.brain.respond(snapshot, allowed_intents=allowed)
+        if not current():
+            raise ResponseSupersededError
         if initial.intent == "answer":
             return CoordinatedResponse(initial)
         request = self.router.request(initial.intent, snapshot)
@@ -59,6 +73,8 @@ class AsyncResponseCoordinator:
             observation = await self.tools.execute(request, snapshot)
         except (OSError, TimeoutError, ValueError):
             observation = None
+        if not current():
+            raise ResponseSupersededError
         if observation is None:
             observation = "工具调用未成功完成。请基于已知信息简短说明。"
         final = await self.brain.respond(
@@ -66,6 +82,8 @@ class AsyncResponseCoordinator:
             allowed_intents=frozenset({"answer"}),
             observations=(observation,),
         )
+        if not current():
+            raise ResponseSupersededError
         if final.intent != "answer":
             final = ResponseProposal(final.reply, "answer", final.used_text_fallback)
         return CoordinatedResponse(final, request, observation)

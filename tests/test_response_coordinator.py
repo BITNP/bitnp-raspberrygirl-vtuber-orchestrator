@@ -1,6 +1,8 @@
 import asyncio
 from dataclasses import dataclass, field
 
+import pytest
+
 from orchestrator.agent_pipeline import (
     AudienceInput,
     AudienceSource,
@@ -8,7 +10,10 @@ from orchestrator.agent_pipeline import (
 )
 from orchestrator.intent_router import IntentRouter, IntentSpec
 from orchestrator.response_contracts import ResponseProposal
-from orchestrator.response_coordinator import AsyncResponseCoordinator
+from orchestrator.response_coordinator import (
+    AsyncResponseCoordinator,
+    ResponseSupersededError,
+)
 
 
 def _snapshot() -> BrainStateSnapshot:
@@ -73,3 +78,12 @@ def test_tool_intent_has_one_final_answer_call_without_reopening_tools() -> None
     assert result.proposal.reply == "答案"
     assert result.observation == "检索结果"
     assert brain.allowed == [frozenset({"answer", "knowledge"}), frozenset({"answer"})]
+
+
+def test_stale_turn_cannot_commit_a_model_result() -> None:
+    coordinator = AsyncResponseCoordinator(
+        _Brain([ResponseProposal("答案", "answer")]), IntentRouter(()), _Tools()
+    )
+
+    with pytest.raises(ResponseSupersededError):
+        asyncio.run(coordinator.respond(_snapshot(), is_current=lambda: False))
