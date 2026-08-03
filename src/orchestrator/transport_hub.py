@@ -71,7 +71,9 @@ class OnsiteBridge(Protocol):
 
     def set_agent_plan_output_allocator(
         self,
-        callback: Callable[[StreamKey, CancellationEpoch], CancellationEpoch | None],
+        callback: Callable[
+            [StreamKey, CancellationEpoch, str], CancellationEpoch | None
+        ],
     ) -> None: ...
 
     def set_replacement_callback(
@@ -313,7 +315,7 @@ class RtpHub:
         return lease.cancellation_epoch == epoch
 
     def allocate_onsite_agent_plan_output(
-        self, stream: StreamKey, input_epoch: CancellationEpoch
+        self, stream: StreamKey, input_epoch: CancellationEpoch, turn_id: str
     ) -> CancellationEpoch | None:
         """Allocate the output lease epoch for a finalized Brain reply.
 
@@ -326,13 +328,15 @@ class RtpHub:
         correlation = self._correlations.get(stream)
         if correlation is None:
             return None
-        lease = output_fence.activate(
+        lease = output_fence.activate_for_turn(
             stream=stream,
             segment_id=SegmentId(
                 f"onsite-agent-plan-{stream.stream_id}-{int(input_epoch)}"
             ),
-            correlation=correlation,
+            turn_id=turn_id,
         )
+        if lease is None:
+            return None
         callback = self._output_command_callback
         if callback is not None:
             task = asyncio.ensure_future(

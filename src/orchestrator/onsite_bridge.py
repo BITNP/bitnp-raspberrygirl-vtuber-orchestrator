@@ -81,7 +81,7 @@ type OnsiteOutputFinished = Callable[[StreamKey, CancellationEpoch], Awaitable[N
 type OnsiteOutputAuthorization = Callable[[StreamKey, CancellationEpoch], bool]
 
 type OnsiteAgentPlanOutputLease = Callable[
-    [StreamKey, CancellationEpoch], CancellationEpoch | None
+    [StreamKey, CancellationEpoch, str], CancellationEpoch | None
 ]
 
 type OnsiteReplacement = Callable[
@@ -110,9 +110,9 @@ def _allow_output(stream: StreamKey, epoch: CancellationEpoch) -> bool:
 
 
 def _reuse_requested_output_epoch(
-    stream: StreamKey, epoch: CancellationEpoch
+    stream: StreamKey, epoch: CancellationEpoch, turn_id: str
 ) -> CancellationEpoch:
-    _ = stream
+    _ = (stream, turn_id)
     return epoch
 
 
@@ -696,6 +696,7 @@ class OnsiteExplainerBridge:
         stream: StreamKey,
         text: str,
         epoch: CancellationEpoch,
+        turn_id: str,
         output_started: AgentPlanOutputStarted,
     ) -> bool:
         """Synthesize one accepted Brain reply and deliver paced RTP to Sound.
@@ -706,7 +707,7 @@ class OnsiteExplainerBridge:
         """
         cancellation = CancellationToken()
         chunks = await asyncio.to_thread(self.synthesize, text, cancellation)
-        output_epoch = self.allocate_agent_plan_output(stream, epoch)
+        output_epoch = self.allocate_agent_plan_output(stream, epoch, turn_id)
         if not chunks or output_epoch is None:
             return False
         packetizer = TtsPcmRtpPacketizer(stream=stream, cancellation_epoch=output_epoch)

@@ -240,14 +240,11 @@ async def _agent_plan_output_epoch_proof() -> None:
     transport = _Datagrams()
     bridge = _bridge(_DelayedAsr())
     hub = RtpHub(transport, onsite_bridge=bridge)
-    hub.set_output_fence(
-        SchedulerOutputFence(
-            SessionScheduler(
-                session_id=SessionId("session-onsite-runtime"),
-                turn_id_prefix="turn-agent-plan-output",
-            )
-        )
+    scheduler = SessionScheduler(
+        session_id=SessionId("session-onsite-runtime"),
+        turn_id_prefix="turn-agent-plan-output",
     )
+    hub.set_output_fence(SchedulerOutputFence(scheduler))
     command_epochs: list[int] = []
 
     async def record_command(_stream: StreamKey, epoch: int) -> None:
@@ -259,12 +256,15 @@ async def _agent_plan_output_epoch_proof() -> None:
     stream = StreamKey("session-onsite-runtime", "stream-onsite-runtime")
 
     assert hub.authorize_onsite_output(stream, CancellationEpoch(0)) is True
+    turn_id = scheduler.snapshot.active_turn_id
+    assert turn_id is not None
+    revision = scheduler.snapshot.revision
 
     # When: a new accepted Brain reply is synthesized from the unchanged Mic
     # input epoch.
 
     emitted = await bridge.speak_agent_plan(
-        stream, "agent reply", CancellationEpoch(0), lambda: True
+        stream, "agent reply", CancellationEpoch(0), turn_id, lambda: True
     )
     await asyncio.sleep(0)
 
@@ -272,6 +272,8 @@ async def _agent_plan_output_epoch_proof() -> None:
     # outgoing RTP instead of treating the Mic input epoch as an output epoch.
 
     assert emitted is True
+    assert scheduler.snapshot.revision == revision
+    assert scheduler.snapshot.active_turn_id == turn_id
     assert command_epochs == [0, 1]
     assert len(transport.sent) == 1
     packet, endpoint = transport.sent[0]

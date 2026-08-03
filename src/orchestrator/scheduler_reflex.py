@@ -92,21 +92,64 @@ class SchedulerOutputFence:
         if target_generated_ssrc is None:
             target_generated_ssrc = GeneratedSsrc(generated_ssrc(stream, epoch))
 
-        lease = OutputLease(
+        return self._activate_lease(
             stream=stream,
-            turn_id=self._start_turn(correlation),
             segment_id=segment_id,
-            cancellation_epoch=epoch,
+            turn_id=self._start_turn(correlation),
             generation=generation,
             target_generated_ssrc=target_generated_ssrc,
         )
 
+    def activate_for_turn(
+        self,
+        *,
+        stream: StreamKey,
+        segment_id: SegmentId,
+        turn_id: str,
+    ) -> OutputLease | None:
+        """Activate output for an already-admitted task without changing state.
+
+        Agent-plan TTS belongs to the turn that created its task. Starting a
+        second turn here would make that task stale before it can commit.
+        """
+        if str(self._scheduler.snapshot.active_turn_id) != turn_id:
+            return None
+        previous = self._leases.get(stream)
+        generation = (
+            self._last_generation.get(stream, -1) + 1
+            if previous is None
+            else previous.generation + 1
+        )
+        return self._activate_lease(
+            stream=stream,
+            segment_id=segment_id,
+            turn_id=TurnId(turn_id),
+            generation=generation,
+            target_generated_ssrc=GeneratedSsrc(
+                generated_ssrc(stream, CancellationEpoch(generation))
+            ),
+        )
+
+    def _activate_lease(
+        self,
+        *,
+        stream: StreamKey,
+        segment_id: SegmentId,
+        turn_id: TurnId,
+        generation: int,
+        target_generated_ssrc: GeneratedSsrc,
+    ) -> OutputLease:
+        lease = OutputLease(
+            stream=stream,
+            turn_id=turn_id,
+            segment_id=segment_id,
+            cancellation_epoch=CancellationEpoch(generation),
+            generation=generation,
+            target_generated_ssrc=target_generated_ssrc,
+        )
         self._leases[stream] = lease
-
         self._last_generation[stream] = generation
-
         _ = self._pending.pop(stream, None)
-
         return lease
 
     def interrupt(

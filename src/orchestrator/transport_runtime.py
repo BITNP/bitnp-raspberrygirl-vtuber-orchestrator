@@ -218,13 +218,19 @@ class TransportRuntime:
         bridge = self._onsite_bridge
         if (
             outcome.accepted
-            and outcome.turn_id is not None
             and isinstance(bridge, OnsiteExplainerBridge)
         ):
+            turn_id = outcome.turn_id
+            if turn_id is None:
+                return
             _ = await session_runtime.run_agent_tts_for_turn(
-                outcome.turn_id,
+                turn_id,
                 lambda text, output_started: bridge.speak_agent_plan(
-                    stream, text, session_runtime.cancellation_epoch, output_started
+                    stream,
+                    text,
+                    session_runtime.cancellation_epoch,
+                    str(turn_id),
+                    output_started,
                 ),
                 correlation,
             )
