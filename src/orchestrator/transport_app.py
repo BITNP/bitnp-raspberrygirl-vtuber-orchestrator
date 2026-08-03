@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 from orchestrator.brain_runtime import (
     AsyncJsonCompletion,
     build_async_agent_pipeline,
+    build_async_context_compactor,
     build_async_memory_candidate_extractor,
     build_async_response_coordinator,
 )
@@ -66,6 +67,9 @@ async def run_transport() -> None:
                 build_async_memory_candidate_extractor(
                     cast("AsyncJsonCompletion", brain_completion)
                 )
+            )
+            session_runtime.context_compactor = build_async_context_compactor(
+                cast("AsyncJsonCompletion", brain_completion)
             )
         return session_runtime
 

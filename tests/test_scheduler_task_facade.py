@@ -31,6 +31,7 @@ from orchestrator.task_registry import (
     TaskState,
 )
 from orchestrator.transient_context import (
+    ContextComposition,
     ContextProvenance,
     ContextSequence,
     ContextSourceId,
@@ -357,6 +358,60 @@ def test_memory_extraction_runs_only_after_tts_output_is_accepted() -> None:
     assert memory_task.state is TaskState.COMPLETED
 
 
+def test_context_compaction_is_a_maintenance_task_after_audio_start() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-async-compact"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _AsyncResponseBrain(), IntentRouter(()), _AsyncNoTools()
+        ),
+        context_compactor=_ContextCompactor(),
+    )
+    data = runtime.interaction_ingress.data
+    data.consider_context(
+        FinalizedInput(
+            ContextProvenance(
+                SessionId("session-async-compact"),
+                TurnId("old-turn"),
+                SegmentId("old-segment"),
+                ContextSequence(0),
+                ContextSourceId("old-trace"),
+            ),
+            "old " * 600,
+        )
+    )
+    correlation = EventCorrelation(
+        TraceId("async-compact"), SessionId("session-async-compact"), EventSequence(1)
+    )
+
+    async def exercise() -> None:
+        outcome = await runtime.receive_comment_async(
+            CommentProposal("压缩一下", correlation)
+        )
+        assert outcome.turn_id is not None
+
+        async def synthesize(_text: str, output_started: Callable[[], bool]) -> bool:
+            assert output_started()
+            await asyncio.sleep(0)
+            return True
+
+        assert await runtime.run_agent_tts_for_turn(
+            outcome.turn_id, synthesize, correlation
+        )
+        await asyncio.sleep(0)
+
+    asyncio.run(exercise())
+
+    assert data.context.snapshot.summary == "稳定摘要"
+    task = runtime.task_registry.task(TaskId("context-compact-turn-0001"))
+    assert task is not None
+    assert task.state is TaskState.COMPLETED
+
+
 def test_runtime_commits_brain_compaction_against_its_snapshot() -> None:
     pipeline = AgentPipeline(_AcceptGate(), _CompactingBrain(), _NoTools())
     runtime = SessionRuntime.create(
@@ -505,6 +560,12 @@ class _MemoryExtractor:
         assert user_text == "我喜欢绿茶"
         assert reply_text == "answer"
         return '{"key":"drink_preference","value":"喜欢绿茶","confidence":95}'
+
+
+class _ContextCompactor:
+    async def compact(self, composition: ContextComposition) -> str:
+        assert composition.digests
+        return "稳定摘要"
 
 
 class _PlanBrain:

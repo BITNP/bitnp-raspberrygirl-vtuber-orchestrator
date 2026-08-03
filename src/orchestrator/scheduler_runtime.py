@@ -25,6 +25,7 @@ from orchestrator.agent_pipeline import (
 from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
 from orchestrator.brain_runtime import build_mock_agent_pipeline
 from orchestrator.caption_timeline import CaptionTimelineCommand
+from orchestrator.context_compactor import AsyncContextCompactor
 from orchestrator.control_ingress import (
     ActionControl,
     ContextResetControl,
@@ -237,6 +238,8 @@ class SessionRuntime:
 
     memory_candidate_extractor: AsyncMemoryCandidateExtractor | None = None
 
+    context_compactor: AsyncContextCompactor | None = None
+
     agent_capabilities: frozenset[str] = frozenset()
 
     agent_mcp_allowlist: frozenset[str] = frozenset()
@@ -299,6 +302,7 @@ class SessionRuntime:
         async_agent_pipeline: AsyncAgentPipeline | None = None,
         async_response_coordinator: AsyncResponseCoordinator | None = None,
         memory_candidate_extractor: AsyncMemoryCandidateExtractor | None = None,
+        context_compactor: AsyncContextCompactor | None = None,
         agent_capabilities: frozenset[str] | None = None,
         agent_mcp_allowlist: frozenset[str] | None = None,
         agent_effect_dispatcher: AgentEffectDispatcher | None = None,
@@ -342,6 +346,7 @@ class SessionRuntime:
             async_agent_pipeline=async_agent_pipeline,
             async_response_coordinator=async_response_coordinator,
             memory_candidate_extractor=memory_candidate_extractor,
+            context_compactor=context_compactor,
             agent_capabilities=(
                 _DEFAULT_AGENT_CAPABILITIES
                 if agent_capabilities is None
@@ -961,6 +966,83 @@ class SessionRuntime:
         )
         self._started_timeline_text[pending.provenance.turn_id] = pending.marked_text
         self._schedule_memory_extraction(pending, task_id, correlation)
+        self._schedule_context_compaction(pending, task_id, correlation)
+
+    def _schedule_context_compaction(
+        self,
+        pending: _PendingResponseCommit,
+        parent_task_id: TaskId,
+        correlation: EventCorrelation,
+    ) -> None:
+        compactor = self.context_compactor
+        if compactor is None:
+            return
+        composition = self.interaction_ingress.data.context.compose(
+            _BRAIN_CONTEXT_MODEL, _BRAIN_CONTEXT_POLICY
+        )
+        if not composition.digests:
+            return
+        task_id = TaskId(f"context-compact-{pending.provenance.turn_id}")
+        outcome = self.schedule_task(
+            TaskRequest(
+                task_id=task_id,
+                session_id=pending.provenance.session_id,
+                turn_id=pending.provenance.turn_id,
+                parent_task_id=parent_task_id,
+                deadline_ms=TaskDeadlineMs(self.clock() + 10_000),
+                snapshot_revision=self.scheduler.snapshot.revision,
+                idempotency_key=IdempotencyKey(str(task_id)),
+                kind=TaskKind.MAINTENANCE,
+            ),
+            correlation,
+        )
+        if not outcome.accepted or self.executor.claim(task_id) is None:
+            return
+        task = asyncio.create_task(
+            self._run_context_compaction(
+                compactor, task_id, composition, correlation
+            )
+        )
+        self._maintenance_tasks.add(task)
+        task.add_done_callback(self._maintenance_tasks.discard)
+
+    async def _run_context_compaction(
+        self,
+        compactor: AsyncContextCompactor,
+        task_id: TaskId,
+        composition: ContextComposition,
+        correlation: EventCorrelation,
+    ) -> None:
+        try:
+            summary = await compactor.compact(composition)
+        except (OSError, TimeoutError, ValueError):
+            _ = self.task_registry.fail(task_id, reason="context_compactor_failed")
+            _LOGGER.exception("context_compactor_failed task=%s", task_id)
+            return
+        if summary is None:
+            _ = self.task_registry.fail(task_id, reason="context_compaction_rejected")
+            return
+        record = self.task_registry.task(task_id)
+        if record is None:
+            return
+        accepted = self.reduce_task(
+            TaskResult(
+                task_id,
+                record.request.session_id,
+                record.request.turn_id,
+                record.request.snapshot_revision,
+                TaskEffect("context.compaction", summary[:240]),
+            ),
+            correlation,
+        )
+        if not accepted.accepted:
+            return
+        try:
+            _ = self.interaction_ingress.data.context.compact(
+                composition, summary=summary
+            )
+        except ContextCompactionError:
+            _LOGGER.debug("context_compaction_stale task=%s", task_id)
 
     def _schedule_memory_extraction(
         self,
