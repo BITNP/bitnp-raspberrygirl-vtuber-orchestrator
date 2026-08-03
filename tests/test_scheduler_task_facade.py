@@ -154,6 +154,41 @@ def test_runtime_emits_reducer_approved_tts_task_once() -> None:
     assert runtime.observables.task_commits[-1].effect.effect_type == "tts.emitted"
 
 
+def test_runtime_does_not_fill_interactive_queue_with_completed_agent_tts() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-tts-queue"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        clock=lambda: 10,
+        agent_pipeline=AgentPipeline(_AcceptGate(), _PlanBrain(), _NoTools()),
+        agent_capabilities=frozenset({"task:tts"}),
+    )
+    emitted: list[str] = []
+
+    async def synthesize(text: str, output_started: Callable[[], bool]) -> bool:
+        emitted.append(text)
+        return output_started()
+
+    for sequence in range(1, 6):
+        correlation = EventCorrelation(
+            TraceId(f"tts-{sequence}"),
+            SessionId("session-tts-queue"),
+            EventSequence(sequence),
+        )
+        outcome = runtime.receive_comment(CommentProposal("question", correlation))
+        assert outcome.accepted
+        assert outcome.turn_id is not None
+        assert asyncio.run(
+            runtime.run_agent_tts_for_turn(outcome.turn_id, synthesize, correlation)
+        )
+
+    assert emitted == ["answer"] * 5
+    assert all(
+        record.state is TaskState.COMPLETED
+        for record in runtime.task_registry.records
+    )
+
+
 def test_runtime_commits_tts_before_paced_playback_can_be_superseded() -> None:
     runtime = SessionRuntime.create(
         session_id=SessionId("session-tts-lifecycle"),

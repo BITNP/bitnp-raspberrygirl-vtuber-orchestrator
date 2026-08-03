@@ -108,6 +108,17 @@ def test_executor_skips_superseded_task_before_worker_selection() -> None:
     assert selected is None
 
 
+def test_executor_discards_a_task_claimed_by_a_dedicated_runtime_path() -> None:
+    registry = _registry()
+    executor = TaskLaneExecutor(registry, max_pending_per_lane=1)
+    request = _request(TaskKind.INTERACTIVE, 1)
+    _admit(registry, request)
+    assert executor.enqueue(request) is True
+
+    assert executor.discard(request.task_id) is True
+    assert executor.next(now_ms=0) is None
+
+
 def _registry() -> TaskRegistry:
 
     return TaskRegistry(

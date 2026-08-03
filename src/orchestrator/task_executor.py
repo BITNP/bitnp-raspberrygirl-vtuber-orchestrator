@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from orchestrator.task_registry import (
+    TaskId,
     TaskKind,
     TaskRegistry,
     TaskRequest,
@@ -53,6 +54,15 @@ class TaskLaneExecutor:
                 | TaskState.COMPLETED
             ):
                 return False
+
+    def discard(self, task_id: TaskId) -> bool:
+        """Remove work claimed by a dedicated runtime path from its lane queue."""
+        for lane in self._pending.values():
+            for request in lane:
+                if request.task_id == task_id:
+                    lane.remove(request)
+                    return True
+        return False
 
     def next(self, *, now_ms: int) -> TaskRequest | None:
         for kind in _LANE_PRIORITY:

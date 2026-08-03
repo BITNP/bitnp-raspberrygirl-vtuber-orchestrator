@@ -779,7 +779,13 @@ class SessionRuntime:
             correlation,
         )
         if outcome.accepted and payload.get("task_kind") == "tts":
-            self._agent_tts_text[task_id] = response_text
+            # Agent-plan TTS is executed immediately by TransportRuntime, not
+            # by TaskLaneExecutor.next().  Leaving it queued permanently fills
+            # the bounded interactive lane after four conversations.
+            if self.executor.discard(task_id):
+                self._agent_tts_text[task_id] = response_text
+            else:
+                _ = self.cancel_task(task_id, correlation)
 
     async def run_agent_tts_for_turn(
         self,
