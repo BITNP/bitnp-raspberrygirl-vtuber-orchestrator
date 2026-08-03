@@ -121,6 +121,10 @@ def test_brain_injects_full_snapshot_and_marks_observations_untrusted() -> None:
     assert "多模态智能体的大脑" in completion.requests[0].prompt.system
     assert "对象必须恰好包含以下八个键" in completion.requests[0].prompt.system
     assert '"memory_patches":[]' in completion.requests[0].prompt.system
+    assert "这是唯一会为 response_text 创建 TTS 合成任务的格式" in (
+        completion.requests[0].prompt.system
+    )
+    assert "字幕不会自动从 response_text 生成" in completion.requests[0].prompt.system
     assert '"cancellation_epoch": 2' in completion.requests[0].prompt.user
     assert "expected_revision 必须等于 5" in completion.requests[0].prompt.user
     assert "最终规划：禁止再请求工具" in completion.requests[1].prompt.user
@@ -134,6 +138,7 @@ def test_repair_requires_the_exact_snapshot_revision() -> None:
     assert brain.repair(_snapshot(), '{"expected_revision": 6}') == "{}"
     assert "expected_revision 必须恰好为 5" in completion.requests[0].prompt.user
     assert "对象必须恰好包含以下八个键" in completion.requests[0].prompt.system
+    assert "tool_requests 必须为 []" in completion.requests[0].prompt.system
 
 
 def test_mock_gate_discards_repeated_input_without_creating_effects() -> None:
