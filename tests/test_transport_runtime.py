@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING, Final
 import pytest
 
 from orchestrator.agent_pipeline import AgentPipeline, BrainStateSnapshot, GateDecision
+from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.config import TrustedLanToken
 from orchestrator.ids import ConnectionId, SessionId
+from orchestrator.ids import TurnId as AgentTurnId
 from orchestrator.json_boundary import parse_json_value
 from orchestrator.mcp_adapters import DeckJournalKind
 from orchestrator.pipeline_contracts import ASRAudienceEvent
@@ -935,6 +937,42 @@ def _stream_state(state: str) -> str:
         "sound",
         {"stream_id": STREAM_ID, "state": state},
     )
+
+
+def test_new_caption_timeline_cancels_the_previous_active_timeline() -> None:
+    runtime = TransportRuntime(_loopback_config())
+    peer = RecordingControlPeer()
+    runtime.register_frontend_connection(SessionId(SESSION_ID), peer)
+    first = CaptionTimelineCommand(
+        "timeline-1", "第一句", "agent-turn-1", 1, 96_000
+    )
+    second = CaptionTimelineCommand(
+        "timeline-2", "第二句", "agent-turn-2", 2, 96_320
+    )
+
+    asyncio.run(
+        runtime.emit_caption_timeline(
+            first, SessionId(SESSION_ID), AgentTurnId("turn-1")
+        )
+    )
+    asyncio.run(
+        runtime.emit_caption_timeline(
+            second, SessionId(SESSION_ID), AgentTurnId("turn-2")
+        )
+    )
+
+    envelopes: list[dict[str, object]] = [
+        json.loads(message) for message in peer.messages
+    ]
+    assert [item["event_type"] for item in envelopes] == [
+        "vtuber.caption.timeline.command",
+        "vtuber.caption.timeline.cancel",
+        "vtuber.caption.timeline.command",
+    ]
+    cancelled_data = envelopes[1]["data"]
+    assert isinstance(cancelled_data, dict)
+    assert cancelled_data["timeline_id"] == "timeline-1"
+    assert cancelled_data["reason"] == "replaced"
 
 
 def _envelope(  # noqa: PLR0913

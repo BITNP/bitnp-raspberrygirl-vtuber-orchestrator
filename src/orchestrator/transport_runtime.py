@@ -12,13 +12,14 @@ from typing import TYPE_CHECKING, Protocol, final, override
 
 from websockets.asyncio.server import serve
 
+from orchestrator.caption_timeline import CaptionTimelineCancel, CaptionTimelineCommand
 from orchestrator.comment_ingress import (
     AuthenticatedCommentIngress,
     CommentAccessToken,
     CommentIngressConfig,
     CommentTokenValue,
 )
-from orchestrator.control_ingress import parse_session_control
+from orchestrator.control_ingress import SessionEndControl, parse_session_control
 from orchestrator.frontend_effects import (
     FrontendEffectDispatcher,
     send_caption_timeline,
@@ -51,7 +52,6 @@ if TYPE_CHECKING:
     from websockets.http11 import Request, Response
 
     from orchestrator.agent_pipeline import FrontendOperation
-    from orchestrator.caption_timeline import CaptionTimelineCommand
     from orchestrator.ids import TurnId
     from orchestrator.observability import OnsiteObservability
     from orchestrator.runtime_contracts import RuntimeOutcome
@@ -83,6 +83,10 @@ class ControlConnection(Protocol):
 
     def respond(self, status: HTTPStatus, text: str) -> Response: ...
 
+    async def send(self, message: str) -> None: ...
+
+
+class FrontendConnection(Protocol):
     async def send(self, message: str) -> None: ...
 
 
@@ -159,7 +163,9 @@ class TransportRuntime:
 
         self._comment_ingresses: dict[int, AuthenticatedCommentIngress] = {}
 
-        self._frontend_connections: dict[str, ControlConnection] = {}
+        self._frontend_connections: dict[str, FrontendConnection] = {}
+
+        self._active_timelines: dict[str, tuple[CaptionTimelineCommand, TurnId]] = {}
 
     def set_session_runtime(self, session_runtime: SessionRuntime) -> None:
         self._session_runtime = session_runtime
@@ -181,6 +187,21 @@ class TransportRuntime:
 
     def set_session_runtime_factory(self, factory: SessionRuntimeFactory) -> None:
         self._session_runtime_factory = factory
+
+    def register_frontend_connection(
+        self, session_id: SessionId, connection: FrontendConnection
+    ) -> None:
+        """Register the narrow outbound control surface used by timelines."""
+        self._frontend_connections[str(session_id)] = connection
+
+    async def emit_caption_timeline(
+        self,
+        timeline: CaptionTimelineCommand,
+        session_id: SessionId,
+        turn_id: TurnId,
+    ) -> None:
+        """Deliver a media-admitted timeline without exposing transport internals."""
+        await self._send_caption_timeline(timeline, session_id, turn_id)
 
     async def receive_onsite_asr_final(
         self, stream: StreamKey, event: ASRAudienceEvent
@@ -335,6 +356,11 @@ class TransportRuntime:
         if agent_tts_tasks:
             _ = await asyncio.gather(*agent_tts_tasks, return_exceptions=True)
 
+        for session_id in tuple(self._active_timelines):
+            await self._cancel_caption_timeline(
+                SessionId(session_id), reason="transport_closed"
+            )
+
         if self._control_server is not None:
             self._control_server.close()
 
@@ -459,9 +485,17 @@ class TransportRuntime:
                         control = parse_session_control(message)
 
                         if control is not None:
-                            _ = await session_runtime.receive_session_control_async(
-                                control
+                            outcome = await (
+                                session_runtime.receive_session_control_async(control)
                             )
+                            if (
+                                isinstance(control, SessionEndControl)
+                                and outcome.accepted
+                            ):
+                                await self._cancel_caption_timeline(
+                                    session_runtime.scheduler.snapshot.session_id,
+                                    reason="session_ended",
+                                )
 
                             continue
 
@@ -535,8 +569,65 @@ class TransportRuntime:
     ) -> None:
         connection = self._frontend_connections.get(str(session_id))
         if connection is None:
+            _LOGGER.debug(
+                "caption_timeline_dropped frontend_unavailable session=%s turn=%s",
+                session_id,
+                turn_id,
+            )
             return
-        await send_caption_timeline(connection.send, timeline, session_id, turn_id)
+        previous = self._active_timelines.get(str(session_id))
+        if previous is not None and previous[0].timeline_id != timeline.timeline_id:
+            await self._cancel_caption_timeline(
+                session_id,
+                reason="replaced",
+                connection=connection,
+            )
+        try:
+            await send_caption_timeline(connection.send, timeline, session_id, turn_id)
+        except (OSError, ValueError):
+            _LOGGER.debug(
+                "caption_timeline_delivery_failed session=%s turn=%s timeline=%s",
+                session_id,
+                turn_id,
+                timeline.timeline_id,
+                exc_info=True,
+            )
+            return
+        self._active_timelines[str(session_id)] = (timeline, turn_id)
+
+    async def _cancel_caption_timeline(
+        self,
+        session_id: SessionId,
+        *,
+        reason: str,
+        connection: FrontendConnection | None = None,
+    ) -> None:
+        active = self._active_timelines.pop(str(session_id), None)
+        if active is None:
+            return
+        timeline, turn_id = active
+        target = (
+            self._frontend_connections.get(str(session_id))
+            if connection is None
+            else connection
+        )
+        if target is None:
+            return
+        cancel = CaptionTimelineCancel(
+            timeline_id=timeline.timeline_id,
+            audio_stream_id=timeline.audio_stream_id,
+            cancellation_epoch=timeline.cancellation_epoch,
+            reason=reason,
+        )
+        try:
+            await send_caption_timeline(target.send, cancel, session_id, turn_id)
+        except (OSError, ValueError):
+            _LOGGER.debug(
+                "caption_timeline_cancel_failed session=%s timeline=%s",
+                session_id,
+                timeline.timeline_id,
+                exc_info=True,
+            )
 
     async def _receive_comment(
         self,
