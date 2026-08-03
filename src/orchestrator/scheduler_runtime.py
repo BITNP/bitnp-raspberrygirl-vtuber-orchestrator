@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -61,6 +62,10 @@ from orchestrator.memory import (
     MemoryProvenance,
     MemorySource,
     ProposalRevision,
+)
+from orchestrator.memory_extractor import (
+    AsyncMemoryCandidateExtractor,
+    parse_memory_candidate,
 )
 from orchestrator.memory_store import render_markdown_memory
 from orchestrator.modes import AdaptiveAgentPolicy
@@ -230,6 +235,8 @@ class SessionRuntime:
 
     async_response_coordinator: AsyncResponseCoordinator | None = None
 
+    memory_candidate_extractor: AsyncMemoryCandidateExtractor | None = None
+
     agent_capabilities: frozenset[str] = frozenset()
 
     agent_mcp_allowlist: frozenset[str] = frozenset()
@@ -264,6 +271,7 @@ class SessionRuntime:
 
     _started_timeline_text: dict[TurnId, str] = field(default_factory=dict)
 
+    _maintenance_tasks: set[asyncio.Task[None]] = field(default_factory=set)
 
     _voice_evidence_ranges: list[tuple[str, int, int]] = field(default_factory=list)
 
@@ -290,6 +298,7 @@ class SessionRuntime:
         agent_pipeline: AgentPipeline | None = None,
         async_agent_pipeline: AsyncAgentPipeline | None = None,
         async_response_coordinator: AsyncResponseCoordinator | None = None,
+        memory_candidate_extractor: AsyncMemoryCandidateExtractor | None = None,
         agent_capabilities: frozenset[str] | None = None,
         agent_mcp_allowlist: frozenset[str] | None = None,
         agent_effect_dispatcher: AgentEffectDispatcher | None = None,
@@ -332,6 +341,7 @@ class SessionRuntime:
             ),
             async_agent_pipeline=async_agent_pipeline,
             async_response_coordinator=async_response_coordinator,
+            memory_candidate_extractor=memory_candidate_extractor,
             agent_capabilities=(
                 _DEFAULT_AGENT_CAPABILITIES
                 if agent_capabilities is None
@@ -922,7 +932,9 @@ class SessionRuntime:
         else:
             _ = self.cancel_task(task_id, correlation)
 
-    def _commit_response_after_output_started(self, task_id: TaskId) -> None:
+    def _commit_response_after_output_started(
+        self, task_id: TaskId, correlation: EventCorrelation
+    ) -> None:
         pending = self._pending_response_commits.pop(task_id, None)
         if pending is None:
             return
@@ -948,6 +960,98 @@ class SessionRuntime:
             AcceptedOutput(pending.provenance, pending.spoken_text)
         )
         self._started_timeline_text[pending.provenance.turn_id] = pending.marked_text
+        self._schedule_memory_extraction(pending, task_id, correlation)
+
+    def _schedule_memory_extraction(
+        self,
+        pending: _PendingResponseCommit,
+        parent_task_id: TaskId,
+        correlation: EventCorrelation,
+    ) -> None:
+        extractor = self.memory_candidate_extractor
+        if extractor is None:
+            return
+        task_id = TaskId(f"memory-extract-{pending.provenance.turn_id}")
+        outcome = self.schedule_task(
+            TaskRequest(
+                task_id=task_id,
+                session_id=pending.provenance.session_id,
+                turn_id=pending.provenance.turn_id,
+                parent_task_id=parent_task_id,
+                deadline_ms=TaskDeadlineMs(self.clock() + 10_000),
+                snapshot_revision=self.scheduler.snapshot.revision,
+                idempotency_key=IdempotencyKey(str(task_id)),
+                kind=TaskKind.MAINTENANCE,
+            ),
+            correlation,
+        )
+        if not outcome.accepted or self.executor.claim(task_id) is None:
+            return
+        memory_revision = ProposalRevision(
+            self.interaction_ingress.data.memory.snapshot.revision
+        )
+        task = asyncio.create_task(
+            self._run_memory_extraction(
+                extractor,
+                task_id,
+                pending,
+                memory_revision,
+                correlation,
+            )
+        )
+        self._maintenance_tasks.add(task)
+        task.add_done_callback(self._maintenance_tasks.discard)
+
+    async def _run_memory_extraction(
+        self,
+        extractor: AsyncMemoryCandidateExtractor,
+        task_id: TaskId,
+        pending: _PendingResponseCommit,
+        memory_revision: ProposalRevision,
+        correlation: EventCorrelation,
+    ) -> None:
+        try:
+            raw = await extractor.extract(
+                user_text=pending.input_text, reply_text=pending.spoken_text
+            )
+        except (OSError, TimeoutError, ValueError):
+            _ = self.task_registry.fail(task_id, reason="memory_extractor_failed")
+            _LOGGER.exception("memory_extractor_failed task=%s", task_id)
+            return
+        candidate = None if raw is None else parse_memory_candidate(raw)
+        if candidate is None:
+            _ = self.task_registry.fail(task_id, reason="memory_candidate_rejected")
+            return
+        accepted = self.reduce_task(
+            TaskResult(
+                task_id,
+                pending.provenance.session_id,
+                pending.provenance.turn_id,
+                self.scheduler.snapshot.revision,
+                TaskEffect("memory.candidate", str(candidate.key)),
+            ),
+            correlation,
+        )
+        if not accepted.accepted:
+            return
+        _ = self.interaction_ingress.data.reduce_memory(
+            MemoryProposal(
+                key=candidate.key,
+                value=candidate.value,
+                category=MemoryCategory.ORDINARY_PREFERENCE,
+                confidence=candidate.confidence,
+                base_revision=memory_revision,
+                provenance=MemoryProvenance(
+                    source=MemorySource.AGENT_PROPOSAL,
+                    trace_id=correlation.trace_id,
+                    session_id=pending.provenance.session_id,
+                    turn_id=pending.provenance.turn_id,
+                    evidence_id=(
+                        f"memory-extract:{pending.provenance.source_id}:{task_id}"
+                    ),
+                ),
+            )
+        )
 
     def take_started_timeline(
         self, turn_id: TurnId, *, audio_stream_id: str
@@ -1208,7 +1312,7 @@ class SessionRuntime:
                     correlation,
                 ).accepted
                 if committed:
-                    self._commit_response_after_output_started(task_id)
+                    self._commit_response_after_output_started(task_id, correlation)
                     if output_started is not None:
                         output_started()
                 return committed
@@ -1458,6 +1562,9 @@ class SessionRuntime:
         self._agent_tts_text.clear()
         self._pending_response_commits.clear()
         self._started_timeline_text.clear()
+        for task in tuple(self._maintenance_tasks):
+            _ = task.cancel()
+        self._maintenance_tasks.clear()
         self._voice_evidence_ranges.clear()
         self.interaction_ingress.data.clear_session()
         self.interaction_ingress.clear_session_data()

@@ -313,6 +313,50 @@ def test_async_tool_turn_records_initial_tool_and_final_provider_tasks() -> None
     assert records[2].request.parent_task_id == records[1].request.task_id
 
 
+def test_memory_extraction_runs_only_after_tts_output_is_accepted() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-async-memory"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _AsyncResponseBrain(), IntentRouter(()), _AsyncNoTools()
+        ),
+        memory_candidate_extractor=_MemoryExtractor(),
+    )
+    correlation = EventCorrelation(
+        TraceId("async-memory"), SessionId("session-async-memory"), EventSequence(1)
+    )
+
+    async def exercise() -> None:
+        outcome = await runtime.receive_comment_async(
+            CommentProposal("我喜欢绿茶", correlation)
+        )
+        assert outcome.turn_id is not None
+
+        async def synthesize(_text: str, output_started: Callable[[], bool]) -> bool:
+            assert output_started()
+            await asyncio.sleep(0)
+            return True
+
+        assert await runtime.run_agent_tts_for_turn(
+            outcome.turn_id, synthesize, correlation
+        )
+        await asyncio.sleep(0)
+
+    asyncio.run(exercise())
+
+    entries = runtime.interaction_ingress.data.memory.snapshot.entries
+    assert [(entry.key, entry.value) for entry in entries] == [
+        ("drink_preference", "喜欢绿茶")
+    ]
+    memory_task = runtime.task_registry.task(TaskId("memory-extract-turn-0001"))
+    assert memory_task is not None
+    assert memory_task.state is TaskState.COMPLETED
+
+
 def test_runtime_commits_brain_compaction_against_its_snapshot() -> None:
     pipeline = AgentPipeline(_AcceptGate(), _CompactingBrain(), _NoTools())
     runtime = SessionRuntime.create(
@@ -454,6 +498,13 @@ class _AsyncTools:
     async def execute(self, *args: object, **kwargs: object) -> str:
         _ = args, kwargs
         return "受控检索结果"
+
+
+class _MemoryExtractor:
+    async def extract(self, *, user_text: str, reply_text: str) -> str:
+        assert user_text == "我喜欢绿茶"
+        assert reply_text == "answer"
+        return '{"key":"drink_preference","value":"喜欢绿茶","confidence":95}'
 
 
 class _PlanBrain:

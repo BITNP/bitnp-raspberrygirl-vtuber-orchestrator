@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.memory import MemoryConfidence, MemoryKey
@@ -10,6 +11,13 @@ from orchestrator.memory import MemoryConfidence, MemoryKey
 _MAX_KEY_CHARS = 128
 _MAX_VALUE_CHARS = 512
 _MAX_CONFIDENCE = 100
+
+
+class AsyncMemoryCandidateExtractor(Protocol):
+    """Low-priority provider boundary; it may only return untrusted JSON."""
+
+    async def extract(self, *, user_text: str, reply_text: str) -> str | None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryCandidate:
