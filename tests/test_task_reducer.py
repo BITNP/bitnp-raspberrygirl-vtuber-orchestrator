@@ -163,6 +163,22 @@ def test_reducer_commits_current_result_once_and_rejects_duplicate_delivery() ->
             pytest.fail("duplicate delivery was rejected for the wrong reason")
 
 
+def test_reducer_rejects_a_result_from_another_cancellation_epoch() -> None:
+    registry = _registry()
+    request = replace(
+        _request(task_id="task-1", key="answer-1"), cancellation_epoch=3
+    )
+    _register(registry, request)
+    reducer = TaskResultReducer(registry)
+
+    outcome = reducer.reduce(
+        _result(snapshot_revision=StateRevision(7)), snapshot=_snapshot(), now_ms=100
+    )
+
+    assert isinstance(outcome, TaskResultRejected)
+    assert outcome.reason is TaskResultRejection.CANCELLED
+
+
 def test_reducer_marks_hung_task_timed_out_before_late_result_can_commit() -> None:
     # Given: a task whose deadline has already passed while its worker is hung.
 
