@@ -42,9 +42,15 @@ _MAX_TOOL_QUERY_CHARS = 4_000
 
 _ECHO_MIN_CHARS = 4
 
-_GATE_SYSTEM = """你是现场多模态智能体的输入相关性门，只判断，不执行动作。
+
+def _inline_prompt(source: str) -> str:
+    """Keep prompt source readable without sending its layout newlines."""
+    return source.replace("\n", "")
+
+
+_GATE_SYSTEM = _inline_prompt("""你是现场多模态智能体的输入相关性门，只判断，不执行动作。
 接受有明确交流意图的问候、提问、请求、纠正或相关陈述；丢弃无语义、重复、广告、刷屏和 ASR 回声。
-仅输出 JSON：{"decision":"accept"} 或 {"decision":"discard"}。不得输出思考、解释或其他文字。"""
+仅输出 JSON：{"decision":"accept"} 或 {"decision":"discard"}。不得输出思考、解释或其他文字。""")
 
 _AGENT_PLAN_OUTPUT_CONTRACT = """只输出一个 JSON 对象：不输出思考、解释、Markdown 或代码围栏。
 顶层键必须且只能是 response_text、expected_revision、state_operations、media_operations、
@@ -64,12 +70,14 @@ context.compact 只在 compaction_required=true 时使用，payload.summary 为�
 仅初始规划可请求一次获准的 knowledge/mcp 工具；最终规划 tool_requests 必须为 []。
 memory_patches 只保存稳定、非敏感且有证据的事实。"""
 
-_BRAIN_SYSTEM = """你是多模态智能体大脑。直接生成 AgentPlan；不要展示推理过程。
+_BRAIN_SYSTEM = _inline_prompt(
+    """你是多模态智能体大脑。直接生成 AgentPlan；不要展示推理过程。
 """ + _AGENT_PLAN_OUTPUT_CONTRACT + "\n" + _AGENT_PLAN_SEMANTIC_CONTRACT
+)
 
-_REPAIR_SYSTEM = """你是 AgentPlan JSON 修复器。直接输出修复后的对象，不展示推理过程。
+_REPAIR_SYSTEM = _inline_prompt("""你是 AgentPlan JSON 修复器。直接输出修复后的对象，不展示推理过程。
 不得添加快照未授权的 capability 或工具。expected_revision 必须严格等于用户消息指定的值。
-""" + _AGENT_PLAN_OUTPUT_CONTRACT + "\n" + _AGENT_PLAN_SEMANTIC_CONTRACT
+""" + _AGENT_PLAN_OUTPUT_CONTRACT + "\n" + _AGENT_PLAN_SEMANTIC_CONTRACT)
 
 
 class JsonCompletion(Protocol):

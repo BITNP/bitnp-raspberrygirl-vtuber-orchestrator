@@ -98,6 +98,7 @@ def test_gate_uses_chinese_non_streaming_json_prompt_and_fails_closed() -> None:
     assert "<untrusted-payload>" in completion.requests[0].prompt.user
     assert "recent_turn_context" in completion.requests[0].prompt.user
     assert "支持语音交互" in completion.requests[0].prompt.user
+    assert "\n" not in completion.requests[0].prompt.system
     assert completion.requests[0].temperature == 0.0
     assert completion.requests[0].timeout_seconds == 5.0
 
@@ -124,6 +125,7 @@ def test_brain_injects_full_snapshot_and_marks_observations_untrusted() -> None:
     assert "顶层键必须且只能是" in completion.requests[0].prompt.system
     assert "不要展示推理过程" in completion.requests[0].prompt.system
     assert "若要现场说话" in completion.requests[0].prompt.system
+    assert "\n" not in completion.requests[0].prompt.system
     assert '"cancellation_epoch": 2' in completion.requests[0].prompt.user
     assert "expected_revision 必须等于 5" in completion.requests[0].prompt.user
     assert "最终规划：禁止再请求工具" in completion.requests[1].prompt.user
