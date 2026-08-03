@@ -81,10 +81,19 @@ def test_gate_uses_chinese_non_streaming_json_prompt_and_fails_closed() -> None:
     completion = _Completion(['{"decision":"accept"}', "not-json"])
     gate = JsonAgentGate(completion)
 
-    assert gate.evaluate(_input(), active_summary="产品讲解中").value == "accept"
+    assert (
+        gate.evaluate(
+            _input(),
+            active_summary="产品讲解中",
+            recent_turn_context=("用户 - 它支持什么？", "智能体 - 支持语音交互。"),
+        ).value
+        == "accept"
+    )
     assert gate.evaluate(_input(), active_summary="产品讲解中").value == "discard"
     assert "输入相关性门" in completion.requests[0].prompt.system
     assert "<untrusted-payload>" in completion.requests[0].prompt.user
+    assert "recent_turn_context" in completion.requests[0].prompt.user
+    assert "支持语音交互" in completion.requests[0].prompt.user
     assert completion.requests[0].temperature == 0.0
     assert completion.requests[0].timeout_seconds == 5.0
 

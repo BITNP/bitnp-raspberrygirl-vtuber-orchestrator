@@ -54,6 +54,7 @@ from orchestrator.task_registry import (
     TaskRequest,
 )
 from orchestrator.transient_context import (
+    AcceptedOutput,
     ContextProvenance,
     ContextSequence,
     ContextSourceId,
@@ -122,6 +123,22 @@ def test_session_data_state_reset_and_profile_deletion_invalidate_prior_work() -
             ProfileRecognition(profile_id, RecognitionConfidence(99))
         )
         == ProfileRecognitionUnknown()
+    )
+
+
+def test_recent_turn_context_contains_only_the_latest_accepted_exchange() -> None:
+    state = _state()
+    first = _finalized_input("介绍产品")
+    state.consider_context(first)
+    state.consider_context(AcceptedOutput(first.provenance, "这是产品介绍。"))
+
+    latest = _finalized_input("它是否支持语音")
+    state.consider_context(latest)
+    state.consider_context(AcceptedOutput(latest.provenance, "支持实时语音交互。"))
+
+    assert state.recent_turn_context == (
+        "用户 - 它是否支持语音",
+        "智能体 - 支持实时语音交互。",
     )
 
 

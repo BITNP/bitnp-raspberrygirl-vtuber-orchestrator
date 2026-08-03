@@ -944,9 +944,13 @@ class _AsyncAsrGate:
         self.inputs: tuple[str, ...] = ()
 
     async def evaluate(
-        self, audience_input: AudienceInput, *, active_summary: str
+        self,
+        audience_input: AudienceInput,
+        *,
+        active_summary: str,
+        recent_turn_context: tuple[str, ...] = (),
     ) -> GateDecision:
-        _ = active_summary
+        _ = active_summary, recent_turn_context
         self.inputs = (*self.inputs, audience_input.text)
         return GateDecision.ACCEPT
 

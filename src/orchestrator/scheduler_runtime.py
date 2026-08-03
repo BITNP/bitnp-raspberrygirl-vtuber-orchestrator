@@ -407,7 +407,10 @@ class SessionRuntime:
             received_at_ms=self.clock(),
             text=proposal.text,
         )
-        if await pipeline.submit(audience_input) is GateDecision.DISCARD:
+        if await pipeline.submit(
+            audience_input,
+            recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+        ) is GateDecision.DISCARD:
             return self._reject(correlation, "agent_gate_discarded")
         outcome = self.interaction_ingress.receive_comment(
             text=proposal.text, correlation=correlation
@@ -445,7 +448,10 @@ class SessionRuntime:
             received_at_ms=self.clock(),
             text=proposal.text,
         )
-        decision = pipeline.submit(audience_input)
+        decision = pipeline.submit(
+            audience_input,
+            recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+        )
         return audience_input if decision is GateDecision.ACCEPT else None
 
     def _run_agent_plan(
@@ -966,7 +972,11 @@ class SessionRuntime:
         pipeline = self.agent_pipeline
         if (
             pipeline is not None
-            and pipeline.submit(audience_input) is GateDecision.DISCARD
+            and pipeline.submit(
+                audience_input,
+                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+            )
+            is GateDecision.DISCARD
         ):
             return self._reject(correlation, "agent_gate_discarded")
 
@@ -1026,7 +1036,10 @@ class SessionRuntime:
             received_at_ms=event.received_at_ms,
             text=event.text,
         )
-        if await pipeline.submit(audience_input) is GateDecision.DISCARD:
+        if await pipeline.submit(
+            audience_input,
+            recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+        ) is GateDecision.DISCARD:
             return self._reject(correlation, "agent_gate_discarded")
         transition = self.scheduler.apply(
             StartTurn(

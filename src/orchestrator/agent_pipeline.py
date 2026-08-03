@@ -368,7 +368,11 @@ class AgentPlanReducer:
 
 class Gate(Protocol):
     def evaluate(
-        self, audience_input: AudienceInput, *, active_summary: str
+        self,
+        audience_input: AudienceInput,
+        *,
+        active_summary: str,
+        recent_turn_context: tuple[str, ...] = (),
     ) -> GateDecision: ...
 
 
@@ -388,7 +392,11 @@ class ToolExecutor(Protocol):
 
 class AsyncGate(Protocol):
     async def evaluate(
-        self, audience_input: AudienceInput, *, active_summary: str
+        self,
+        audience_input: AudienceInput,
+        *,
+        active_summary: str,
+        recent_turn_context: tuple[str, ...] = (),
     ) -> GateDecision: ...
 
 
@@ -419,9 +427,17 @@ class AgentPipeline:
     _comments: deque[AudienceInput] = field(default_factory=deque, init=False)
 
     def submit(
-        self, audience_input: AudienceInput, *, active_summary: str = ""
+        self,
+        audience_input: AudienceInput,
+        *,
+        active_summary: str = "",
+        recent_turn_context: tuple[str, ...] = (),
     ) -> GateDecision:
-        decision = self.gate.evaluate(audience_input, active_summary=active_summary)
+        decision = self.gate.evaluate(
+            audience_input,
+            active_summary=active_summary,
+            recent_turn_context=recent_turn_context,
+        )
         if decision is GateDecision.DISCARD:
             return decision
         target = (
@@ -499,10 +515,16 @@ class AsyncAgentPipeline:
     _comments: deque[AudienceInput] = field(default_factory=deque, init=False)
 
     async def submit(
-        self, audience_input: AudienceInput, *, active_summary: str = ""
+        self,
+        audience_input: AudienceInput,
+        *,
+        active_summary: str = "",
+        recent_turn_context: tuple[str, ...] = (),
     ) -> GateDecision:
         decision = await self.gate.evaluate(
-            audience_input, active_summary=active_summary
+            audience_input,
+            active_summary=active_summary,
+            recent_turn_context=recent_turn_context,
         )
         if decision is GateDecision.DISCARD:
             return decision

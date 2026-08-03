@@ -93,11 +93,16 @@ class JsonAgentGate:
         self._completion = completion
 
     def evaluate(
-        self, audience_input: AudienceInput, *, active_summary: str
+        self,
+        audience_input: AudienceInput,
+        *,
+        active_summary: str,
+        recent_turn_context: tuple[str, ...] = (),
     ) -> GateDecision:
         payload = {
             "input": asdict(audience_input),
             "current_activity_summary": active_summary[:1_000],
+            "recent_turn_context": tuple(item[:1_000] for item in recent_turn_context),
         }
         raw = self._completion.complete_json(
             LLMRequest(
@@ -129,11 +134,16 @@ class AsyncJsonAgentGate:
         self._completion = completion
 
     async def evaluate(
-        self, audience_input: AudienceInput, *, active_summary: str
+        self,
+        audience_input: AudienceInput,
+        *,
+        active_summary: str,
+        recent_turn_context: tuple[str, ...] = (),
     ) -> GateDecision:
         payload = {
             "input": asdict(audience_input),
             "current_activity_summary": active_summary[:1_000],
+            "recent_turn_context": tuple(item[:1_000] for item in recent_turn_context),
         }
         raw = await self._completion.complete_json(
             LLMRequest(
@@ -248,9 +258,13 @@ class MockAgentGate:
         self.recent_inputs = set()
 
     def evaluate(
-        self, audience_input: AudienceInput, *, active_summary: str
+        self,
+        audience_input: AudienceInput,
+        *,
+        active_summary: str,
+        recent_turn_context: tuple[str, ...] = (),
     ) -> GateDecision:
-        _ = active_summary
+        _ = active_summary, recent_turn_context
         normalized = " ".join(audience_input.text.split()).casefold()
         if normalized in self.recent_inputs or normalized in {"嗯", "啊", "测试"}:
             return GateDecision.DISCARD

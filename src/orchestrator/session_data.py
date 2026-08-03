@@ -26,7 +26,11 @@ from orchestrator.profile_vault import FileVoiceProfileVault
 from orchestrator.prompt_composition import PromptSnapshot
 from orchestrator.retrieval import VersionedRetrievalProvider
 from orchestrator.state_snapshots import TaskStateSnapshot
-from orchestrator.transient_context import ContextMaterial, TransientContext
+from orchestrator.transient_context import (
+    ContextEntryKind,
+    ContextMaterial,
+    TransientContext,
+)
 from orchestrator.voice_profile_service import VoiceProfileService
 
 
@@ -140,6 +144,34 @@ class SessionDataState:
 
     def reset_context(self) -> None:
         _ = self.context.reset()
+
+    @property
+    def recent_turn_context(self) -> tuple[str, ...]:
+        """Return the accepted audience/agent exchange from the latest turn."""
+        entries = self.context.snapshot.entries
+        latest_input = next(
+            (
+                entry
+                for entry in reversed(entries)
+                if entry.kind is ContextEntryKind.INPUT
+            ),
+            None,
+        )
+        if latest_input is None:
+            return ()
+        response = next(
+            (
+                entry
+                for entry in reversed(entries)
+                if entry.kind is ContextEntryKind.OUTPUT
+                and entry.provenance.turn_id == latest_input.provenance.turn_id
+            ),
+            None,
+        )
+        return (
+            f"用户 - {latest_input.text}",
+            *((f"智能体 - {response.text}",) if response is not None else ()),
+        )
 
     def clear_session(self) -> None:
         """Erase all in-memory session-owned mutable state before disk cleanup."""

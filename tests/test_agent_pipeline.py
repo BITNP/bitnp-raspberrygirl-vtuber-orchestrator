@@ -21,9 +21,13 @@ class _Gate:
     discarded: set[str]
 
     def evaluate(
-        self, audience_input: AudienceInput, *, active_summary: str
+        self,
+        audience_input: AudienceInput,
+        *,
+        active_summary: str,
+        recent_turn_context: tuple[str, ...] = (),
     ) -> GateDecision:
-        _ = active_summary
+        _ = active_summary, recent_turn_context
         return (
             GateDecision.DISCARD
             if audience_input.text in self.discarded
