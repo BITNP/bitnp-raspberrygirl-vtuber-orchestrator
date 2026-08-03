@@ -34,6 +34,7 @@ def result_is_current(record: TaskRecord | None, fence: TaskResultFence) -> bool
         request.session_id == fence.session_id
         and request.turn_id == fence.turn_id
         and request.snapshot_revision == fence.revision
+        and request.cancellation_epoch == fence.cancellation_epoch
         and int(request.deadline_ms) >= fence.now_ms
     )
 

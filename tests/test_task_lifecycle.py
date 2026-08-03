@@ -45,6 +45,15 @@ def test_result_fence_rejects_cancelled_or_late_provider_work() -> None:
     assert not result_is_current(registry.task(task_id), fence)
 
 
+def test_result_fence_rejects_a_different_cancellation_epoch() -> None:
+    registry, task_id = _running_record()
+    fence = TaskResultFence(
+        SessionId("session-1"), TurnId("turn-1"), StateRevision(2), 1, 100
+    )
+
+    assert not result_is_current(registry.task(task_id), fence)
+
+
 def test_registry_can_mark_provider_failure_terminal() -> None:
     registry, task_id = _running_record()
     record = registry.fail(task_id, reason="provider_unavailable")

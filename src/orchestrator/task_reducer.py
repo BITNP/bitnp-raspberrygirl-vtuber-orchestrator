@@ -30,6 +30,8 @@ class TaskResult:
 
     effect: TaskEffect
 
+    cancellation_epoch: int = 0
+
 
 @unique
 class TaskResultRejection(StrEnum):
@@ -169,5 +171,8 @@ def _result_rejection(
 
     if result.snapshot_revision != record.request.snapshot_revision:
         return TaskResultRejection.STALE_REVISION
+
+    if result.cancellation_epoch != record.request.cancellation_epoch:
+        return TaskResultRejection.CANCELLED
 
     return None

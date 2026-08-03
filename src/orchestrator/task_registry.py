@@ -95,6 +95,8 @@ class TaskRequest:
 
     kind: TaskKind
 
+    cancellation_epoch: int = 0
+
     retry_attempt: int = 0
 
     data_snapshot: TaskStateSnapshot = field(default_factory=TaskStateSnapshot.initial)

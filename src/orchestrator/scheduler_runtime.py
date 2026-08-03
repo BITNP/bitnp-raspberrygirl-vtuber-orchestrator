@@ -1965,6 +1965,8 @@ class SessionRuntime:
         return self.interaction_ingress.data.task_snapshot
 
     def _admit_task(self, request: TaskRequest) -> TaskRegistrationResult:
+        if request.cancellation_epoch != int(self.cancellation_epoch):
+            return TaskRegistrationRejected(TaskRegistrationRejection.STALE_SNAPSHOT)
         rejection = scheduling_rejection(request, self.scheduler.snapshot)
 
         if rejection is not None:
