@@ -51,6 +51,7 @@ from orchestrator.streaming_endpoint import (
     StreamEndpointer,
 )
 from orchestrator.transport_hub import (
+    L16_FRAME_BYTES,
     RTP_HEADER_BYTES,
     RTP_PAYLOAD_TYPE,
     RTP_V2_HEADER,
@@ -706,6 +707,18 @@ class OnsiteExplainerBridge:
         supersede playback without leaving the task pending forever.
         """
         cancellation = CancellationToken()
+        stream_synthesis = await asyncio.to_thread(
+            self.stream_synthesize, text, cancellation
+        )
+        if stream_synthesis is not None:
+            return await self._speak_streaming_agent_plan(
+                stream,
+                epoch,
+                turn_id,
+                stream_synthesis,
+                cancellation,
+                output_started,
+            )
         chunks = await asyncio.to_thread(self.synthesize, text, cancellation)
         output_epoch = self.allocate_agent_plan_output(stream, epoch, turn_id)
         if not chunks or output_epoch is None:
@@ -723,6 +736,79 @@ class OnsiteExplainerBridge:
             delay = deadline - loop.time()
             if delay > 0:
                 await asyncio.sleep(delay)
+        await self.output_finished(stream, output_epoch)
+        return True
+
+    async def _speak_streaming_agent_plan(
+        self,
+        stream: StreamKey,
+        epoch: CancellationEpoch,
+        turn_id: str,
+        synthesis: Iterator[Pcm16leChunk],
+        cancellation: CancellationToken,
+        output_started: AgentPlanOutputStarted,
+    ) -> bool:
+        """Start RTP playback as soon as SSE has produced one valid frame."""
+        packetizer: TtsPcmRtpPacketizer | None = None
+        output_epoch: CancellationEpoch | None = None
+        committed = False
+        loop = asyncio.get_running_loop()
+        deadline = loop.time()
+
+        async def emit(packets: tuple[bytes, ...]) -> bool:
+            nonlocal committed, deadline
+            if not packets:
+                return True
+            if output_epoch is None:
+                return False
+            if not committed:
+                committed = output_started()
+                if not committed:
+                    return False
+            for packet in packets:
+                await self.output(stream, output_epoch, packet)
+                deadline += 0.02
+                delay = deadline - loop.time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+            return True
+
+        buffered = bytearray()
+        try:
+            while not cancellation.cancelled:
+                chunk = await asyncio.to_thread(next, synthesis, None)
+                if chunk is None:
+                    break
+                buffered.extend(chunk.data)
+                if len(buffered) < L16_FRAME_BYTES:
+                    continue
+                if packetizer is None:
+                    output_epoch = self.allocate_agent_plan_output(stream, epoch, turn_id)
+                    if output_epoch is None:
+                        return False
+                    packetizer = TtsPcmRtpPacketizer(stream, output_epoch)
+                packets = packetizer.push(Pcm16leChunk(bytes(buffered)))
+                buffered.clear()
+                if not await emit(packets):
+                    return False
+            if cancellation.cancelled:
+                return False
+            if packetizer is None:
+                if not buffered:
+                    return False
+                output_epoch = self.allocate_agent_plan_output(stream, epoch, turn_id)
+                if output_epoch is None:
+                    return False
+                packetizer = TtsPcmRtpPacketizer(stream, output_epoch)
+            packets = packetizer.push(Pcm16leChunk(bytes(buffered))) + packetizer.finish()
+            if not await emit(packets):
+                return False
+        finally:
+            close = getattr(synthesis, "close", None)
+            if close is not None:
+                await asyncio.to_thread(close)
+        if not committed or output_epoch is None:
+            return False
         await self.output_finished(stream, output_epoch)
         return True
 

@@ -268,6 +268,68 @@ def test_tts_logs_only_summaries_for_reference_audio_and_response(
     assert response_payload.decode() not in log_output
 
 
+def test_tts_sse_uses_unbuffered_openai_streaming_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: an SSE response wrapper whose events are exposed only through the
+    # OpenAI client's unbuffered streaming surface.
+
+    adapter = VllmOmniTTSAdapter(
+        endpoint="http://127.0.0.1:8001/v1",
+        model="vllm-omni",
+        capability="streaming_sse",
+    )
+    calls: list[dict[str, object]] = []
+    pcm_24khz = base64.b64encode(b"\x10\x20" * 480).decode()
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+        def iter_lines(self) -> list[str]:
+            return [
+                f'data: {{"type":"speech.audio.delta","response_format":"pcm","audio":"{pcm_24khz}"}}',
+                'data: {"type":"speech.audio.done"}',
+            ]
+
+    def create_speech(**kwargs: object) -> Response:
+        calls.append(kwargs)
+        return Response()
+
+    client = SimpleNamespace(
+        audio=SimpleNamespace(
+            speech=SimpleNamespace(
+                with_streaming_response=SimpleNamespace(create=create_speech)
+            )
+        ),
+        close=lambda: None,
+    )
+    monkeypatch.setattr(VllmOmniTTSAdapter, "_client", lambda _adapter: client)
+
+    # When: the adapter consumes provider SSE.
+
+    chunks = tuple(
+        adapter.stream_pcm16le(
+            text="讲解",
+            voice="raspberry",
+            ref_audio="file:///voice.wav",
+            ref_text="参考文本",
+        )
+    )
+
+    # Then: it selected the non-buffering OpenAI surface and emitted PCM.
+
+    assert len(chunks) == 1
+    assert len(chunks[0].data) == 640
+    assert calls[0]["stream_format"] == "sse"
+
+
 def test_media_adapters_retain_configured_ca_path_for_provider_requests(
     ca_path: Path,
 ) -> None:

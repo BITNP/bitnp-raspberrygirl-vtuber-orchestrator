@@ -459,9 +459,11 @@ class VllmOmniTTSAdapter:
         _log_tts_request(speech)
         client = self._client()
         release = _bind_cancellation(cancellation, client.close)
-        response = None
         try:
-            response = client.audio.speech.create(
+            # ``audio.speech.create`` buffers the complete HTTP response even
+            # when the server selects SSE.  The streaming wrapper is required
+            # to expose each event as it arrives from vLLM-Omni.
+            with client.audio.speech.with_streaming_response.create(
                 model=speech.json["model"],
                 input=speech.json["input"],
                 voice=cast("str", cast("object", NOT_GIVEN)),
@@ -470,28 +472,28 @@ class VllmOmniTTSAdapter:
                 stream_format="sse",
                 extra_body={**speech.extra_body, "stream": True},
                 timeout=self.timeout_seconds,
-            )
-            response_release = _bind_cancellation(cancellation, response.close)
-            try:
-                done = False
-                resampler = _Pcm24khzTo16khzResampler()
-                for line in response.iter_lines():
-                    if cancellation is not None and cancellation.cancelled:
-                        return
-                    data = _sse_data(line)
-                    if data is None:
-                        continue
-                    chunk = _normalize_tts_sse(data)
-                    if chunk is None:
-                        done = True
-                        break
-                    converted = resampler.push(chunk)
-                    if converted:
-                        yield Pcm16leChunk(converted)
-                if (cancellation is None or not cancellation.cancelled) and not done:
-                    raise ProviderResponseError(stage="tts", reason="missing_done")
-            finally:
-                response_release()
+            ) as response:
+                response_release = _bind_cancellation(cancellation, response.close)
+                try:
+                    done = False
+                    resampler = _Pcm24khzTo16khzResampler()
+                    for line in response.iter_lines():
+                        if cancellation is not None and cancellation.cancelled:
+                            return
+                        data = _sse_data(line)
+                        if data is None:
+                            continue
+                        chunk = _normalize_tts_sse(data)
+                        if chunk is None:
+                            done = True
+                            break
+                        converted = resampler.push(chunk)
+                        if converted:
+                            yield Pcm16leChunk(converted)
+                    if (cancellation is None or not cancellation.cancelled) and not done:
+                        raise ProviderResponseError(stage="tts", reason="missing_done")
+                finally:
+                    response_release()
         except (
             APIConnectionError,
             APITimeoutError,
@@ -503,8 +505,6 @@ class VllmOmniTTSAdapter:
                 return
             raise _tts_provider_error(error) from error
         finally:
-            if response is not None:
-                response.close()
             release()
             client.close()
 

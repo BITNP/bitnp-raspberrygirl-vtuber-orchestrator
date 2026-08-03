@@ -5,6 +5,7 @@ import io
 import json
 import threading
 import wave
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,7 @@ from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_hub import RtpHub
 from orchestrator.transport_runtime import ControlHandler, TransportRuntime
+from orchestrator.tts_rtp import Pcm16leChunk
 
 if TYPE_CHECKING:
     from orchestrator.json_boundary import JsonValue
@@ -121,6 +123,41 @@ class _Tts:
         _ = (text, voice, ref_audio, ref_text, cancellation)
 
         return SynthesizedAudio(_wav(b"\x10\x20" * 320), "audio/wav")
+
+
+@dataclass(slots=True)
+class _StreamingTts:
+    first_chunk_ready: threading.Event = field(default_factory=threading.Event)
+    release_second_chunk: threading.Event = field(default_factory=threading.Event)
+
+    capability: str = "streaming_sse"
+
+    def stream_pcm16le(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> Iterator[Pcm16leChunk]:
+        _ = (text, voice, ref_audio, ref_text, cancellation)
+        self.first_chunk_ready.set()
+        yield Pcm16leChunk(b"\x10\x20" * 320)
+        _ = self.release_second_chunk.wait(timeout=1.0)
+        yield Pcm16leChunk(b"\x30\x40" * 320)
+
+    def synthesize(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> SynthesizedAudio:
+        _ = (text, voice, ref_audio, ref_text, cancellation)
+        raise AssertionError("streaming_sse must not fall back to full-clip synthesis")
 
 
 def test_runtime_processes_cancellation_while_provider_runs_and_drops_stale_rtp() -> (
@@ -231,6 +268,56 @@ def test_mic_source_disconnect_finalizes_active_streaming_utterance() -> None:
 def test_agent_plan_tts_uses_allocated_output_epoch_after_prior_playback() -> None:
 
     asyncio.run(_agent_plan_output_epoch_proof())
+
+
+def test_agent_plan_tts_streams_first_rtp_frame_before_sse_completes() -> None:
+
+    asyncio.run(_agent_plan_streaming_proof())
+
+
+async def _agent_plan_streaming_proof() -> None:
+    # Given: an SSE provider that deliberately holds its second audio chunk.
+
+    bridge = _bridge(_DelayedAsr())
+    tts = _StreamingTts()
+    bridge.tts = tts
+    packets: list[bytes] = []
+    started = False
+
+    async def output(_stream: StreamKey, _epoch: CancellationEpoch, packet: bytes) -> None:
+        packets.append(packet)
+
+    def output_started() -> bool:
+        nonlocal started
+        started = True
+        return True
+
+    bridge.set_output_callback(output)
+    task = asyncio.create_task(
+        bridge.speak_agent_plan(
+            StreamKey("session-streaming", "stream-streaming"),
+            "agent reply",
+            CancellationEpoch(0),
+            "turn-streaming",
+            output_started,
+        )
+    )
+
+    # When: the first full 20 ms PCM frame has arrived but the SSE response is
+    # still blocked before its second chunk.
+
+    _ = await asyncio.to_thread(tts.first_chunk_ready.wait)
+    await asyncio.sleep(0)
+
+    # Then: TTS is already committed and its first RTP frame has been emitted.
+
+    assert started is True
+    assert len(packets) == 1
+    assert task.done() is False
+
+    tts.release_second_chunk.set()
+
+    assert await task is True
 
 
 async def _agent_plan_output_epoch_proof() -> None:
