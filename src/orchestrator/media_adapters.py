@@ -490,7 +490,10 @@ class VllmOmniTTSAdapter:
                         converted = resampler.push(chunk)
                         if converted:
                             yield Pcm16leChunk(converted)
-                    if (cancellation is None or not cancellation.cancelled) and not done:
+                    if (
+                        (cancellation is None or not cancellation.cancelled)
+                        and not done
+                    ):
                         raise ProviderResponseError(stage="tts", reason="missing_done")
                 finally:
                     response_release()

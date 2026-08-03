@@ -5,7 +5,6 @@ import io
 import json
 import threading
 import wave
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -26,6 +25,8 @@ from orchestrator.transport_runtime import ControlHandler, TransportRuntime
 from orchestrator.tts_rtp import Pcm16leChunk
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from orchestrator.json_boundary import JsonValue
     from orchestrator.provider_streaming import ProviderCancellationHandle
 
@@ -157,7 +158,8 @@ class _StreamingTts:
         cancellation: ProviderCancellationHandle | None = None,
     ) -> SynthesizedAudio:
         _ = (text, voice, ref_audio, ref_text, cancellation)
-        raise AssertionError("streaming_sse must not fall back to full-clip synthesis")
+        message = "streaming_sse must not fall back to full-clip synthesis"
+        raise AssertionError(message)
 
 
 def test_runtime_processes_cancellation_while_provider_runs_and_drops_stale_rtp() -> (
@@ -284,7 +286,9 @@ async def _agent_plan_streaming_proof() -> None:
     packets: list[bytes] = []
     started = False
 
-    async def output(_stream: StreamKey, _epoch: CancellationEpoch, packet: bytes) -> None:
+    async def output(
+        _stream: StreamKey, _epoch: CancellationEpoch, packet: bytes
+    ) -> None:
         packets.append(packet)
 
     def output_started() -> bool:
