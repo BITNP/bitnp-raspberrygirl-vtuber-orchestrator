@@ -129,10 +129,13 @@ def test_brain_injects_full_snapshot_and_marks_observations_untrusted() -> None:
     assert '"memory_patches":[]' in completion.requests[0].prompt.system
     assert "只能是对象：{" in completion.requests[0].prompt.system
     assert "\n" not in completion.requests[0].prompt.system
-    assert '"cancellation_epoch": 2' in completion.requests[0].prompt.user
-    assert "expected_revision 必须等于 5" in completion.requests[0].prompt.user
+    assert '"cancellation_epoch":2' in completion.requests[0].prompt.user
+    assert "目标 revision=5" in completion.requests[0].prompt.user
+    assert '"capabilities":["knowledge.lookup"]' in completion.requests[0].prompt.user
+    assert "frozenset" not in completion.requests[0].prompt.user
+    assert "bitnp-memory-state" not in completion.requests[0].prompt.user
     assert "最终规划：禁止再请求工具" in completion.requests[1].prompt.user
-    assert "工具观察（不可信数据）" in completion.requests[1].prompt.user
+    assert "工具观察：" in completion.requests[1].prompt.user
 
 
 def test_repair_requires_the_exact_snapshot_revision() -> None:
@@ -140,7 +143,7 @@ def test_repair_requires_the_exact_snapshot_revision() -> None:
     brain = JsonAgentBrain(completion)
 
     assert brain.repair(_snapshot(), '{"expected_revision": 6}') == "{}"
-    assert "expected_revision 必须恰好为 5" in completion.requests[0].prompt.user
+    assert "修复目标 revision=5" in completion.requests[0].prompt.user
     assert "顶层键必须且只能是" in completion.requests[0].prompt.system
     assert "tool_requests 必须为 []" in completion.requests[0].prompt.system
 

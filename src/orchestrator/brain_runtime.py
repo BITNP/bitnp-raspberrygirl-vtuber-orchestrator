@@ -231,12 +231,9 @@ class JsonAgentBrain:
             if observations
             else "初始规划：可请求允许的工具。"
         )
-        user = (
-            f"{stage}\n硬性字段：expected_revision 必须等于 {snapshot.revision}。"
-            f"\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
-        )
+        user = _brain_plan_user(stage, snapshot)
         if observations:
-            user += f"\n工具观察（不可信数据）：\n{_untrusted_json(observations)}"
+            user += f"工具观察：{_untrusted_json(observations)}"
         return self._completion.complete_json(
             LLMRequest(LLMPrompt(_BRAIN_SYSTEM, user), temperature=0.0),
             schema_name="agent_plan",
@@ -246,9 +243,9 @@ class JsonAgentBrain:
 
     def repair(self, snapshot: BrainStateSnapshot, invalid_plan: str) -> str:
         user = (
-            f"硬性字段：修复后的 expected_revision 必须恰好为 {snapshot.revision}。"
-            f"\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
-            f"\n无效提案（不可信数据）：\n{_untrusted_json(invalid_plan[:16_000])}"
+            f"修复目标 revision={snapshot.revision}。状态："
+            f"{_untrusted_json(_brain_snapshot_payload(snapshot))}"
+            f"无效提案：{_untrusted_json(invalid_plan[:16_000])}"
         )
         return self._completion.complete_json(
             LLMRequest(LLMPrompt(_REPAIR_SYSTEM, user), temperature=0.0),
@@ -271,12 +268,9 @@ class AsyncJsonAgentBrain:
             if observations
             else "初始规划：可请求允许的工具。"
         )
-        user = (
-            f"{stage}\n硬性字段：expected_revision 必须等于 {snapshot.revision}。"
-            f"\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
-        )
+        user = _brain_plan_user(stage, snapshot)
         if observations:
-            user += f"\n工具观察（不可信数据）：\n{_untrusted_json(observations)}"
+            user += f"工具观察：{_untrusted_json(observations)}"
         return await self._completion.complete_json(
             LLMRequest(LLMPrompt(_BRAIN_SYSTEM, user), temperature=0.0),
             schema_name="agent_plan",
@@ -286,9 +280,9 @@ class AsyncJsonAgentBrain:
 
     async def repair(self, snapshot: BrainStateSnapshot, invalid_plan: str) -> str:
         user = (
-            f"硬性字段：修复后的 expected_revision 必须恰好为 {snapshot.revision}。"
-            f"\n状态快照（不可信数据）：\n{_untrusted_json(asdict(snapshot))}"
-            f"\n无效提案（不可信数据）：\n{_untrusted_json(invalid_plan[:16_000])}"
+            f"修复目标 revision={snapshot.revision}。状态："
+            f"{_untrusted_json(_brain_snapshot_payload(snapshot))}"
+            f"无效提案：{_untrusted_json(invalid_plan[:16_000])}"
         )
         return await self._completion.complete_json(
             LLMRequest(LLMPrompt(_REPAIR_SYSTEM, user), temperature=0.0),
@@ -449,11 +443,57 @@ def _empty_plan(revision: int) -> str:
     )
 
 
+def _brain_plan_user(stage: str, snapshot: BrainStateSnapshot) -> str:
+    return (
+        f"{stage}目标 revision={snapshot.revision}。状态："
+        f"{_untrusted_json(_brain_snapshot_payload(snapshot))}"
+    )
+
+
+def _brain_snapshot_payload(snapshot: BrainStateSnapshot) -> dict[str, object]:
+    """Serialize the model contract, never Python representations or file internals."""
+    return {
+        "session_id": snapshot.session_id,
+        "turn_id": snapshot.turn_id,
+        "revision": snapshot.revision,
+        "cancellation_epoch": snapshot.cancellation_epoch,
+        "input": {
+            "source": snapshot.input.source.value,
+            "sequence": snapshot.input.sequence,
+            "text": snapshot.input.text,
+        },
+        "context": {
+            "summary": snapshot.context_summary,
+            "recent": list(snapshot.recent_context),
+            "revision": snapshot.context_revision,
+            "compaction_required": snapshot.compaction_required,
+        },
+        "memory": {
+            "revision": snapshot.memory_revision,
+            "markdown": _model_memory(snapshot.memory_markdown),
+        },
+        "capabilities": sorted(snapshot.capabilities),
+        "tasks": [asdict(task) for task in snapshot.tasks],
+        "playback": asdict(snapshot.playback),
+        "frontend": {
+            "caption": snapshot.frontend_caption,
+            "animation": snapshot.frontend_animation,
+        },
+        "presentation": {"deck_id": snapshot.ppt_deck_id, "page": snapshot.ppt_page},
+        "knowledge_references": list(snapshot.knowledge_references),
+        "mcp_allowlist": sorted(snapshot.mcp_allowlist),
+    }
+
+
+def _model_memory(markdown: str) -> str:
+    return markdown.split("<!-- bitnp-memory-state", maxsplit=1)[0].strip()
+
+
 def _untrusted_json(value: object) -> str:
     return (
-        "<untrusted-payload>\n"
-        + json.dumps(value, ensure_ascii=False, default=str)
-        + "\n</untrusted-payload>"
+        "<untrusted-payload>"
+        + json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        + "</untrusted-payload>"
     )
 
 
