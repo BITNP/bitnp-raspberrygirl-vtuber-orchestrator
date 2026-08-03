@@ -160,6 +160,30 @@ class TaskRegistry:
     def task(self, task_id: TaskId) -> TaskRecord | None:
         return self._records.get(task_id)
 
+    def clear_terminal_tombstones(self) -> tuple[TaskRecord, ...]:
+        """Remove only terminal task records during explicit session cleanup.
+
+        Until this method is called, terminal records intentionally remain as
+        tombstones: they preserve idempotency and make late provider callbacks
+        deterministically rejectable.
+        """
+        terminal = tuple(
+            record
+            for record in self._records.values()
+            if record.state
+            in {
+                TaskState.CANCELLED,
+                TaskState.SUPERSEDED,
+                TaskState.TIMED_OUT,
+                TaskState.COMPLETED,
+                TaskState.FAILED,
+            }
+        )
+        for record in terminal:
+            del self._records[record.request.task_id]
+            del self._idempotency[record.request.idempotency_key]
+        return terminal
+
     def register(self, request: TaskRequest) -> TaskRegistrationResult:
         existing_task_id = self._idempotency.get(request.idempotency_key)
 

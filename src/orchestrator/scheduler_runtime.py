@@ -1824,6 +1824,7 @@ class SessionRuntime:
         self._voice_evidence_ranges.clear()
         self.interaction_ingress.data.clear_session()
         self.interaction_ingress.clear_session_data()
+        _ = self.task_registry.clear_terminal_tombstones()
         self._ended = True
         return self._interaction_outcome(
             correlation, "session_ended", accepted=True, task_id=None

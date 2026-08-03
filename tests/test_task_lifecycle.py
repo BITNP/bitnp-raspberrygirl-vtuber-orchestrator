@@ -60,3 +60,12 @@ def test_registry_can_mark_provider_failure_terminal() -> None:
     assert record is not None
     assert record.state.value == "failed"
     assert registry.claim(task_id) is None
+
+
+def test_terminal_task_is_retained_until_explicit_tombstone_cleanup() -> None:
+    registry, task_id = _running_record()
+    assert registry.cancel(task_id, reason="interrupt") is not None
+    assert registry.task(task_id) is not None
+    removed = registry.clear_terminal_tombstones()
+    assert tuple(record.request.task_id for record in removed) == (task_id,)
+    assert registry.task(task_id) is None
