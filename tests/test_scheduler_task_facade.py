@@ -2,16 +2,21 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import replace
+from typing import cast
 
 from orchestrator.agent_pipeline import (
     AgentPipeline,
+    AsyncAgentPipeline,
     BrainStateSnapshot,
     FrontendOperation,
     GateDecision,
     MediaOperation,
 )
 from orchestrator.ids import SegmentId, SessionId, TraceId, TurnId
+from orchestrator.intent_router import IntentRouter
 from orchestrator.interactions import CommentProposal
+from orchestrator.response_contracts import ResponseProposal
+from orchestrator.response_coordinator import AsyncResponseCoordinator
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import EventCorrelation, EventSequence, StateRevision
 from orchestrator.state_snapshots import MemoryRevision
@@ -229,6 +234,34 @@ def test_runtime_commits_tts_before_paced_playback_can_be_superseded() -> None:
     assert first_task.state is TaskState.COMPLETED
 
 
+def test_async_response_is_registry_owned_before_it_can_admit_tts() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-async-response"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _AsyncResponseBrain(), IntentRouter(()), _AsyncNoTools()
+        ),
+    )
+    correlation = EventCorrelation(
+        TraceId("async-response"), SessionId("session-async-response"), EventSequence(1)
+    )
+
+    outcome = asyncio.run(
+        runtime.receive_comment_async(CommentProposal("问题", correlation))
+    )
+
+    assert outcome.accepted
+    records = runtime.task_registry.records
+    assert records[0].request.task_id == TaskId("response-llm-turn-0001")
+    assert records[0].state is TaskState.COMPLETED
+    assert records[1].request.parent_task_id == records[0].request.task_id
+    assert records[1].state is TaskState.RUNNING
+
+
 def test_runtime_commits_brain_compaction_against_its_snapshot() -> None:
     pipeline = AgentPipeline(_AcceptGate(), _CompactingBrain(), _NoTools())
     runtime = SessionRuntime.create(
@@ -334,6 +367,24 @@ class _AcceptGate:
     def evaluate(self, *args: object, **kwargs: object) -> GateDecision:
         _ = args, kwargs
         return GateDecision.ACCEPT
+
+
+class _AsyncAcceptPipeline:
+    async def submit(self, *args: object, **kwargs: object) -> GateDecision:
+        _ = args, kwargs
+        return GateDecision.ACCEPT
+
+
+class _AsyncResponseBrain:
+    async def respond(self, *args: object, **kwargs: object) -> ResponseProposal:
+        _ = args, kwargs
+        return ResponseProposal("answer", "answer")
+
+
+class _AsyncNoTools:
+    async def execute(self, *args: object, **kwargs: object) -> str | None:
+        _ = args, kwargs
+        return None
 
 
 class _PlanBrain:

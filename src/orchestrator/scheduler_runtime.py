@@ -704,6 +704,23 @@ class SessionRuntime:
             allowed_expressions=frozenset(),
             replacement=False,
         )
+        response_task_id = TaskId(f"response-llm-{turn_id}")
+        scheduled = self.schedule_task(
+            TaskRequest(
+                task_id=response_task_id,
+                session_id=envelope.session_id,
+                turn_id=envelope.turn_id,
+                parent_task_id=None,
+                deadline_ms=TaskDeadlineMs(envelope.deadline_ms),
+                snapshot_revision=envelope.revision,
+                idempotency_key=IdempotencyKey(str(response_task_id)),
+                kind=TaskKind.INTERACTIVE,
+            ),
+            correlation,
+        )
+        if not scheduled.accepted or self.executor.claim(response_task_id) is None:
+            _LOGGER.debug("response_task_not_admitted turn=%s", turn_id)
+            return
         try:
             response = await coordinator.respond(
                 snapshot,
@@ -716,10 +733,30 @@ class SessionRuntime:
                 ),
             )
         except ResponseSupersededError:
+            _ = self.cancel_task(response_task_id, correlation)
             _LOGGER.debug("response_superseded turn=%s", turn_id)
             return
+        except (OSError, TimeoutError, ValueError):
+            _ = self.task_registry.fail(
+                response_task_id, reason="response_provider_failed"
+            )
+            _LOGGER.exception("response_provider_failed turn=%s", turn_id)
+            return
+        accepted = self.reduce_task(
+            TaskResult(
+                response_task_id,
+                envelope.session_id,
+                envelope.turn_id,
+                envelope.revision,
+                TaskEffect("response.proposed", response.proposal.reply[:240]),
+            ),
+            correlation,
+        )
+        if not accepted.accepted:
+            _LOGGER.debug("response_result_rejected turn=%s", turn_id)
+            return
         self._apply_coordinated_response(
-            response, audience_input, envelope, correlation
+            response, audience_input, envelope, correlation, response_task_id
         )
 
     def _apply_coordinated_response(
@@ -728,6 +765,7 @@ class SessionRuntime:
         audience_input: BrainAudienceInput,
         envelope: ExecutionEnvelope,
         correlation: EventCorrelation,
+        parent_task_id: TaskId,
     ) -> None:
         parsed = parse_inline_cues(
             response.proposal.reply,
@@ -750,7 +788,7 @@ class SessionRuntime:
                 task_id=task_id,
                 session_id=self.scheduler.snapshot.session_id,
                 turn_id=envelope.turn_id,
-                parent_task_id=None,
+                parent_task_id=parent_task_id,
                 deadline_ms=TaskDeadlineMs(envelope.deadline_ms),
                 snapshot_revision=envelope.revision,
                 idempotency_key=IdempotencyKey(str(task_id)),
