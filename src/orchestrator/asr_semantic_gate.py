@@ -7,6 +7,8 @@ from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 _INSTRUCTION: Final = (
     "判断这条已完成的语音输入是否应开启有意义的对话轮次。"
     "若当前正在播放回答, 只有用户明确要求停止、纠正、提问或切换话题时才返回 interrupt;"
+    "执行回声门控: 若输入与上一轮输出或当前播放回答的任意部分重合,"
+    "该输入是播放声音被 ASR 识别, 必须返回 discard;"
     "回声、附和、无意义片段和误识别返回 discard。"
     '仅返回 JSON 对象 {"decision":"accept"|"interrupt"|"discard"}。'
 )

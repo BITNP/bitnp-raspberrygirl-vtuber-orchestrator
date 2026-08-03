@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator import onsite_bridge
+from orchestrator.asr_semantic_gate import AsyncAsrSemanticGate
 from orchestrator.config import load_config_from_env
 from orchestrator.llm import VllmOmniTTSAdapter
 from orchestrator.onsite_bridge import OnsiteBridgeConfigError, build_onsite_bridge
@@ -73,6 +74,7 @@ def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
     assert bridge.asr.transcribe(
         audio=b"", filename="retired.wav", received_at_ms=0, segment_id="retired", seq=0
     ) is None
+    assert isinstance(bridge.asr_gate, AsyncAsrSemanticGate)
 
 
 def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(

@@ -2,6 +2,7 @@ import asyncio
 
 from orchestrator.asr_semantic_gate import (
     AsrGateDecision,
+    AsrGateRequest,
     AsrSemanticGate,
     AsyncAsrSemanticGate,
 )
@@ -55,6 +56,18 @@ def test_gate_only_allows_interrupt_while_audio_is_playing() -> None:
 
     assert gate.evaluate("请停一下") is AsrGateDecision.DISCARD
     assert gate.evaluate("请停一下", is_playing=True) is AsrGateDecision.INTERRUPT
+
+
+def test_gate_instruction_discards_asr_echo_overlapping_previous_output() -> None:
+    request = AsrGateRequest(
+        transcript="BitNet 使用一位参数",
+        active_answer_excerpt="BitNet 使用一位参数来降低推理成本。",
+        is_playing=True,
+    )
+
+    assert "回声门控" in request.instruction
+    assert "任意部分重合" in request.instruction
+    assert "必须返回 discard" in request.instruction
 
 
 def test_async_gate_fails_closed_for_non_json_timeout_and_parameter_rejection() -> None:
