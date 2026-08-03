@@ -258,6 +258,7 @@ def test_async_response_is_registry_owned_before_it_can_admit_tts() -> None:
     assert outcome.accepted
     records = runtime.task_registry.records
     assert records[0].request.task_id == TaskId("response-llm-initial-turn-0001")
+    assert records[0].request.cancellation_epoch == 1
     assert records[0].state is TaskState.COMPLETED
     assert records[1].request.parent_task_id == records[0].request.task_id
     assert records[1].state is TaskState.RUNNING

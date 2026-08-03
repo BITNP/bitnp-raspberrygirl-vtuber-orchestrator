@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from time import monotonic_ns
 from typing import Protocol
 
@@ -404,6 +404,11 @@ class SessionRuntime:
             rejections=tuple(self._journal.rejections),
         )
 
+    def _advance_turn_epoch(self) -> None:
+        """Fence and cancel unfinished work before a newer turn can run."""
+        self.cancellation_epoch = CancellationEpoch(int(self.cancellation_epoch) + 1)
+        _ = self.task_registry.cancel_pending(reason="superseded_turn")
+
     def receive_comment(self, proposal: CommentProposal) -> RuntimeOutcome:
         correlation = proposal.correlation
 
@@ -427,6 +432,7 @@ class SessionRuntime:
                 self._correlations.add(correlation)
 
                 accepted_turn = TurnId(turn_id)
+                self._advance_turn_epoch()
 
                 self._journal.dispatches.append(
                     RuntimeDispatch(correlation, accepted_turn)
@@ -488,6 +494,7 @@ class SessionRuntime:
         if not isinstance(outcome, InteractionAccepted) or outcome.turn_id is None:
             return self._reject(correlation, "scheduler_rejected")
         accepted_turn = TurnId(outcome.turn_id)
+        self._advance_turn_epoch()
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
         if coordinator is None:
@@ -783,6 +790,7 @@ class SessionRuntime:
                 envelope.turn_id,
                 envelope.revision,
                 TaskEffect("llm.initial", initial.reply[:240]),
+                envelope.cancellation_epoch,
             ),
             correlation,
         )
@@ -843,6 +851,7 @@ class SessionRuntime:
                             envelope.turn_id,
                             envelope.revision,
                             TaskEffect("tool.observed", tool_output[:240]),
+                            envelope.cancellation_epoch,
                         ),
                         correlation,
                     )
@@ -895,6 +904,7 @@ class SessionRuntime:
                 envelope.turn_id,
                 envelope.revision,
                 TaskEffect("llm.final", final.reply[:240]),
+                envelope.cancellation_epoch,
             ),
             correlation,
         )
@@ -1061,6 +1071,7 @@ class SessionRuntime:
                 record.request.turn_id,
                 record.request.snapshot_revision,
                 TaskEffect("context.compaction", summary[:240]),
+                record.request.cancellation_epoch,
             ),
             correlation,
         )
@@ -1133,13 +1144,17 @@ class SessionRuntime:
         if candidate is None:
             _ = self.task_registry.fail(task_id, reason="memory_candidate_rejected")
             return
+        record = self.task_registry.task(task_id)
+        if record is None:
+            return
         accepted = self.reduce_task(
             TaskResult(
                 task_id,
                 pending.provenance.session_id,
                 pending.provenance.turn_id,
-                self.scheduler.snapshot.revision,
+                record.request.snapshot_revision,
                 TaskEffect("memory.candidate", str(candidate.key)),
+                record.request.cancellation_epoch,
             ),
             correlation,
         )
@@ -1419,6 +1434,7 @@ class SessionRuntime:
                         record.request.turn_id,
                         record.request.snapshot_revision,
                         TaskEffect("tts.emitted", text[:240]),
+                        record.request.cancellation_epoch,
                     ),
                     correlation,
                 ).accepted
@@ -1584,6 +1600,7 @@ class SessionRuntime:
         match transition:
             case TransitionAccepted(accepted_event=accepted_event):
                 self._correlations.add(correlation)
+                self._advance_turn_epoch()
 
                 self._journal.dispatches.append(
                     RuntimeDispatch(correlation, accepted_event.turn_id)
@@ -1649,6 +1666,7 @@ class SessionRuntime:
         if not isinstance(transition, TransitionAccepted):
             return self._reject(correlation, "scheduler_rejected")
         accepted_turn = transition.accepted_event.turn_id
+        self._advance_turn_epoch()
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
         if coordinator is None:
@@ -1813,6 +1831,7 @@ class SessionRuntime:
                 request.turn_id,
                 request.snapshot_revision,
                 TaskEffect("presentation.dispatch", str(intent.command.command_id)),
+                request.cancellation_epoch,
             ),
             correlation,
         )
@@ -1864,6 +1883,7 @@ class SessionRuntime:
                 request.turn_id,
                 request.snapshot_revision,
                 TaskEffect("presentation.dispatch", str(intent.command.command_id)),
+                request.cancellation_epoch,
             ),
             correlation,
         )
@@ -1914,6 +1934,7 @@ class SessionRuntime:
                 request.request.turn_id,
                 request.request.snapshot_revision,
                 TaskEffect("presentation.dispatch", str(intent.command.command_id)),
+                request.request.cancellation_epoch,
             ),
             correlation,
         )
@@ -1980,7 +2001,10 @@ class SessionRuntime:
     def schedule_task(
         self, request: TaskRequest, correlation: EventCorrelation
     ) -> RuntimeOutcome:
-        task_request = with_current_data_snapshot(request, self._task_data_snapshot)
+        task_request = replace(
+            with_current_data_snapshot(request, self._task_data_snapshot),
+            cancellation_epoch=int(self.cancellation_epoch),
+        )
 
         admission = self._admit_task(task_request)
 
