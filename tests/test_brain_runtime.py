@@ -91,6 +91,9 @@ def test_gate_uses_chinese_non_streaming_json_prompt_and_fails_closed() -> None:
     )
     assert gate.evaluate(_input(), active_summary="产品讲解中").value == "discard"
     assert "输入相关性门" in completion.requests[0].prompt.system
+    assert "执行回声门控" in completion.requests[0].prompt.system
+    assert "上一轮智能体输出" in completion.requests[0].prompt.system.replace("\n", "")
+    assert "必须输出 discard" in completion.requests[0].prompt.system
     assert "只能有一个键 decision" in completion.requests[0].prompt.system
     assert '{"decision":"accept"}' in completion.requests[0].prompt.system
     assert "<untrusted-payload>" in completion.requests[0].prompt.user

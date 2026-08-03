@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Protocol, cast, override
 
 from orchestrator.asr_semantic_gate import (
     AsrGateDecision,
-    AsrGateRequest,
     AsrSemanticGate,
     AsyncAsrSemanticGate,
 )
@@ -18,8 +17,6 @@ from orchestrator.funasr_adapter import FunASRWebSocketAdapter
 from orchestrator.llm import (
     AdapterConfigError,
     CancellationToken,
-    LLMPrompt,
-    LLMRequest,
 )
 from orchestrator.media_adapters import (
     MediaAdapterConfigError,
@@ -920,21 +917,6 @@ def build_onsite_bridge(
     def pipeline_factory() -> OrchestratorTurnPipeline:
         return OrchestratorTurnPipeline(adapters=adapters, config=pipeline_config)
 
-    async def complete_asr_gate(request: AsrGateRequest) -> str:
-        return await llm.complete_gate(
-            LLMRequest(
-                LLMPrompt(
-                    system=request.instruction,
-                    user=(
-                        f"已完成语音输入:{request.transcript}\n"
-                        f"上一轮输出或当前播放回答:{request.active_answer_excerpt}\n"
-                        f"正在播放:{request.is_playing}"
-                    ),
-                ),
-                temperature=0.0,
-            )
-        )
-
     return OnsiteExplainerBridge(
         asr=_MicOwnedAsrAdapter(),
         tts=VllmOmniTTSAdapter(
@@ -948,6 +930,6 @@ def build_onsite_bridge(
         voice=voice,
         ref_audio=ref_audio,
         ref_text=ref_text,
-        asr_gate=AsyncAsrSemanticGate(complete_asr_gate),
+        asr_gate=None,
         llm=llm,
     )
