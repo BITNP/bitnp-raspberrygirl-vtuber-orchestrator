@@ -170,9 +170,10 @@ class AsyncOpenAICompatibleLLMRuntime:
         # the returned proposal against this schema before it can cause effects.
         _ = schema
         _LOGGER.debug(
-            "llm_json_request model=%s schema=%s system=%r user=%r",
+            "llm_json_request model=%s schema=%s %s system=%r user=%r",
             self.model,
             schema_name,
+            "json_mode=true thinking=disabled",
             request.prompt.system,
             request.prompt.user,
         )

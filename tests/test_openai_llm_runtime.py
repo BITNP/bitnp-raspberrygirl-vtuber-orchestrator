@@ -215,7 +215,8 @@ def test_async_runtime_logs_complete_json_request_and_response(
 
     messages = [record.getMessage() for record in caplog.records]
     assert (
-        "llm_json_request model=test-model schema=agent_plan "
+        "llm_json_request model=test-model schema=agent_plan json_mode=true "
+        "thinking=disabled "
         "system='系统' user='输入'"
     ) in messages
     assert "llm_json_response model=test-model schema=agent_plan text='{}'" in messages
