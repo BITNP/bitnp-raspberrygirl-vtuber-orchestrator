@@ -64,6 +64,7 @@ if TYPE_CHECKING:
         SegmentId,
         StreamFlush,
     )
+    from orchestrator.task_registry import TaskId
 
 
 type DatagramListener = Callable[[str, int, RtpHub], Awaitable[DatagramSender]]
@@ -201,7 +202,7 @@ class TransportRuntime:
         turn_id: TurnId,
     ) -> None:
         """Deliver a media-admitted timeline without exposing transport internals."""
-        await self._send_caption_timeline(timeline, session_id, turn_id)
+        _ = await self._send_caption_timeline(timeline, session_id, turn_id)
 
     async def receive_onsite_asr_final(
         self, stream: StreamKey, event: ASRAudienceEvent
@@ -248,14 +249,17 @@ class TransportRuntime:
                 return
 
             def timeline_started() -> None:
-                timeline = session_runtime.take_started_timeline(
-                    turn_id, audio_stream_id=f"agent-{turn_id}"
+                scheduled = session_runtime.schedule_started_timeline(
+                    turn_id,
+                    audio_stream_id=f"agent-{turn_id}",
+                    correlation=correlation,
                 )
-                if timeline is None:
+                if scheduled is None:
                     return
+                task_id, timeline = scheduled
                 task = asyncio.create_task(
-                    self._send_caption_timeline(
-                        timeline, session_runtime.scheduler.snapshot.session_id, turn_id
+                    self._run_caption_timeline_delivery(
+                        session_runtime, task_id, timeline, turn_id, correlation
                     )
                 )
                 self._agent_tts_tasks.add(task)
@@ -566,7 +570,7 @@ class TransportRuntime:
         timeline: CaptionTimelineCommand,
         session_id: SessionId,
         turn_id: TurnId,
-    ) -> None:
+    ) -> bool:
         connection = self._frontend_connections.get(str(session_id))
         if connection is None:
             _LOGGER.debug(
@@ -574,7 +578,7 @@ class TransportRuntime:
                 session_id,
                 turn_id,
             )
-            return
+            return False
         previous = self._active_timelines.get(str(session_id))
         if previous is not None and previous[0].timeline_id != timeline.timeline_id:
             await self._cancel_caption_timeline(
@@ -592,8 +596,48 @@ class TransportRuntime:
                 timeline.timeline_id,
                 exc_info=True,
             )
-            return
+            return False
         self._active_timelines[str(session_id)] = (timeline, turn_id)
+        return True
+
+    async def _run_caption_timeline_delivery(
+        self,
+        session_runtime: SessionRuntime,
+        task_id: TaskId,
+        timeline: CaptionTimelineCommand,
+        turn_id: TurnId,
+        correlation: EventCorrelation,
+    ) -> None:
+        """Run frontend delivery as a fenced scheduler task.
+
+        Frontend availability is intentionally independent of audio playback:
+        any delivery failure only closes this task and is never propagated to
+        the Sound/TTS path.
+        """
+        if not session_runtime.caption_timeline_delivery_is_current(task_id):
+            session_runtime.fail_caption_timeline_delivery(task_id, reason="stale")
+            return
+        try:
+            delivered = await self._send_caption_timeline(
+                timeline,
+                session_runtime.scheduler.snapshot.session_id,
+                turn_id,
+            )
+        except (OSError, ValueError):
+            session_runtime.fail_caption_timeline_delivery(
+                task_id, reason="frontend_delivery_failed"
+            )
+            _LOGGER.debug(
+                "caption_timeline_task_failed task=%s", task_id, exc_info=True
+            )
+            return
+        if not delivered:
+            session_runtime.fail_caption_timeline_delivery(
+                task_id, reason="frontend_unavailable"
+            )
+            return
+        if not session_runtime.complete_caption_timeline_delivery(task_id, correlation):
+            return
 
     async def _cancel_caption_timeline(
         self,

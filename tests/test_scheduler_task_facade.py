@@ -12,6 +12,7 @@ from orchestrator.agent_pipeline import (
     GateDecision,
     MediaOperation,
 )
+from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.ids import SegmentId, SessionId, TraceId, TurnId
 from orchestrator.intent_router import IntentRouter, IntentSpec
 from orchestrator.interactions import CommentProposal
@@ -124,6 +125,56 @@ def test_runtime_rejects_result_after_task_capability_is_revoked() -> None:
 
     assert outcome.accepted is False
     cancelled = runtime.task_registry.task(request.task_id)
+    assert cancelled is not None
+    assert cancelled.state is TaskState.CANCELLED
+
+
+def test_started_timeline_delivery_is_a_claimed_and_reducer_fenced_task() -> None:
+    runtime = _runtime()
+    turn_id = runtime.scheduler.snapshot.active_turn_id
+    assert turn_id is not None
+    correlation = _correlation("timeline", 2)
+
+    scheduled = runtime.schedule_caption_timeline_delivery(
+        turn_id,
+        CaptionTimelineCommand(
+            "timeline-1", "带标记的字幕", f"agent-{turn_id}", 1, 96_000
+        ),
+        correlation=correlation,
+    )
+
+    assert scheduled is not None
+    task_id, timeline = scheduled
+    assert timeline.marked_text == "带标记的字幕"
+    record = runtime.task_registry.task(task_id)
+    assert record is not None
+    assert record.state is TaskState.RUNNING
+    assert runtime.caption_timeline_delivery_is_current(task_id)
+    assert runtime.complete_caption_timeline_delivery(task_id, correlation)
+    completed = runtime.task_registry.task(task_id)
+    assert completed is not None
+    assert completed.state is TaskState.COMPLETED
+
+
+def test_new_turn_closes_pending_timeline_delivery_before_frontend_io() -> None:
+    runtime = _runtime()
+    turn_id = runtime.scheduler.snapshot.active_turn_id
+    assert turn_id is not None
+    scheduled = runtime.schedule_caption_timeline_delivery(
+        turn_id,
+        CaptionTimelineCommand(
+            "timeline-1", "旧字幕", f"agent-{turn_id}", 1, 96_000
+        ),
+        correlation=_correlation("timeline", 2),
+    )
+    assert scheduled is not None
+    task_id, _ = scheduled
+
+    newer = runtime.receive_comment(CommentProposal("newer", _correlation("new", 3)))
+
+    assert newer.accepted
+    assert not runtime.caption_timeline_delivery_is_current(task_id)
+    cancelled = runtime.task_registry.task(task_id)
     assert cancelled is not None
     assert cancelled.state is TaskState.CANCELLED
 

@@ -1204,6 +1204,93 @@ class SessionRuntime:
             start_rtp_timestamp=96_000,
         )
 
+    def schedule_started_timeline(
+        self,
+        turn_id: TurnId,
+        *,
+        audio_stream_id: str,
+        correlation: EventCorrelation,
+    ) -> tuple[TaskId, CaptionTimelineCommand] | None:
+        """Claim a short-lived, reducer-fenced frontend timeline delivery.
+
+        Timeline delivery begins only after the media adapter has admitted the
+        first RTP frame.  It is nevertheless an externally-visible asynchronous
+        effect, so it gets the same session/turn/epoch fencing as provider work.
+        """
+        timeline = self.take_started_timeline(turn_id, audio_stream_id=audio_stream_id)
+        if timeline is None:
+            return None
+        return self.schedule_caption_timeline_delivery(
+            turn_id, timeline, correlation=correlation
+        )
+
+    def schedule_caption_timeline_delivery(
+        self,
+        turn_id: TurnId,
+        timeline: CaptionTimelineCommand,
+        *,
+        correlation: EventCorrelation,
+    ) -> tuple[TaskId, CaptionTimelineCommand] | None:
+        """Register a media-admitted timeline delivery for the current turn."""
+        task_id = TaskId(f"caption-timeline-{turn_id}")
+        outcome = self.schedule_task(
+            TaskRequest(
+                task_id=task_id,
+                session_id=self.scheduler.snapshot.session_id,
+                turn_id=turn_id,
+                parent_task_id=None,
+                deadline_ms=TaskDeadlineMs(self.clock() + 5_000),
+                snapshot_revision=self.scheduler.snapshot.revision,
+                idempotency_key=IdempotencyKey(str(task_id)),
+                kind=TaskKind.INTERACTIVE,
+            ),
+            correlation,
+        )
+        if not outcome.accepted or self.executor.claim(task_id) is None:
+            _ = self.cancel_task(task_id, correlation)
+            return None
+        return task_id, timeline
+
+    def caption_timeline_delivery_is_current(self, task_id: TaskId) -> bool:
+        """Check a claimed timeline task immediately before frontend I/O."""
+        record = self.task_registry.task(task_id)
+        if record is None or record.state is not TaskState.RUNNING:
+            return False
+        request = record.request
+        return (
+            request.session_id == self.scheduler.snapshot.session_id
+            and request.turn_id == self.scheduler.snapshot.active_turn_id
+            and request.snapshot_revision == self.scheduler.snapshot.revision
+            and request.data_snapshot == self._task_data_snapshot
+            and request.cancellation_epoch == int(self.cancellation_epoch)
+            and int(request.deadline_ms) >= self.clock()
+            and request.capability_snapshot.issubset(self.agent_capabilities)
+        )
+
+    def complete_caption_timeline_delivery(
+        self, task_id: TaskId, correlation: EventCorrelation
+    ) -> bool:
+        """Commit a successfully delivered timeline through the result gate."""
+        record = self.task_registry.task(task_id)
+        if record is None:
+            return False
+        return self.reduce_task(
+            TaskResult(
+                task_id=task_id,
+                session_id=record.request.session_id,
+                turn_id=record.request.turn_id,
+                snapshot_revision=record.request.snapshot_revision,
+                effect=TaskEffect("caption.timeline.delivered", str(task_id)),
+                cancellation_epoch=record.request.cancellation_epoch,
+                segment_id=record.request.segment_id,
+            ),
+            correlation,
+        ).accepted
+
+    def fail_caption_timeline_delivery(self, task_id: TaskId, *, reason: str) -> None:
+        """Close a delivery task that could not reach the frontend."""
+        _ = self.task_registry.fail(task_id, reason=reason)
+
     def _apply_agent_plan(
         self,
         accepted: PlanAccepted,
