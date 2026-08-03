@@ -97,6 +97,8 @@ class TaskRequest:
 
     cancellation_epoch: int = 0
 
+    capability_snapshot: frozenset[str] = frozenset()
+
     retry_attempt: int = 0
 
     data_snapshot: TaskStateSnapshot = field(default_factory=TaskStateSnapshot.initial)

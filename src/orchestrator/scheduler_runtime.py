@@ -2004,6 +2004,7 @@ class SessionRuntime:
         task_request = replace(
             with_current_data_snapshot(request, self._task_data_snapshot),
             cancellation_epoch=int(self.cancellation_epoch),
+            capability_snapshot=self.agent_capabilities,
         )
 
         admission = self._admit_task(task_request)
@@ -2050,6 +2051,15 @@ class SessionRuntime:
     def reduce_task(
         self, result: TaskResult, correlation: EventCorrelation
     ) -> RuntimeOutcome:
+        record = self.task_registry.task(result.task_id)
+        if (
+            record is not None
+            and not record.request.capability_snapshot.issubset(
+                self.agent_capabilities
+            )
+        ):
+            _ = self.task_registry.cancel(result.task_id, reason="capability_revoked")
+            return self._reject(correlation, "task_capability_revoked")
         outcome = self.task_reducer.reduce(
             result,
             snapshot=self.scheduler.snapshot,

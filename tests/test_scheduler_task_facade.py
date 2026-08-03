@@ -101,6 +101,33 @@ def test_runtime_rejects_stale_result_after_newer_turn_without_commit() -> None:
     assert runtime.observables.task_commits == ()
 
 
+def test_runtime_rejects_result_after_task_capability_is_revoked() -> None:
+    runtime = _runtime()
+    request = _request(runtime)
+    correlation = _correlation("task", 2)
+    assert runtime.schedule_task(request, correlation).accepted
+    record = runtime.task_registry.task(request.task_id)
+    assert record is not None
+    runtime.agent_capabilities = frozenset()
+
+    outcome = runtime.reduce_task(
+        TaskResult(
+            task_id=request.task_id,
+            session_id=request.session_id,
+            turn_id=request.turn_id,
+            snapshot_revision=request.snapshot_revision,
+            effect=TaskEffect("answer", "accepted"),
+            cancellation_epoch=record.request.cancellation_epoch,
+        ),
+        correlation,
+    )
+
+    assert outcome.accepted is False
+    cancelled = runtime.task_registry.task(request.task_id)
+    assert cancelled is not None
+    assert cancelled.state is TaskState.CANCELLED
+
+
 def test_runtime_routes_comment_through_agent_gate_and_brain_snapshot() -> None:
     pipeline = AgentPipeline(_AcceptGate(), _PlanBrain(), _NoTools())
     effects = _Effects()
