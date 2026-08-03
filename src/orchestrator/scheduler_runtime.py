@@ -195,6 +195,14 @@ class _RuntimeJournal:
     rejections: list[RuntimeRejection] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingResponseCommit:
+    provenance: ContextProvenance
+    input_text: str
+    spoken_text: str
+    observation: str | None
+
+
 @dataclass(slots=True)
 class SessionRuntime:
     scheduler: SessionScheduler
@@ -246,6 +254,10 @@ class SessionRuntime:
     _agent_results: list[PlanResult] = field(default_factory=list)
 
     _agent_tts_text: dict[TaskId, str] = field(default_factory=dict)
+
+    _pending_response_commits: dict[TaskId, _PendingResponseCommit] = field(
+        default_factory=dict
+    )
 
     _voice_evidence_ranges: list[tuple[str, int, int]] = field(default_factory=list)
 
@@ -701,25 +713,6 @@ class SessionRuntime:
             sequence=ContextSequence(audience_input.sequence),
             source_id=ContextSourceId(audience_input.trace_id),
         )
-        self.interaction_ingress.data.consider_context(
-            FinalizedInput(provenance, audience_input.text)
-        )
-        if response.observation is not None and response.tool_request is not None:
-            self.interaction_ingress.data.consider_context(
-                ToolObservation(
-                    ContextProvenance(
-                        session_id=provenance.session_id,
-                        turn_id=turn_id,
-                        segment_id=provenance.segment_id,
-                        sequence=provenance.sequence,
-                        source_id=ContextSourceId(f"{audience_input.trace_id}:tool"),
-                    ),
-                    response.observation,
-                )
-            )
-        self.interaction_ingress.data.consider_context(
-            AcceptedOutput(provenance, parsed.spoken_text)
-        )
         task_id = TaskId(f"response-tts-{turn_id}")
         outcome = self.schedule_task(
             TaskRequest(
@@ -736,8 +729,40 @@ class SessionRuntime:
         )
         if outcome.accepted and self.executor.claim(task_id) is not None:
             self._agent_tts_text[task_id] = parsed.spoken_text
+            self._pending_response_commits[task_id] = _PendingResponseCommit(
+                provenance,
+                audience_input.text,
+                parsed.spoken_text,
+                response.observation if response.tool_request is not None else None,
+            )
         else:
             _ = self.cancel_task(task_id, correlation)
+
+    def _commit_response_after_output_started(self, task_id: TaskId) -> None:
+        pending = self._pending_response_commits.pop(task_id, None)
+        if pending is None:
+            return
+        self.interaction_ingress.data.consider_context(
+            FinalizedInput(pending.provenance, pending.input_text)
+        )
+        if pending.observation is not None:
+            self.interaction_ingress.data.consider_context(
+                ToolObservation(
+                    ContextProvenance(
+                        session_id=pending.provenance.session_id,
+                        turn_id=pending.provenance.turn_id,
+                        segment_id=pending.provenance.segment_id,
+                        sequence=pending.provenance.sequence,
+                        source_id=ContextSourceId(
+                            f"{pending.provenance.source_id}:tool"
+                        ),
+                    ),
+                    pending.observation,
+                )
+            )
+        self.interaction_ingress.data.consider_context(
+            AcceptedOutput(pending.provenance, pending.spoken_text)
+        )
 
     def _apply_agent_plan(
         self,
@@ -982,6 +1007,8 @@ class SessionRuntime:
                     ),
                     correlation,
                 ).accepted
+                if committed:
+                    self._commit_response_after_output_started(task_id)
                 return committed
 
             try:
@@ -992,6 +1019,7 @@ class SessionRuntime:
             if not emitted or not committed:
                 _ = self.cancel_task(task_id, correlation)
                 _ = self._agent_tts_text.pop(task_id, None)
+                _ = self._pending_response_commits.pop(task_id, None)
                 return False
             _ = self._agent_tts_text.pop(task_id, None)
             return True
@@ -1225,6 +1253,8 @@ class SessionRuntime:
             _ = self.deck_dispatcher.cancel(command_id)
         self._deck_intents.clear()
         self._active_deck_tasks.clear()
+        self._agent_tts_text.clear()
+        self._pending_response_commits.clear()
         self._voice_evidence_ranges.clear()
         self.interaction_ingress.data.clear_session()
         self.interaction_ingress.clear_session_data()
