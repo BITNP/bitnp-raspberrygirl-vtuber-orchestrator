@@ -181,6 +181,7 @@ def test_async_runtime_uses_documented_gate_and_streaming_parameters() -> None:
     assert captured[0]["stream"] is False
     assert captured[0]["response_format"] == {"type": "json_object"}
     assert captured[0]["thinking"] == {"type": "disabled"}
+    assert captured[0]["max_tokens"] == 32
     assert captured[1]["stream"] is True
     assert events[-1] == LLMFinal(text="hello world", used_fallback=False)
 
@@ -216,7 +217,7 @@ def test_async_runtime_logs_complete_json_request_and_response(
     messages = [record.getMessage() for record in caplog.records]
     assert (
         "llm_json_request model=test-model schema=agent_plan json_mode=true "
-        "thinking=disabled "
+        "thinking=disabled max_tokens=4096 "
         "system='系统' user='输入'"
     ) in messages
     assert "llm_json_response model=test-model schema=agent_plan text='{}'" in messages
@@ -224,6 +225,7 @@ def test_async_runtime_logs_complete_json_request_and_response(
     assert captured[0]["temperature"] == 0.0
     assert captured[0]["thinking"] == {"type": "disabled"}
     assert captured[0]["response_format"] == {"type": "json_object"}
+    assert captured[0]["max_tokens"] == 4096
 
 
 def test_async_gate_discards_rejected_parameters_and_closes_shared_client() -> None:

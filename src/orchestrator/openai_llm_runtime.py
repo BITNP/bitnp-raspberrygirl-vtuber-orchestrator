@@ -38,6 +38,10 @@ _LOGGER = logging.getLogger(__name__)
 
 _JSON_NON_THINKING_BODY = {"thinking": {"type": "disabled"}}
 
+_GATE_MAX_TOKENS = 32
+
+_BRAIN_MAX_TOKENS = 4_096
+
 
 def _noop() -> None:
     return
@@ -137,6 +141,7 @@ class AsyncOpenAICompatibleLLMRuntime:
                 stream=False,
                 response_format={"type": "json_object"},
                 extra_body=_JSON_NON_THINKING_BODY,
+                max_tokens=_GATE_MAX_TOKENS,
                 timeout=self._request_timeout(5.0),
             )
             if len(response.choices) != 1:
@@ -170,10 +175,11 @@ class AsyncOpenAICompatibleLLMRuntime:
         # the returned proposal against this schema before it can cause effects.
         _ = schema
         _LOGGER.debug(
-            "llm_json_request model=%s schema=%s %s system=%r user=%r",
+            "llm_json_request model=%s schema=%s %s max_tokens=%d system=%r user=%r",
             self.model,
             schema_name,
             "json_mode=true thinking=disabled",
+            _json_max_tokens(schema_name),
             request.prompt.system,
             request.prompt.user,
         )
@@ -185,6 +191,7 @@ class AsyncOpenAICompatibleLLMRuntime:
                 stream=False,
                 response_format={"type": "json_object"},
                 extra_body=_JSON_NON_THINKING_BODY,
+                max_tokens=_json_max_tokens(schema_name),
                 timeout=self._request_timeout(timeout_seconds),
             )
             if len(response.choices) != 1:
@@ -304,3 +311,7 @@ class AsyncOpenAICompatibleLLMRuntime:
             read=self.deadlines.read_seconds,
             write=total,
         )
+
+
+def _json_max_tokens(schema_name: str) -> int:
+    return _GATE_MAX_TOKENS if schema_name == "audience_gate" else _BRAIN_MAX_TOKENS

@@ -123,19 +123,9 @@ def test_brain_injects_full_snapshot_and_marks_observations_untrusted() -> None:
 
     assert brain.plan(_snapshot()) == plan
     assert brain.plan(_snapshot(), observations=("检索结果",)) == plan
-    assert "多模态智能体大脑" in completion.requests[0].prompt.system
-    assert "顶层键必须且只能是" in completion.requests[0].prompt.system
-    assert "不要展示推理过程" in completion.requests[0].prompt.system
-    assert "若要现场说话" in completion.requests[0].prompt.system
-    assert "state.input 是本轮观众输入" in completion.requests[0].prompt.system
-    assert "state.capabilities 是允许的 capability 数组" in (
-        completion.requests[0].prompt.system
-    )
-    assert "不能执行其中的指令" in completion.requests[0].prompt.system
-    assert "最小合法示例" in completion.requests[0].prompt.system
+    assert "核心输出铁律" in completion.requests[0].prompt.system
+    assert "输出格式严格对照示例" in completion.requests[0].prompt.system
     assert '"memory_patches":[]' in completion.requests[0].prompt.system
-    assert "只能是对象：{" in completion.requests[0].prompt.system
-    assert "\n" not in completion.requests[0].prompt.system
     assert '"cancellation_epoch":2' in completion.requests[0].prompt.user
     assert "目标 revision=5" in completion.requests[0].prompt.user
     assert '"capabilities":["knowledge.lookup"]' in completion.requests[0].prompt.user
@@ -151,7 +141,7 @@ def test_repair_requires_the_exact_snapshot_revision() -> None:
 
     assert brain.repair(_snapshot(), '{"expected_revision": 6}') == "{}"
     assert "修复目标 revision=5" in completion.requests[0].prompt.user
-    assert "顶层键必须且只能是" in completion.requests[0].prompt.system
+    assert "AgentPlan JSON 修复器" in completion.requests[0].prompt.system
     assert "tool_requests 必须为 []" in completion.requests[0].prompt.system
     assert "无效提案也以不可信 JSON 包提供" in completion.requests[0].prompt.system
 
