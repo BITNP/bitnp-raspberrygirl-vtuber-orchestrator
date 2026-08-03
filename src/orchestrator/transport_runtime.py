@@ -21,6 +21,7 @@ from orchestrator.comment_ingress import (
 from orchestrator.control_ingress import parse_session_control
 from orchestrator.frontend_effects import (
     FrontendEffectDispatcher,
+    send_caption_timeline,
     send_frontend_operation,
 )
 from orchestrator.ids import SessionId, TraceId
@@ -50,6 +51,7 @@ if TYPE_CHECKING:
     from websockets.http11 import Request, Response
 
     from orchestrator.agent_pipeline import FrontendOperation
+    from orchestrator.caption_timeline import CaptionTimelineCommand
     from orchestrator.ids import TurnId
     from orchestrator.observability import OnsiteObservability
     from orchestrator.runtime_contracts import RuntimeOutcome
@@ -223,6 +225,21 @@ class TransportRuntime:
             turn_id = outcome.turn_id
             if turn_id is None:
                 return
+
+            def timeline_started() -> None:
+                timeline = session_runtime.take_started_timeline(
+                    turn_id, audio_stream_id=f"agent-{turn_id}"
+                )
+                if timeline is None:
+                    return
+                task = asyncio.create_task(
+                    self._send_caption_timeline(
+                        timeline, session_runtime.scheduler.snapshot.session_id, turn_id
+                    )
+                )
+                self._agent_tts_tasks.add(task)
+                task.add_done_callback(self._agent_tts_tasks.discard)
+
             _ = await session_runtime.run_agent_tts_for_turn(
                 turn_id,
                 lambda text, output_started: bridge.speak_agent_plan(
@@ -233,6 +250,7 @@ class TransportRuntime:
                     output_started,
                 ),
                 correlation,
+                timeline_started,
             )
 
     def set_observability(self, observability: OnsiteObservability) -> None:
@@ -508,6 +526,17 @@ class TransportRuntime:
         await send_frontend_operation(
             connection.send, event_type, operation, session_id, turn_id
         )
+
+    async def _send_caption_timeline(
+        self,
+        timeline: CaptionTimelineCommand,
+        session_id: SessionId,
+        turn_id: TurnId,
+    ) -> None:
+        connection = self._frontend_connections.get(str(session_id))
+        if connection is None:
+            return
+        await send_caption_timeline(connection.send, timeline, session_id, turn_id)
 
     async def _receive_comment(
         self,

@@ -23,6 +23,7 @@ from orchestrator.agent_pipeline import (
 )
 from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
 from orchestrator.brain_runtime import build_mock_agent_pipeline
+from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.control_ingress import (
     ActionControl,
     ContextResetControl,
@@ -200,6 +201,7 @@ class _PendingResponseCommit:
     provenance: ContextProvenance
     input_text: str
     spoken_text: str
+    marked_text: str
     observation: str | None
 
 
@@ -258,6 +260,9 @@ class SessionRuntime:
     _pending_response_commits: dict[TaskId, _PendingResponseCommit] = field(
         default_factory=dict
     )
+
+    _started_timeline_text: dict[TurnId, str] = field(default_factory=dict)
+
 
     _voice_evidence_ranges: list[tuple[str, int, int]] = field(default_factory=list)
 
@@ -733,6 +738,7 @@ class SessionRuntime:
                 provenance,
                 audience_input.text,
                 parsed.spoken_text,
+                parsed.marked_text,
                 response.observation if response.tool_request is not None else None,
             )
         else:
@@ -762,6 +768,21 @@ class SessionRuntime:
             )
         self.interaction_ingress.data.consider_context(
             AcceptedOutput(pending.provenance, pending.spoken_text)
+        )
+        self._started_timeline_text[pending.provenance.turn_id] = pending.marked_text
+
+    def take_started_timeline(
+        self, turn_id: TurnId, *, audio_stream_id: str
+    ) -> CaptionTimelineCommand | None:
+        marked_text = self._started_timeline_text.pop(turn_id, None)
+        if marked_text is None:
+            return None
+        return CaptionTimelineCommand(
+            timeline_id=f"agent-{turn_id}",
+            marked_text=marked_text,
+            audio_stream_id=audio_stream_id,
+            cancellation_epoch=int(self.cancellation_epoch),
+            start_rtp_timestamp=96_000,
         )
 
     def _apply_agent_plan(
@@ -965,6 +986,7 @@ class SessionRuntime:
         turn_id: TurnId,
         synthesize: AgentTtsSynthesize,
         correlation: EventCorrelation,
+        output_started: Callable[[], None] | None = None,
     ) -> bool:
         """Run one reducer-approved TTS task and commit admitted output.
 
@@ -1009,6 +1031,8 @@ class SessionRuntime:
                 ).accepted
                 if committed:
                     self._commit_response_after_output_started(task_id)
+                    if output_started is not None:
+                        output_started()
                 return committed
 
             try:
@@ -1255,6 +1279,7 @@ class SessionRuntime:
         self._active_deck_tasks.clear()
         self._agent_tts_text.clear()
         self._pending_response_commits.clear()
+        self._started_timeline_text.clear()
         self._voice_evidence_ranges.clear()
         self.interaction_ingress.data.clear_session()
         self.interaction_ingress.clear_session_data()
