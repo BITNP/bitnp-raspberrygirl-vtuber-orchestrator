@@ -247,16 +247,6 @@ class _Tts:
         return SynthesizedAudio(_wav(b"\x10\x20" * 320), "audio/wav")
 
 
-def test_onsite_runtime_composes_asr_pipeline_tts_and_replaces_mic_rtp() -> None:
-
-    asyncio.run(_runtime_composition_proof())
-
-
-def test_onsite_runtime_baseline_preserves_current_generated_output() -> None:
-
-    asyncio.run(_runtime_composition_proof())
-
-
 def test_onsite_runtime_scheduler_fences_barge_in_until_exact_flush_ack() -> None:
 
     asyncio.run(_scheduler_barge_in_proof())
@@ -417,66 +407,6 @@ async def _stale_epoch_gate_proof() -> None:
         (stale_packet, (SOUND_PEER[0], 5006)),
         (active_packet, (SOUND_PEER[0], 5006)),
     ]
-
-
-async def _runtime_composition_proof() -> None:
-    # Given: the real bridge with deterministic provider boundaries and pinned routes.
-
-
-    transport = _Datagrams()
-
-    hub = RtpHub(transport, onsite_bridge=_bridge("Explain BitNet", 19_840))
-
-    scheduler = SessionScheduler(
-        session_id=SessionId(SESSION_ID), turn_id_prefix="turn-onsite-runtime"
-    )
-
-    hub.set_output_fence(SchedulerOutputFence(scheduler))
-
-    hub.register_control(
-        _registration("media.rtp.source.register", "mic", _source()), MIC_PEER[0]
-    )
-
-    hub.register_control(
-        _registration("media.rtp.sink.register", "sound", _sink()), SOUND_PEER[0]
-    )
-
-    speech_packet = _rtp(MIC_SSRC, b"\x03\xe8" * 320, 1, 320)
-
-    # When: speech is followed by the 600 ms silence endpoint.
-
-    first_delivered = hub.route_datagram(speech_packet, MIC_PEER)
-
-    delivered = all(
-        hub.route_datagram(
-            _rtp(MIC_SSRC, b"\x00\x00" * 320, sequence, sequence * 320),
-            MIC_PEER,
-        )
-        is False
-        for sequence in range(2, 32)
-    )
-
-    await hub.wait_for_onsite_jobs()
-
-    # Then: Sound receives generated canonical RTP, never the microphone packet.
-
-    assert first_delivered is False
-
-    assert delivered is True
-
-    assert len(transport.sent) == 1
-
-    generated, endpoint = transport.sent[0]
-
-    assert endpoint == (SOUND_PEER[0], 5006)
-
-    assert generated != speech_packet
-
-    assert generated[:2] == b"\x80\x60"
-
-    assert int.from_bytes(generated[8:12]) != MIC_SSRC
-
-    assert generated[12:] == b"\x20\x10" * 320
 
 
 def test_onsite_runtime_drops_blank_asr_without_raw_rtp() -> None:

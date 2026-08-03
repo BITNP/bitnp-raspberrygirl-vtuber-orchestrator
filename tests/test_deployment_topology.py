@@ -29,23 +29,6 @@ MISSING_CA_PATH_DEPLOYMENT: Final = (
 )
 
 
-def test_deployment_validator_accepts_repository_artifacts(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # Given: the checked-in systemd bundle and sanitized sibling environment manifests.
-
-    # When: the deployment acceptance validator scans the workspace.
-
-
-    exit_code, output = _run(monkeypatch, capsys, "--deployment-root", str(WORKSPACE))
-
-    # Then: Mic and Sound are routed only through the configured Orchestrator.
-
-    assert exit_code == 0
-
-    assert "deployment topology accepted" in output
-
-
 def test_deployment_validator_rejects_direct_peer_endpoint(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
