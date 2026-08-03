@@ -765,6 +765,7 @@ class SessionRuntime:
                 snapshot_revision=envelope.revision,
                 idempotency_key=IdempotencyKey(str(response_task_id)),
                 kind=TaskKind.INTERACTIVE,
+                segment_id=envelope.segment_id,
             ),
             correlation,
         )
@@ -791,6 +792,7 @@ class SessionRuntime:
                 envelope.revision,
                 TaskEffect("llm.initial", initial.reply[:240]),
                 envelope.cancellation_epoch,
+                envelope.segment_id,
             ),
             correlation,
         )
@@ -823,6 +825,7 @@ class SessionRuntime:
                     snapshot_revision=envelope.revision,
                     idempotency_key=IdempotencyKey(str(tool_task_id)),
                     kind=TaskKind.DELIBERATIVE,
+                    segment_id=envelope.segment_id,
                 ),
                 correlation,
             )
@@ -852,6 +855,7 @@ class SessionRuntime:
                             envelope.revision,
                             TaskEffect("tool.observed", tool_output[:240]),
                             envelope.cancellation_epoch,
+                            envelope.segment_id,
                         ),
                         correlation,
                     )
@@ -870,6 +874,7 @@ class SessionRuntime:
                 snapshot_revision=envelope.revision,
                 idempotency_key=IdempotencyKey(str(final_task_id)),
                 kind=TaskKind.INTERACTIVE,
+                segment_id=envelope.segment_id,
             ),
             correlation,
         )
@@ -905,6 +910,7 @@ class SessionRuntime:
                 envelope.revision,
                 TaskEffect("llm.final", final.reply[:240]),
                 envelope.cancellation_epoch,
+                envelope.segment_id,
             ),
             correlation,
         )
@@ -961,6 +967,7 @@ class SessionRuntime:
                 snapshot_revision=envelope.revision,
                 idempotency_key=IdempotencyKey(str(task_id)),
                 kind=TaskKind.INTERACTIVE,
+                segment_id=envelope.segment_id,
             ),
             correlation,
         )
@@ -1032,6 +1039,7 @@ class SessionRuntime:
                 snapshot_revision=self.scheduler.snapshot.revision,
                 idempotency_key=IdempotencyKey(str(task_id)),
                 kind=TaskKind.MAINTENANCE,
+                segment_id=pending.provenance.segment_id,
             ),
             correlation,
         )
@@ -1072,6 +1080,7 @@ class SessionRuntime:
                 record.request.snapshot_revision,
                 TaskEffect("context.compaction", summary[:240]),
                 record.request.cancellation_epoch,
+                record.request.segment_id,
             ),
             correlation,
         )
@@ -1104,6 +1113,7 @@ class SessionRuntime:
                 snapshot_revision=self.scheduler.snapshot.revision,
                 idempotency_key=IdempotencyKey(str(task_id)),
                 kind=TaskKind.MAINTENANCE,
+                segment_id=pending.provenance.segment_id,
             ),
             correlation,
         )
@@ -1155,6 +1165,7 @@ class SessionRuntime:
                 record.request.snapshot_revision,
                 TaskEffect("memory.candidate", str(candidate.key)),
                 record.request.cancellation_epoch,
+                record.request.segment_id,
             ),
             correlation,
         )
@@ -1435,6 +1446,7 @@ class SessionRuntime:
                         record.request.snapshot_revision,
                         TaskEffect("tts.emitted", text[:240]),
                         record.request.cancellation_epoch,
+                        record.request.segment_id,
                     ),
                     correlation,
                 ).accepted

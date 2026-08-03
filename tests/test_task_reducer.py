@@ -4,7 +4,7 @@ from typing import Literal
 
 import pytest
 
-from orchestrator.ids import SessionId, TurnId
+from orchestrator.ids import SegmentId, SessionId, TurnId
 from orchestrator.sessions import SessionSnapshot, StateRevision
 from orchestrator.task_reducer import (
     TaskEffect,
@@ -174,6 +174,25 @@ def test_reducer_rejects_a_result_from_another_cancellation_epoch() -> None:
     outcome = reducer.reduce(
         _result(snapshot_revision=StateRevision(7)), snapshot=_snapshot(), now_ms=100
     )
+
+    assert isinstance(outcome, TaskResultRejected)
+    assert outcome.reason is TaskResultRejection.CANCELLED
+
+
+def test_reducer_rejects_a_result_from_another_segment() -> None:
+    registry = _registry()
+    request = replace(
+        _request(task_id="task-1", key="answer-1"),
+        segment_id=SegmentId("segment-1"),
+    )
+    _register(registry, request)
+    reducer = TaskResultReducer(registry)
+    result = replace(
+        _result(snapshot_revision=StateRevision(7)),
+        segment_id=SegmentId("segment-2"),
+    )
+
+    outcome = reducer.reduce(result, snapshot=_snapshot(), now_ms=100)
 
     assert isinstance(outcome, TaskResultRejected)
     assert outcome.reason is TaskResultRejection.CANCELLED

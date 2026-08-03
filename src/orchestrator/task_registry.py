@@ -3,7 +3,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from typing import NewType, final
 
-from orchestrator.ids import SessionId, TurnId
+from orchestrator.ids import SegmentId, SessionId, TurnId
 from orchestrator.sessions import StateRevision
 from orchestrator.state_snapshots import TaskStateSnapshot
 
@@ -98,6 +98,8 @@ class TaskRequest:
     cancellation_epoch: int = 0
 
     capability_snapshot: frozenset[str] = frozenset()
+
+    segment_id: SegmentId | None = None
 
     retry_attempt: int = 0
 

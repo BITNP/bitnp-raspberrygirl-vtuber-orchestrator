@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import final
 
-from orchestrator.ids import SessionId, TurnId
+from orchestrator.ids import SegmentId, SessionId, TurnId
 from orchestrator.sessions import SessionSnapshot, StateRevision
 from orchestrator.state_snapshots import TaskStateSnapshot
 from orchestrator.task_registry import TaskId, TaskRecord, TaskRegistry, TaskState
@@ -31,6 +31,8 @@ class TaskResult:
     effect: TaskEffect
 
     cancellation_epoch: int = 0
+
+    segment_id: SegmentId | None = None
 
 
 @unique
@@ -173,6 +175,9 @@ def _result_rejection(
         return TaskResultRejection.STALE_REVISION
 
     if result.cancellation_epoch != record.request.cancellation_epoch:
+        return TaskResultRejection.CANCELLED
+
+    if result.segment_id != record.request.segment_id:
         return TaskResultRejection.CANCELLED
 
     return None
