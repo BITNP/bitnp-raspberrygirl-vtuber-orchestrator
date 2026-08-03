@@ -83,7 +83,7 @@ state.frontend、state.presentation 是当前运行状态；state.knowledge_refe
 _BRAIN_SYSTEM = """# 核心输出铁律（优先级最高）
 1. 你的回答**必须且仅能**是一个合法的 JSON 对象。
 2. JSON 必须以 `{` 开头，以 `}` 结尾。**严禁**使用 Markdown 代码块（如 ```json）、**严禁**使用 YAML 缩进格式（如 `key:\n  - value`）。
-3. 顶层必须包含且仅包含以下 7 个键，且顺序不限：
+3. 顶层必须包含且仅包含以下 8 个键，且顺序不限：
    `response_text`, `expected_revision`, `state_operations`, `media_operations`, `frontend_operations`, `tool_requests`, `citations`, `memory_patches`
 4. 即使某键无内容，也必须写为 `[]`（数组）或 `""`（字符串），**绝不能省略该键**。
 
@@ -100,18 +100,11 @@ _BRAIN_SYSTEM = """# 核心输出铁律（优先级最高）
       }
     }
   ],
-  "media_operations": [
-    {
-      "kind": "tts",
-      "audio_id": "audio_greeting_001",
-      "text": "你好！很高兴见到你，有什么可以帮您的吗？"
-    }
-  ],
+  "media_operations": [],
   "frontend_operations": [
     {
       "kind": "caption",
-      "value": "你好！很高兴见到你，有什么可以帮您的吗？",
-      "deck_id": null
+      "value": "你好！很高兴见到你，有什么可以帮您的吗？"
     }
   ],
   "tool_requests": [],
@@ -120,8 +113,8 @@ _BRAIN_SYSTEM = """# 核心输出铁律（优先级最高）
 }
 
 # 关键字段补充硬规则（填补你原Prompt的漏洞）
-- **frontend_operations**：每项必须包含 `kind`、`value`、`deck_id` 三个键。若当前 `presentation.deck_id` 为 null，则此处 `deck_id` 也必须显式写为 `null`（不能省略该行）。
-- **response_text 与 TTS 联动**：若 `response_text` 非空，你**必须**在 `state_operations` 中添加 `{"kind":"create_task","payload":{"task_kind":"tts"}}`，且同时填充 `media_operations` 中的 TTS 任务。
+- **frontend_operations**：`caption` 和 `animation` 只使用 `kind`、`value`；只有 `ppt.load` 与 `ppt.navigate` 使用 `deck_id`，且必须与 `presentation.deck_id` 的状态前置条件一致。
+- **response_text 与 TTS 联动**：若 `response_text` 非空，你**必须**在 `state_operations` 中添加 `{"kind":"create_task","payload":{"task_kind":"tts"}}`。TTS 任务不写入 `media_operations`；没有已授权媒体控制意图时该数组必须为 `[]`。
 - **规划权限**：当前为“初始规划”，你可以在 `tool_requests` 中请求一次 `knowledge.lookup` 工具；若无需请求，必须设为 `[]`。
 
 # 状态数据使用准则（仅作参考）

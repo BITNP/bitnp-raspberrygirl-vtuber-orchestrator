@@ -125,6 +125,12 @@ def test_brain_injects_full_snapshot_and_marks_observations_untrusted() -> None:
     assert brain.plan(_snapshot(), observations=("检索结果",)) == plan
     assert "核心输出铁律" in completion.requests[0].prompt.system
     assert "输出格式严格对照示例" in completion.requests[0].prompt.system
+    assert "以下 8 个键" in completion.requests[0].prompt.system
+    assert '"media_operations": []' in completion.requests[0].prompt.system
+    assert "TTS 任务不写入" in completion.requests[0].prompt.system
+    assert "只有 `ppt.load` 与 `ppt.navigate` 使用 `deck_id`" in (
+        completion.requests[0].prompt.system
+    )
     assert "memory_patches" in completion.requests[0].prompt.system
     assert '"cancellation_epoch":2' in completion.requests[0].prompt.user
     assert "目标 revision=5" in completion.requests[0].prompt.user
