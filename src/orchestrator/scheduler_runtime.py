@@ -35,6 +35,7 @@ from orchestrator.control_ingress import (
     SessionControl,
     SessionEndControl,
 )
+from orchestrator.execution_envelope import ExecutionEnvelope
 from orchestrator.identity import ProfileEnrollment, VoiceProfileId
 from orchestrator.ids import SegmentId, SessionId, TurnId
 from orchestrator.interaction_ingress import SessionInteractionIngress
@@ -690,55 +691,68 @@ class SessionRuntime:
             ),
             mcp_allowlist=self.agent_mcp_allowlist,
         )
+        envelope = ExecutionEnvelope(
+            session_id=self.scheduler.snapshot.session_id,
+            turn_id=turn_id,
+            segment_id=SegmentId(f"agent-{turn_id}"),
+            revision=self.scheduler.snapshot.revision,
+            cancellation_epoch=int(self.cancellation_epoch),
+            deadline_ms=self.clock() + 30_000,
+            allowed_actions=frozenset(
+                {"breathe", "dance", "explain_point", "speak", "wave", "nod"}
+            ),
+            allowed_expressions=frozenset(),
+            replacement=False,
+        )
         try:
             response = await coordinator.respond(
                 snapshot,
-                is_current=lambda: (
-                    self.scheduler.snapshot.revision == snapshot.revision
-                    and int(self.cancellation_epoch) == snapshot.cancellation_epoch
-                    and not self._ended
+                is_current=lambda: envelope.is_current(
+                    session_id=self.scheduler.snapshot.session_id,
+                    revision=self.scheduler.snapshot.revision,
+                    cancellation_epoch=int(self.cancellation_epoch),
+                    now_ms=self.clock(),
+                    session_ended=self._ended,
                 ),
             )
         except ResponseSupersededError:
             _LOGGER.debug("response_superseded turn=%s", turn_id)
             return
         self._apply_coordinated_response(
-            response, audience_input, turn_id, correlation
+            response, audience_input, envelope, correlation
         )
 
     def _apply_coordinated_response(
         self,
         response: CoordinatedResponse,
         audience_input: BrainAudienceInput,
-        turn_id: TurnId,
+        envelope: ExecutionEnvelope,
         correlation: EventCorrelation,
     ) -> None:
         parsed = parse_inline_cues(
             response.proposal.reply,
-            allowed_actions=frozenset(
-                {"breathe", "dance", "explain_point", "speak", "wave", "nod"}
-            ),
-            allowed_expressions=frozenset(),
+            allowed_actions=envelope.allowed_actions,
+            allowed_expressions=envelope.allowed_expressions,
         )
         if not parsed.spoken_text.strip():
-            _LOGGER.debug("response_rejected_empty turn=%s", turn_id)
+            _LOGGER.debug("response_rejected_empty turn=%s", envelope.turn_id)
             return
         provenance = ContextProvenance(
             session_id=SessionId(audience_input.session_id),
-            turn_id=turn_id,
-            segment_id=SegmentId(f"agent-{turn_id}"),
+            turn_id=envelope.turn_id,
+            segment_id=envelope.segment_id,
             sequence=ContextSequence(audience_input.sequence),
             source_id=ContextSourceId(audience_input.trace_id),
         )
-        task_id = TaskId(f"response-tts-{turn_id}")
+        task_id = TaskId(f"response-tts-{envelope.turn_id}")
         outcome = self.schedule_task(
             TaskRequest(
                 task_id=task_id,
                 session_id=self.scheduler.snapshot.session_id,
-                turn_id=turn_id,
+                turn_id=envelope.turn_id,
                 parent_task_id=None,
-                deadline_ms=TaskDeadlineMs(self.clock() + 30_000),
-                snapshot_revision=self.scheduler.snapshot.revision,
+                deadline_ms=TaskDeadlineMs(envelope.deadline_ms),
+                snapshot_revision=envelope.revision,
                 idempotency_key=IdempotencyKey(str(task_id)),
                 kind=TaskKind.INTERACTIVE,
             ),
@@ -1023,7 +1037,7 @@ class SessionRuntime:
 
             committed = False
 
-            def output_started(
+            def accept_output_started(
                 task_id: TaskId = task_id,
                 record: TaskRecord = record,
                 text: str = text,
@@ -1048,7 +1062,7 @@ class SessionRuntime:
                 return committed
 
             try:
-                emitted = await synthesize(text, output_started)
+                emitted = await synthesize(text, accept_output_started)
             except (OSError, ValueError):
                 emitted = False
                 _LOGGER.exception("agent_tts_execution_failed task=%s", task_id)
