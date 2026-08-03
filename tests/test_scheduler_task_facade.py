@@ -141,6 +141,7 @@ def test_started_timeline_delivery_is_a_claimed_and_reducer_fenced_task() -> Non
             "timeline-1", "带标记的字幕", f"agent-{turn_id}", 1, 96_000
         ),
         correlation=correlation,
+        segment_id=SegmentId("segment-1"),
     )
 
     assert scheduled is not None
@@ -149,6 +150,7 @@ def test_started_timeline_delivery_is_a_claimed_and_reducer_fenced_task() -> Non
     record = runtime.task_registry.task(task_id)
     assert record is not None
     assert record.state is TaskState.RUNNING
+    assert record.request.segment_id == SegmentId("segment-1")
     assert runtime.caption_timeline_delivery_is_current(task_id)
     assert runtime.complete_caption_timeline_delivery(task_id, correlation)
     completed = runtime.task_registry.task(task_id)

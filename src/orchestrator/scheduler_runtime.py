@@ -284,7 +284,9 @@ class SessionRuntime:
         default_factory=dict
     )
 
-    _started_timeline_text: dict[TurnId, str] = field(default_factory=dict)
+    _started_timeline_text: dict[TurnId, tuple[str, SegmentId]] = field(
+        default_factory=dict
+    )
 
     _maintenance_tasks: set[asyncio.Task[None]] = field(default_factory=set)
 
@@ -1010,7 +1012,10 @@ class SessionRuntime:
         self.interaction_ingress.data.consider_context(
             AcceptedOutput(pending.provenance, pending.spoken_text)
         )
-        self._started_timeline_text[pending.provenance.turn_id] = pending.marked_text
+        self._started_timeline_text[pending.provenance.turn_id] = (
+            pending.marked_text,
+            pending.provenance.segment_id,
+        )
         self._schedule_memory_extraction(pending, task_id, correlation)
         self._schedule_context_compaction(pending, task_id, correlation)
 
@@ -1193,16 +1198,23 @@ class SessionRuntime:
     def take_started_timeline(
         self, turn_id: TurnId, *, audio_stream_id: str
     ) -> CaptionTimelineCommand | None:
-        marked_text = self._started_timeline_text.pop(turn_id, None)
-        if marked_text is None:
+        started = self._take_started_timeline(turn_id, audio_stream_id=audio_stream_id)
+        return None if started is None else started[0]
+
+    def _take_started_timeline(
+        self, turn_id: TurnId, *, audio_stream_id: str
+    ) -> tuple[CaptionTimelineCommand, SegmentId] | None:
+        started = self._started_timeline_text.pop(turn_id, None)
+        if started is None:
             return None
+        marked_text, segment_id = started
         return CaptionTimelineCommand(
             timeline_id=f"agent-{turn_id}",
             marked_text=marked_text,
             audio_stream_id=audio_stream_id,
             cancellation_epoch=int(self.cancellation_epoch),
             start_rtp_timestamp=96_000,
-        )
+        ), segment_id
 
     def schedule_started_timeline(
         self,
@@ -1217,11 +1229,12 @@ class SessionRuntime:
         first RTP frame.  It is nevertheless an externally-visible asynchronous
         effect, so it gets the same session/turn/epoch fencing as provider work.
         """
-        timeline = self.take_started_timeline(turn_id, audio_stream_id=audio_stream_id)
-        if timeline is None:
+        started = self._take_started_timeline(turn_id, audio_stream_id=audio_stream_id)
+        if started is None:
             return None
+        timeline, segment_id = started
         return self.schedule_caption_timeline_delivery(
-            turn_id, timeline, correlation=correlation
+            turn_id, timeline, correlation=correlation, segment_id=segment_id
         )
 
     def schedule_caption_timeline_delivery(
@@ -1230,6 +1243,7 @@ class SessionRuntime:
         timeline: CaptionTimelineCommand,
         *,
         correlation: EventCorrelation,
+        segment_id: SegmentId | None = None,
     ) -> tuple[TaskId, CaptionTimelineCommand] | None:
         """Register a media-admitted timeline delivery for the current turn."""
         task_id = TaskId(f"caption-timeline-{turn_id}")
@@ -1243,6 +1257,7 @@ class SessionRuntime:
                 snapshot_revision=self.scheduler.snapshot.revision,
                 idempotency_key=IdempotencyKey(str(task_id)),
                 kind=TaskKind.INTERACTIVE,
+                segment_id=segment_id,
             ),
             correlation,
         )
