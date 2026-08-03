@@ -91,6 +91,8 @@ def test_gate_uses_chinese_non_streaming_json_prompt_and_fails_closed() -> None:
     )
     assert gate.evaluate(_input(), active_summary="产品讲解中").value == "discard"
     assert "输入相关性门" in completion.requests[0].prompt.system
+    assert "只能有一个键 decision" in completion.requests[0].prompt.system
+    assert '{"decision":"accept"}' in completion.requests[0].prompt.system
     assert "<untrusted-payload>" in completion.requests[0].prompt.user
     assert "recent_turn_context" in completion.requests[0].prompt.user
     assert "支持语音交互" in completion.requests[0].prompt.user
@@ -116,7 +118,9 @@ def test_brain_injects_full_snapshot_and_marks_observations_untrusted() -> None:
 
     assert brain.plan(_snapshot()) == plan
     assert brain.plan(_snapshot(), observations=("检索结果",)) == plan
-    assert "唯一的业务决策中心" in completion.requests[0].prompt.system
+    assert "多模态智能体的大脑" in completion.requests[0].prompt.system
+    assert "对象必须恰好包含以下八个键" in completion.requests[0].prompt.system
+    assert '"memory_patches":[]' in completion.requests[0].prompt.system
     assert '"cancellation_epoch": 2' in completion.requests[0].prompt.user
     assert "expected_revision 必须等于 5" in completion.requests[0].prompt.user
     assert "最终规划：禁止再请求工具" in completion.requests[1].prompt.user
@@ -129,6 +133,7 @@ def test_repair_requires_the_exact_snapshot_revision() -> None:
 
     assert brain.repair(_snapshot(), '{"expected_revision": 6}') == "{}"
     assert "expected_revision 必须恰好为 5" in completion.requests[0].prompt.user
+    assert "对象必须恰好包含以下八个键" in completion.requests[0].prompt.system
 
 
 def test_mock_gate_discards_repeated_input_without_creating_effects() -> None:
