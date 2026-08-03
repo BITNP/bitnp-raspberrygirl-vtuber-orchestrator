@@ -22,9 +22,14 @@ from orchestrator.agent_pipeline import (
     GateDecision,
     ToolRequest,
 )
-from orchestrator.intent_router import IntentRouter, IntentSpec
+from orchestrator.intent_router import ArgumentBuilder, IntentRouter, IntentSpec
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.llm import LLMPrompt, LLMRequest
+from orchestrator.mcp_allowlist import (
+    AllowlistedMcpToolExecutor,
+    McpRequester,
+    StaticMcpAllowlist,
+)
 from orchestrator.modes import (
     AnswerCandidate,
 )
@@ -44,6 +49,10 @@ if TYPE_CHECKING:
 _MAX_TOOL_QUERY_CHARS = 4_000
 
 _ECHO_MIN_CHARS = 4
+
+
+class McpResponseConfigurationError(ValueError):
+    """The response coordinator received an unsafe MCP startup configuration."""
 
 
 def _inline_prompt(source: str) -> str:
@@ -536,6 +545,52 @@ class AsyncNoopToolExecutor:
         return None
 
 
+@final
+class AsyncAllowlistedMcpToolExecutor:
+    """Run the existing synchronous MCP boundary off the event loop."""
+
+    def __init__(self, executor: AllowlistedMcpToolExecutor) -> None:
+        self._executor = executor
+
+    async def execute(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> str | None:
+        return await to_thread(self._executor.execute, request, snapshot)
+
+
+@final
+class AsyncCompositeResponseToolExecutor:
+    """Routes only a trusted local or statically allowlisted tool request."""
+
+    def __init__(
+        self,
+        *,
+        knowledge: AsyncReadonlyKnowledgeToolExecutor | AsyncNoopToolExecutor,
+        mcp: AsyncAllowlistedMcpToolExecutor | None = None,
+    ) -> None:
+        self._knowledge = knowledge
+        self._mcp = mcp
+
+    async def execute(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> str | None:
+        if request.kind == "knowledge":
+            return await self._knowledge.execute(request, snapshot)
+        if request.kind == "mcp" and self._mcp is not None:
+            return await self._mcp.execute(request, snapshot)
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class McpIntentRegistration:
+    """Startup-owned intent name, Chinese label, and trusted argument builder."""
+
+    intent_id: str
+    tool_name: str
+    model_label: str
+    build_arguments: ArgumentBuilder
+
+
 def build_mock_agent_pipeline(
     retrieval: VersionedRetrievalProvider | None = None,
 ) -> AgentPipeline:
@@ -566,29 +621,65 @@ def build_async_agent_pipeline(
 def build_async_response_coordinator(
     completion: AsyncJsonCompletion,
     retrieval: VersionedRetrievalProvider | None = None,
+    *,
+    mcp_allowlist: StaticMcpAllowlist | None = None,
+    mcp_requester: McpRequester | None = None,
+    mcp_intents: tuple[McpIntentRegistration, ...] = (),
 ) -> AsyncResponseCoordinator:
     """Build the minimal brain path with only trusted, configured intents."""
-    tools = (
+    knowledge = (
         AsyncNoopToolExecutor()
         if retrieval is None
         else AsyncReadonlyKnowledgeToolExecutor(
             ReadonlyKnowledgeToolExecutor(retrieval)
         )
     )
+    specs: list[IntentSpec] = [
+        IntentSpec(
+            "knowledge",
+            "knowledge",
+            "local",
+            "knowledge.lookup",
+            lambda snapshot: {"query": snapshot.input.text},
+            model_label="本地知识检索",
+        )
+    ]
+    mcp: AsyncAllowlistedMcpToolExecutor | None = None
+    if mcp_allowlist is not None:
+        if mcp_requester is None:
+            raise McpResponseConfigurationError
+        registration_ids = {entry.intent_id for entry in mcp_intents}
+        registrations = {entry.tool_name: entry for entry in mcp_intents}
+        if (
+            len(registration_ids) != len(mcp_intents)
+            or len(registrations) != len(mcp_intents)
+            or frozenset(registrations) != mcp_allowlist.names
+        ):
+            raise McpResponseConfigurationError
+        for allowance_name in sorted(mcp_allowlist.names):
+            registration = registrations[allowance_name]
+            specs.append(
+                IntentSpec(
+                    registration.intent_id,
+                    "mcp",
+                    allowance_name,
+                    f"mcp:{allowance_name}",
+                    registration.build_arguments,
+                    model_label=registration.model_label,
+                )
+            )
+        mcp = AsyncAllowlistedMcpToolExecutor(
+            AllowlistedMcpToolExecutor(mcp_allowlist, mcp_requester)
+        )
+    elif mcp_requester is not None or mcp_intents:
+        raise McpResponseConfigurationError
+    router = IntentRouter(tuple(specs))
+    if mcp_allowlist is not None:
+        router.validate_mcp_allowlist(mcp_allowlist.names)
     return AsyncResponseCoordinator(
         AsyncJsonResponseBrain(completion),
-        IntentRouter(
-            (
-                IntentSpec(
-                    "knowledge",
-                    "knowledge",
-                    "local",
-                    "knowledge.lookup",
-                    lambda snapshot: {"query": snapshot.input.text},
-                ),
-            )
-        ),
-        tools,
+        router,
+        AsyncCompositeResponseToolExecutor(knowledge=knowledge, mcp=mcp),
     )
 
 

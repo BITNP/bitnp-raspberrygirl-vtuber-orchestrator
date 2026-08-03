@@ -1,7 +1,7 @@
 # ruff: noqa: RUF001
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from orchestrator.agent_pipeline import (
     AsyncAgentPipeline,
@@ -19,10 +19,13 @@ from orchestrator.brain_runtime import (
     JsonAgentBrain,
     JsonAgentGate,
     JsonResponseBrain,
+    McpIntentRegistration,
     MockAgentGate,
     ReadonlyKnowledgeToolExecutor,
+    build_async_response_coordinator,
 )
 from orchestrator.llm import LLMRequest
+from orchestrator.mcp_allowlist import McpToolAllowance, StaticMcpAllowlist
 from orchestrator.retrieval import KnowledgeRef, RetrievalFixtureProvider
 
 
@@ -277,7 +280,49 @@ def test_async_memory_extractor_uses_the_bounded_chinese_contract() -> None:
     assert "低优先级记忆候选提取器" in request.prompt.system
 
 
+def test_response_coordinator_maps_every_mcp_tool_to_trusted_arguments() -> None:
+    allowance = McpToolAllowance("web", "search", "network.search", 500, 128)
+    requester = _McpRequester()
+    coordinator = build_async_response_coordinator(
+        _AsyncCompletion([]),
+        mcp_allowlist=StaticMcpAllowlist((allowance,)),
+        mcp_requester=requester,
+        mcp_intents=(
+            McpIntentRegistration(
+                "web_search",
+                "web/search",
+                "联网检索",
+                lambda snapshot: {"query": snapshot.input.text},
+            ),
+        ),
+    )
+    snapshot = replace(_snapshot(), capabilities=frozenset({"mcp:web/search"}))
+    request = coordinator.router.request("web_search", snapshot)
+
+    assert request is not None
+    observation = asyncio.run(coordinator.execute_tool(request, snapshot))
+    assert observation is not None
+    assert requester.arguments == [{"query": "介绍产品"}]
+
+
 class _AsyncTools:
     async def execute(self, request: ToolRequest, snapshot: BrainStateSnapshot) -> str:
         _ = request, snapshot
         return "本地知识 observation"
+
+
+@dataclass
+class _McpRequester:
+    arguments: list[dict[str, object]] = field(default_factory=list)
+
+    def request(
+        self,
+        allowance: McpToolAllowance,
+        arguments: dict[str, object],
+        *,
+        timeout_ms: int,
+    ) -> dict[str, object]:
+        assert allowance.name == "web/search"
+        assert timeout_ms == 500
+        self.arguments.append(arguments)
+        return {"result": "受控返回"}
