@@ -77,6 +77,7 @@ from orchestrator.response_coordinator import (
     AsyncResponseCoordinator,
     CoordinatedResponse,
 )
+from orchestrator.response_execution_mode import ResponseExecutionMode
 from orchestrator.runtime_contracts import (
     RuntimeDispatch,
     RuntimeObservables,
@@ -248,6 +249,8 @@ class SessionRuntime:
 
     async_response_coordinator: AsyncResponseCoordinator | None = None
 
+    response_execution_mode: ResponseExecutionMode = ResponseExecutionMode.NEW_EXECUTE
+
     memory_candidate_extractor: AsyncMemoryCandidateExtractor | None = None
 
     context_compactor: AsyncContextCompactor | None = None
@@ -320,6 +323,9 @@ class SessionRuntime:
         async_agent_pipeline: AsyncAgentPipeline | None = None,
         async_agent_gate: AsyncAudienceGate | None = None,
         async_response_coordinator: AsyncResponseCoordinator | None = None,
+        response_execution_mode: ResponseExecutionMode = (
+            ResponseExecutionMode.NEW_EXECUTE
+        ),
         memory_candidate_extractor: AsyncMemoryCandidateExtractor | None = None,
         context_compactor: AsyncContextCompactor | None = None,
         agent_capabilities: frozenset[str] | None = None,
@@ -365,6 +371,7 @@ class SessionRuntime:
             async_agent_pipeline=async_agent_pipeline,
             async_agent_gate=async_agent_gate,
             async_response_coordinator=async_response_coordinator,
+            response_execution_mode=response_execution_mode,
             memory_candidate_extractor=memory_candidate_extractor,
             context_compactor=context_compactor,
             agent_capabilities=(
@@ -480,6 +487,8 @@ class SessionRuntime:
     async def receive_comment_async(  # noqa: PLR0911
         self, proposal: CommentProposal
     ) -> RuntimeOutcome:
+        if self.response_execution_mode is ResponseExecutionMode.LEGACY_EXECUTE:
+            return self.receive_comment(proposal)
         pipeline = self.async_agent_pipeline
         coordinator = self.async_response_coordinator
         gate = self.async_agent_gate
@@ -522,19 +531,33 @@ class SessionRuntime:
         self._advance_turn_epoch()
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
-        if coordinator is None:
-            if pipeline is None:
-                return self._reject(correlation, "async_pipeline_missing")
-            await self._run_async_agent_plan(
-                pipeline, audience_input, accepted_turn, correlation
-            )
-        else:
-            await self._run_async_response(
-                coordinator, audience_input, accepted_turn, correlation
-            )
+        await self._run_selected_async_path(
+            pipeline, coordinator, audience_input, accepted_turn, correlation
+        )
         return RuntimeOutcome(
             accepted=True, correlation=correlation, turn_id=accepted_turn
         )
+
+    async def _run_selected_async_path(
+        self,
+        pipeline: AsyncAgentPipeline | None,
+        coordinator: AsyncResponseCoordinator | None,
+        audience_input: BrainAudienceInput,
+        turn_id: TurnId,
+        correlation: EventCorrelation,
+    ) -> None:
+        if coordinator is not None:
+            await self._run_async_response(
+                coordinator,
+                audience_input,
+                turn_id,
+                correlation,
+                shadow=self.response_execution_mode is ResponseExecutionMode.NEW_SHADOW,
+            )
+        elif pipeline is not None:
+            await self._run_async_agent_plan(
+                pipeline, audience_input, turn_id, correlation
+            )
 
     def _submit_agent_comment(
         self, proposal: CommentProposal
@@ -712,6 +735,8 @@ class SessionRuntime:
         audience_input: BrainAudienceInput,
         turn_id: TurnId,
         correlation: EventCorrelation,
+        *,
+        shadow: bool = False,
     ) -> None:
         """Run the small response contract; only this runtime creates effects."""
         composition = self.interaction_ingress.data.context.compose(
@@ -823,6 +848,24 @@ class SessionRuntime:
         )
         if not initial_accepted.accepted:
             _LOGGER.debug("initial_response_result_rejected turn=%s", turn_id)
+            return
+
+        if shadow:
+            # Shadow evaluates the new minimal contract only.  In particular it
+            # never executes a selected tool or creates TTS/context/frontend/
+            # memory work; the accepted LLM task and this diagnostic are its
+            # entire observable footprint.
+            self.operational_journal.append(
+                OperationalRecord(
+                    stage="response_shadow",
+                    trace_id=str(correlation.trace_id),
+                    session_id=str(correlation.session_id),
+                    turn_id=str(turn_id),
+                    segment_id=str(envelope.segment_id),
+                    task_id=str(response_task_id),
+                    outcome=initial.intent,
+                )
+            )
             return
 
         if initial.intent == "answer":
@@ -1888,16 +1931,9 @@ class SessionRuntime:
         self._advance_turn_epoch()
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
-        if coordinator is None:
-            if pipeline is None:
-                return self._reject(correlation, "async_pipeline_missing")
-            await self._run_async_agent_plan(
-                pipeline, audience_input, accepted_turn, correlation
-            )
-        else:
-            await self._run_async_response(
-                coordinator, audience_input, accepted_turn, correlation
-            )
+        await self._run_selected_async_path(
+            pipeline, coordinator, audience_input, accepted_turn, correlation
+        )
         return RuntimeOutcome(
             accepted=True, correlation=correlation, turn_id=accepted_turn
         )

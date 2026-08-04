@@ -18,6 +18,7 @@ from orchestrator.intent_router import IntentRouter, IntentSpec
 from orchestrator.interactions import CommentProposal
 from orchestrator.response_contracts import ResponseProposal
 from orchestrator.response_coordinator import AsyncResponseCoordinator
+from orchestrator.response_execution_mode import ResponseExecutionMode
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import EventCorrelation, EventSequence, StateRevision
 from orchestrator.state_snapshots import MemoryRevision
@@ -419,6 +420,53 @@ def test_async_tool_turn_records_initial_tool_and_final_provider_tasks() -> None
     assert records[2].request.parent_task_id == records[1].request.task_id
 
 
+def test_new_shadow_never_executes_selected_tool_or_creates_effect_tasks() -> None:
+    tools = _CountingAsyncTools()
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-shadow"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _ToolResponseBrain(),
+            IntentRouter(
+                (
+                    IntentSpec(
+                        "knowledge",
+                        "knowledge",
+                        "local",
+                        "knowledge.lookup",
+                        lambda snapshot: {"query": snapshot.input.text},
+                    ),
+                )
+            ),
+            tools,
+        ),
+        response_execution_mode=ResponseExecutionMode.NEW_SHADOW,
+        agent_capabilities=frozenset({"knowledge.lookup"}),
+    )
+    correlation = EventCorrelation(
+        TraceId("shadow"), SessionId("session-shadow"), EventSequence(1)
+    )
+
+    outcome = asyncio.run(
+        runtime.receive_comment_async(CommentProposal("查询", correlation))
+    )
+
+    assert outcome.accepted
+    assert tools.calls == 0
+    assert [record.request.task_id for record in runtime.task_registry.records] == [
+        TaskId("response-llm-initial-turn-0001"),
+    ]
+    assert runtime.interaction_ingress.data.context.snapshot.entries == ()
+    assert any(
+        record.stage == "response_shadow"
+        for record in runtime.operational_journal.records
+    )
+
+
 def test_memory_extraction_runs_only_after_tts_output_is_accepted() -> None:
     runtime = SessionRuntime.create(
         session_id=SessionId("session-async-memory"),
@@ -658,6 +706,16 @@ class _AsyncTools:
     async def execute(self, *args: object, **kwargs: object) -> str:
         _ = args, kwargs
         return "受控检索结果"
+
+
+class _CountingAsyncTools:
+    def __init__(self) -> None:
+        self.calls: int = 0
+
+    async def execute(self, *args: object, **kwargs: object) -> str:
+        _ = args, kwargs
+        self.calls += 1
+        return "不应执行"
 
 
 class _MemoryExtractor:
