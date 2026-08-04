@@ -82,15 +82,14 @@ lease 校验的 `finished` 事件触发；TTS provider 完成或重复/过期 fi
 `PLAYING` 状态；新 turn 不得写入 context、memory 或 timeline。
 
 通过 `ORCHESTRATOR_RESPONSE_EXECUTION_MODE` 按 session 选择 `new_shadow` 或
-`new_execute`（默认）。`legacy_execute` 已不再是可配置生产路径。`new_shadow` 运行新模型、
+`new_execute`（默认）。`new_shadow` 运行新模型、
 最小 proposal 解析和 cue 编译，并记录脱敏诊断；它绝不执行 MCP、TTS、Frontend、
 context 或 memory 写入。每个影子 turn 会审计文本回退、intent、cue 拒绝和无效果完成状态，
 `ShadowReplayReport` 会机械核验这些记录、context/memory revision、任务终态和禁止效果
 stage，作为 replay 准入证据；若影子模式缺少新协调器，运行时 fail-closed 拒绝输入，不能回落
-到 legacy 副作用路径。
+到其他副作用路径。
 `new_execute` 若缺少 Gate 或 ResponseCoordinator 也同样 fail-closed；不会隐式构造
-mock AgentPlan pipeline 或回退到旧执行。残留 legacy 审计仅用于离线迁移测试，不能经运行时
-配置或异步入口触达。
+mock 响应管线或回退到其他执行路径。
 
 Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 保持回放和健康检查能力。Frontend 不参与 onsite audio loop；字幕 cue 在协议层准备就绪，但不要把同步字幕渲染描述为已完成能力。
 

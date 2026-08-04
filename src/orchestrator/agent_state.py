@@ -324,8 +324,3 @@ class TurnCoordinator:
     def _set(self, state: AgentState, *effects: StateEffect) -> StateTransition:
         self._state = state
         return StateTransition(state, effects)
-
-
-# Transitional import surface for existing callers.  New code must depend on
-# TurnCoordinator so the coordinator is visibly the turn authority.
-AgentStateReducer = TurnCoordinator

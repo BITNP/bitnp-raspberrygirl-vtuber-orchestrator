@@ -1,13 +1,13 @@
 from orchestrator.agent_state import (
-    AgentStateReducer,
     GateOutcome,
     StateEffect,
+    TurnCoordinator,
     TurnPhase,
 )
 
 
 def test_interrupt_cancels_reasoning_but_keeps_sound_until_new_audio_is_ready() -> None:
-    reducer = AgentStateReducer()
+    reducer = TurnCoordinator()
     assert reducer.gate(GateOutcome.ACCEPT).effects == (StateEffect.START_REASONING,)
     assert reducer.reasoning_complete(0, has_text=True).effects == (
         StateEffect.START_TTS,
@@ -29,7 +29,7 @@ def test_interrupt_cancels_reasoning_but_keeps_sound_until_new_audio_is_ready() 
 
 
 def test_stale_callbacks_cannot_emit_audio_after_interrupt() -> None:
-    reducer = AgentStateReducer()
+    reducer = TurnCoordinator()
     _ = reducer.gate(GateOutcome.ACCEPT)
     _ = reducer.reasoning_complete(0, has_text=True)
     _ = reducer.audio_ready(0)
@@ -40,7 +40,7 @@ def test_stale_callbacks_cannot_emit_audio_after_interrupt() -> None:
 
 
 def test_failed_pre_audio_turn_has_no_recovery_effect() -> None:
-    reducer = AgentStateReducer()
+    reducer = TurnCoordinator()
     _ = reducer.gate(GateOutcome.ACCEPT)
 
     failed = reducer.failed(0, audio_started=False)
@@ -49,7 +49,7 @@ def test_failed_pre_audio_turn_has_no_recovery_effect() -> None:
 
 
 def test_runtime_turn_lifecycle_rejects_stale_provider_callbacks() -> None:
-    coordinator = AgentStateReducer()
+    coordinator = TurnCoordinator()
 
     queued = coordinator.enqueue(turn_id="turn-1", epoch=7)
     assert queued.state.phase is TurnPhase.QUEUED
@@ -73,7 +73,7 @@ def test_runtime_turn_lifecycle_rejects_stale_provider_callbacks() -> None:
 
 
 def test_runtime_replacement_requires_cutover_before_playback() -> None:
-    coordinator = AgentStateReducer()
+    coordinator = TurnCoordinator()
     _ = coordinator.enqueue(turn_id="turn-2", epoch=8, replacement=True)
     _ = coordinator.start_reasoning(turn_id="turn-2", epoch=8)
     _ = coordinator.start_synthesizing(turn_id="turn-2", epoch=8)
@@ -86,7 +86,7 @@ def test_runtime_replacement_requires_cutover_before_playback() -> None:
 
 
 def test_rejected_replacement_restores_the_retained_playback_turn() -> None:
-    coordinator = AgentStateReducer()
+    coordinator = TurnCoordinator()
     _ = coordinator.enqueue(turn_id="turn-old", epoch=7)
     _ = coordinator.start_reasoning(turn_id="turn-old", epoch=7)
     _ = coordinator.start_synthesizing(turn_id="turn-old", epoch=7)
