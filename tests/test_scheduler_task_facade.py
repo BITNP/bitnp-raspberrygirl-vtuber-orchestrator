@@ -573,6 +573,58 @@ def test_new_turn_cancels_the_active_response_provider_after_fencing() -> None:
     assert runtime.active_response_provider_task_ids == frozenset()
 
 
+def test_new_turn_cancels_active_tool_without_final_reply_or_effects() -> None:
+    tools = _BlockingAsyncTools()
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _ToolResponseBrain(),
+            IntentRouter(
+                (
+                    IntentSpec(
+                        "knowledge",
+                        "知识查询",
+                        "local",
+                        "knowledge.lookup",
+                        lambda snapshot: {"query": snapshot.input.text},
+                    ),
+                )
+            ),
+            tools,
+        ),
+        agent_capabilities=frozenset({"knowledge.lookup"}),
+    )
+
+    async def exercise() -> None:
+        first = asyncio.create_task(
+            runtime.receive_comment_async(
+                CommentProposal("第一句", _correlation("tool-cancel-1", 1))
+            )
+        )
+        _ = await tools.started.wait()
+        second = await runtime.receive_comment_async(
+            CommentProposal("第二句", _correlation("tool-cancel-2", 2))
+        )
+        first_outcome = await first
+        assert first_outcome.accepted
+        assert second.accepted
+
+    asyncio.run(exercise())
+
+    tool_task = runtime.task_registry.task(TaskId("response-tool-turn-0001"))
+    assert tool_task is not None
+    assert tool_task.state is TaskState.CANCELLED
+    assert tools.cancelled
+    assert runtime.task_registry.task(TaskId("response-llm-final-turn-0001")) is None
+    assert runtime.task_registry.task(TaskId("response-tts-turn-0001")) is None
+    assert runtime.interaction_ingress.data.context.snapshot.entries == ()
+
+
 def test_preoutput_tts_timeout_cancels_provider_without_context_commit() -> None:
     runtime = SessionRuntime.create(
         session_id=SessionId("session-1"),
@@ -1010,6 +1062,22 @@ class _AsyncTools:
     async def execute(self, *args: object, **kwargs: object) -> str:
         _ = args, kwargs
         return "受控检索结果"
+
+
+class _BlockingAsyncTools:
+    def __init__(self) -> None:
+        self.started: asyncio.Event = asyncio.Event()
+        self.cancelled: bool = False
+
+    async def execute(self, *args: object, **kwargs: object) -> str:
+        _ = args, kwargs
+        _ = self.started.set()
+        try:
+            _ = await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        return "不应返回"
 
 
 class _CountingAsyncTools:
