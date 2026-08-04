@@ -524,6 +524,93 @@ def test_new_turn_cancels_the_active_response_provider_after_fencing() -> None:
     assert runtime.active_response_provider_task_ids == frozenset()
 
 
+def test_preoutput_tts_timeout_cancels_provider_without_context_commit() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _AsyncResponseBrain(), IntentRouter(()), _AsyncNoTools()
+        ),
+        response_task_timeout_ms=30,
+    )
+    provider_cancelled = False
+
+    async def synthesize(_text: str, _output_started: Callable[[], bool]) -> bool:
+        nonlocal provider_cancelled
+        try:
+            _ = await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            provider_cancelled = True
+            raise
+        return False
+
+    async def exercise() -> bool:
+        outcome = await runtime.receive_comment_async(
+            CommentProposal("问题", _correlation("tts-timeout", 1))
+        )
+        assert outcome.turn_id is not None
+        return await runtime.run_agent_tts_for_turn(
+            outcome.turn_id, synthesize, _correlation("tts-timeout", 1)
+        )
+
+    assert asyncio.run(exercise()) is False
+    tts_task = runtime.task_registry.task(TaskId("response-tts-turn-0001"))
+    assert tts_task is not None
+    assert tts_task.state is TaskState.TIMED_OUT
+    assert provider_cancelled
+    assert runtime.active_preoutput_tts_provider_task_ids == frozenset()
+    assert runtime.interaction_ingress.data.context.snapshot.entries == ()
+
+
+def test_session_end_cancels_tts_provider_after_audio_has_started() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _AsyncResponseBrain(), IntentRouter(()), _AsyncNoTools()
+        ),
+    )
+    audio_started = asyncio.Event()
+    provider_cancelled = False
+
+    async def synthesize(_text: str, output_started: Callable[[], bool]) -> bool:
+        nonlocal provider_cancelled
+        assert output_started()
+        _ = audio_started.set()
+        try:
+            _ = await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            provider_cancelled = True
+            raise
+        return False
+
+    async def exercise() -> bool:
+        outcome = await runtime.receive_comment_async(
+            CommentProposal("问题", _correlation("tts-session-end", 1))
+        )
+        assert outcome.turn_id is not None
+        running = asyncio.create_task(
+            runtime.run_agent_tts_for_turn(
+                outcome.turn_id, synthesize, _correlation("tts-session-end", 1)
+            )
+        )
+        _ = await audio_started.wait()
+        assert runtime.end_session(_correlation("tts-session-end", 2)).accepted
+        return await running
+
+    assert asyncio.run(exercise()) is False
+    assert provider_cancelled
+    assert runtime.active_preoutput_tts_provider_task_ids == frozenset()
+
+
 def test_new_shadow_never_executes_selected_tool_or_creates_effect_tasks() -> None:
     tools = _CountingAsyncTools()
     runtime = SessionRuntime.create(

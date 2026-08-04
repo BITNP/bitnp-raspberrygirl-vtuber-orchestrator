@@ -147,6 +147,10 @@ type AgentTtsSynthesize = Callable[[str, Callable[[], bool]], Awaitable[bool]]
 class _ResponseProviderCancelledError(Exception):
     """A fenced response task had its owned provider coroutine cancelled."""
 
+
+class _TtsProviderCancelledError(Exception):
+    """A pre-output TTS provider coroutine was fenced and cancelled."""
+
 def _monotonic_ms() -> int:
     return monotonic_ns() // 1_000_000
 
@@ -227,6 +231,15 @@ class _PendingResponseCommit:
     observation: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class _AgentTtsExecution:
+    task_id: TaskId
+    text: str
+    record: TaskRecord
+    correlation: EventCorrelation
+    output_started: Callable[[], None] | None
+
+
 @dataclass(slots=True)
 class SessionRuntime:
     scheduler: SessionScheduler
@@ -304,6 +317,10 @@ class SessionRuntime:
     _maintenance_tasks: set[asyncio.Task[None]] = field(default_factory=set)
 
     _active_response_provider_tasks: dict[TaskId, asyncio.Task[object]] = field(
+        default_factory=dict
+    )
+
+    _active_preoutput_tts_provider_tasks: dict[TaskId, asyncio.Task[bool]] = field(
         default_factory=dict
     )
 
@@ -439,6 +456,7 @@ class SessionRuntime:
         cancelled = self.task_registry.cancel_pending(reason="superseded_turn")
         self._cancel_preoutput_tts(cancelled)
         self._cancel_active_response_providers(cancelled)
+        self._cancel_active_preoutput_tts_providers(cancelled)
 
     def _cancel_active_response_providers(
         self, cancelled: tuple[TaskRecord, ...]
@@ -449,6 +467,23 @@ class SessionRuntime:
                 record.request.task_id
             )
             if provider_task is not None and not provider_task.done():
+                _ = provider_task.cancel()
+
+    def _cancel_active_preoutput_tts_providers(
+        self, cancelled: tuple[TaskRecord, ...]
+    ) -> None:
+        """Cancel only TTS coroutines whose task has not admitted audio yet."""
+        for record in cancelled:
+            provider_task = self._active_preoutput_tts_provider_tasks.get(
+                record.request.task_id
+            )
+            if provider_task is not None and not provider_task.done():
+                _ = provider_task.cancel()
+
+    def _cancel_all_active_tts_providers(self) -> None:
+        """Session termination also ends synthesis that has already started output."""
+        for provider_task in self._active_preoutput_tts_provider_tasks.values():
+            if not provider_task.done():
                 _ = provider_task.cancel()
 
     def set_preoutput_tts_cancellation(
@@ -1132,6 +1167,11 @@ class SessionRuntime:
         """Expose active provider ownership without leaking mutable task handles."""
         return frozenset(self._active_response_provider_tasks)
 
+    @property
+    def active_preoutput_tts_provider_task_ids(self) -> frozenset[TaskId]:
+        """Expose pre-output TTS ownership without leaking mutable task handles."""
+        return frozenset(self._active_preoutput_tts_provider_tasks)
+
     def _apply_coordinated_response(
         self,
         response: CoordinatedResponse,
@@ -1804,52 +1844,99 @@ class SessionRuntime:
                 or record.state is not TaskState.RUNNING
             ):
                 continue
-            if not text.strip():
-                _ = self.cancel_task(task_id, correlation)
-                _ = self._agent_tts_text.pop(task_id, None)
-                return False
-
-            committed = False
-
-            def accept_output_started(
-                task_id: TaskId = task_id,
-                record: TaskRecord = record,
-                text: str = text,
-            ) -> bool:
-                nonlocal committed
-                if committed:
-                    return True
-                committed = self.reduce_task(
-                    TaskResult(
-                        task_id,
-                        record.request.session_id,
-                        record.request.turn_id,
-                        record.request.snapshot_revision,
-                        TaskEffect("tts.emitted", text[:240]),
-                        record.request.cancellation_epoch,
-                        record.request.segment_id,
-                    ),
-                    correlation,
-                ).accepted
-                if committed:
-                    self._commit_response_after_output_started(task_id, correlation)
-                    if output_started is not None:
-                        output_started()
-                return committed
-
-            try:
-                emitted = await synthesize(text, accept_output_started)
-            except (OSError, ValueError):
-                emitted = False
-                _LOGGER.exception("agent_tts_execution_failed task=%s", task_id)
-            if not emitted or not committed:
-                _ = self.cancel_task(task_id, correlation)
-                _ = self._agent_tts_text.pop(task_id, None)
-                _ = self._pending_response_commits.pop(task_id, None)
-                return False
-            _ = self._agent_tts_text.pop(task_id, None)
-            return True
+            return await self._run_agent_tts_task(
+                _AgentTtsExecution(
+                    task_id, text, record, correlation, output_started
+                ),
+                synthesize,
+            )
         return False
+
+    async def _run_agent_tts_task(
+        self,
+        execution: _AgentTtsExecution,
+        synthesize: AgentTtsSynthesize,
+    ) -> bool:
+        task_id = execution.task_id
+        text = execution.text
+        record = execution.record
+        correlation = execution.correlation
+        if not text.strip():
+            _ = self.cancel_task(task_id, correlation)
+            _ = self._agent_tts_text.pop(task_id, None)
+            return False
+        committed = False
+
+        def accept_output_started() -> bool:
+            nonlocal committed
+            if committed:
+                return True
+            committed = self.reduce_task(
+                TaskResult(
+                    task_id,
+                    record.request.session_id,
+                    record.request.turn_id,
+                    record.request.snapshot_revision,
+                    TaskEffect("tts.emitted", text[:240]),
+                    record.request.cancellation_epoch,
+                    record.request.segment_id,
+                ),
+                correlation,
+            ).accepted
+            if committed:
+                self._commit_response_after_output_started(task_id, correlation)
+                if execution.output_started is not None:
+                    execution.output_started()
+            return committed
+
+        try:
+            emitted = await self._await_preoutput_tts_provider(
+                task_id, synthesize(text, accept_output_started)
+            )
+        except _TtsProviderCancelledError:
+            emitted = False
+            _LOGGER.debug("agent_tts_cancelled task=%s", task_id)
+        except TimeoutError:
+            emitted = False
+            _LOGGER.debug("agent_tts_timed_out task=%s", task_id)
+        except (OSError, ValueError):
+            emitted = False
+            _LOGGER.exception("agent_tts_execution_failed task=%s", task_id)
+        if not emitted or not committed:
+            _ = self.cancel_task(task_id, correlation)
+            _ = self._agent_tts_text.pop(task_id, None)
+            _ = self._pending_response_commits.pop(task_id, None)
+            return False
+        _ = self._agent_tts_text.pop(task_id, None)
+        return True
+
+    async def _await_preoutput_tts_provider(
+        self, task_id: TaskId, operation: Awaitable[bool]
+    ) -> bool:
+        """Run TTS under the task deadline until audio crosses its result gate."""
+        record = self.task_registry.task(task_id)
+        if record is None or record.state is not TaskState.RUNNING:
+            raise _TtsProviderCancelledError
+        remaining_ms = int(record.request.deadline_ms) - self.clock()
+        if remaining_ms <= 0:
+            _ = self.task_registry.timeout(task_id)
+            raise TimeoutError
+        provider_task = asyncio.ensure_future(operation)
+        self._active_preoutput_tts_provider_tasks[task_id] = provider_task
+        try:
+            return await asyncio.wait_for(provider_task, timeout=remaining_ms / 1_000)
+        except TimeoutError:
+            _ = self.task_registry.timeout(task_id)
+            raise
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
+            raise _TtsProviderCancelledError from None
+        finally:
+            _ = self._active_preoutput_tts_provider_tasks.pop(task_id, None)
+            if not provider_task.done():
+                _ = provider_task.cancel()
 
     def receive_control(self, raw_message: str) -> bool:
         parsed = parse_presentation_result_control(
@@ -2090,6 +2177,8 @@ class SessionRuntime:
         cancelled = self.task_registry.cancel_pending(reason="session_ended")
         self._cancel_preoutput_tts(cancelled)
         self._cancel_active_response_providers(cancelled)
+        self._cancel_active_preoutput_tts_providers(cancelled)
+        self._cancel_all_active_tts_providers()
         for command_id in tuple(self._active_deck_tasks.values()):
             _ = self.deck_dispatcher.cancel(command_id)
         self._deck_intents.clear()
