@@ -177,6 +177,8 @@ def test_memory_delete_rejects_previously_admitted_task_without_effect() -> None
     request = _task_request(scheduler, task_snapshot)
 
     assert isinstance(registry.register(request), TaskRegistrationAccepted)
+    assert registry.enqueue(request.task_id) is not None
+    assert registry.claim(request.task_id) is not None
 
     # When: deletion advances the persisted memory revision before task completion.
 

@@ -162,15 +162,14 @@ class _StreamingTts:
         raise AssertionError(message)
 
 
-def test_runtime_processes_cancellation_while_provider_runs_and_drops_stale_rtp() -> (
-    None
-):
+def test_runtime_rejects_mic_rtp_without_starting_a_provider() -> None:
 
     asyncio.run(_cancellation_proof())
 
 
 async def _cancellation_proof() -> None:
-    # Given: a registered onsite route whose provider work waits on an explicit signal.
+    # Given: a registered onsite route and an ASR provider that would expose any
+    # accidental UDP Mic ingress.
 
     transport = _Datagrams()
 
@@ -193,34 +192,28 @@ async def _cancellation_proof() -> None:
 
     listener.hub.register_control(_sink_registration(), "127.0.0.1")
 
-    # When: Mic work begins, control cancels its route, then the provider completes.
+    # When: an untrusted peer sends a packet shaped like Mic RTP.
 
     assert runtime.route_datagram(_rtp_packet(), ("127.0.0.1", 41_000)) is False
-
-    try:
-        _ = await asyncio.to_thread(asr.started.wait)
-
-        await runtime.cancel_stream("session-onsite-runtime", "stream-onsite-runtime")
-
-    finally:
-        asr.release.set()
-
     await runtime.wait_for_onsite_jobs()
-
     await runtime.close()
 
-    # Then: the callback released the loop and no stale RTP reached Sound.
+    # Then: Mic has no RTP ingress route; it must send authenticated asr.final
+    # control instead.  No provider or downstream Sound output is started.
 
+    assert transport.sent == []
+    assert asr.started.is_set() is False
     assert transport.sent == []
 
 
-def test_runtime_close_cancels_blocking_asr_and_drops_its_late_output() -> None:
+def test_runtime_close_after_rejected_mic_rtp_has_no_provider_to_cancel() -> None:
 
     asyncio.run(_close_before_release_proof())
 
 
 async def _close_before_release_proof() -> None:
-    # Given: an onsite ASR worker blocked until its provider resource is cancelled.
+    # Given: an onsite route whose ASR provider is reachable only through
+    # authenticated control events.
 
     transport = _Datagrams()
 
@@ -245,24 +238,18 @@ async def _close_before_release_proof() -> None:
 
     assert runtime.route_datagram(_rtp_packet(), ("127.0.0.1", 41_000)) is False
 
-    _ = await asyncio.to_thread(asr.started.wait)
-
-    # When: runtime shutdown invalidates the route before the blocking worker releases.
+    # When: runtime shutdown follows rejected Mic RTP.
 
     await runtime.close()
 
-    # Then: shutdown cancels the provider and its result cannot emit stale RTP.
+    # Then: no UDP packet can start the provider or emit stale RTP.
 
     assert transport.sent == []
-
-    _ = await asyncio.to_thread(asr.completed.wait)
-
-    assert asr.cancelled.is_set()
-
-    assert transport.sent == []
+    assert asr.started.is_set() is False
+    assert asr.cancelled.is_set() is False
 
 
-def test_mic_source_disconnect_finalizes_active_streaming_utterance() -> None:
+def test_mic_source_disconnect_does_not_turn_rtp_into_an_asr_utterance() -> None:
 
     asyncio.run(_source_disconnect_finalizes_proof())
 
@@ -373,7 +360,7 @@ async def _agent_plan_output_epoch_proof() -> None:
 
 
 async def _source_disconnect_finalizes_proof() -> None:
-    # Given: a non-legacy onsite route with one voiced RTP frame below forced endpoint.
+    # Given: a non-legacy onsite route with a peer attempting forbidden RTP ingress.
 
     transport = _Datagrams()
 
@@ -400,33 +387,17 @@ async def _source_disconnect_finalizes_proof() -> None:
 
     assert runtime.route_datagram(_rtp_packet(), ("127.0.0.1", 41_000)) is False
 
-    await runtime.wait_for_onsite_jobs()
-
-    # When: the bounded Mic stream closes before silence or the 15 s forced endpoint.
+    # When: the registered Mic control connection closes.
 
     listener.hub.remove_connection(mic_owner)
+    await runtime.wait_for_onsite_jobs()
+    await runtime.close()
 
-    try:
-        asr_started = await asyncio.to_thread(asr.started.wait, 1.0)
+    # Then: UDP did not create an endpoint or provider work before disconnect.
 
-        assert asr_started
-
-        asr.release.set()
-
-        await runtime.wait_for_onsite_jobs()
-
-    finally:
-        asr.release.set()
-
-        await runtime.close()
-
-    # Then: disconnect finalization reached ASR and generated output was not cancelled.
-
-    assert asr.completed.is_set()
-
-    assert asr.cancelled.is_set() is False
-
-    assert len(transport.sent) == 1
+    assert asr.started.is_set() is False
+    assert asr.completed.is_set() is False
+    assert transport.sent == []
 
 
 def _source_registration() -> str:

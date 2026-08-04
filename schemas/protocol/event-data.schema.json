@@ -5,7 +5,6 @@
   "event_types": {
     "audience.input": {"required": ["input_id", "origin", "text", "received_at"]}, "llm.request": {"required": ["request_id", "prompt"]}, "llm.response.delta": {"required": ["request_id", "delta_text", "index"]}, "llm.response.final": {"required": ["request_id", "text", "finish_reason"]}, "llm.response.error": {"required": ["request_id", "error"]},
     "mic.input.register": {"additionalProperties": false, "required": ["stream_id"], "properties": {"stream_id": {"type": "string", "minLength": 1}}},
-    "media.rtp.source.register": {"additionalProperties": false, "required": ["stream_id", "ssrc", "codec", "rtp_endpoint"], "properties": {"stream_id": {"type": "string", "minLength": 1}, "ssrc": {"$ref": "#/definitions/rtp_ssrc"}, "codec": {"$ref": "#/definitions/rtp_codec"}, "rtp_endpoint": {"$ref": "#/definitions/rtp_endpoint"}}},
     "media.rtp.source.ready": {"additionalProperties": false, "required": ["stream_id", "ssrc"], "properties": {"stream_id": {"type": "string", "minLength": 1}, "ssrc": {"$ref": "#/definitions/rtp_ssrc"}}},
     "media.rtp.sink.register": {"additionalProperties": false, "required": ["stream_id", "codec", "rtp_endpoint"], "properties": {"stream_id": {"type": "string", "minLength": 1}, "codec": {"$ref": "#/definitions/rtp_codec"}, "rtp_endpoint": {"$ref": "#/definitions/rtp_endpoint"}}},
     "media.rtp.sink.ready": {"additionalProperties": false, "required": ["stream_id"], "properties": {"stream_id": {"type": "string", "minLength": 1}}},

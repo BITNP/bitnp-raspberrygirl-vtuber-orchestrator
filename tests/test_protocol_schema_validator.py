@@ -17,8 +17,8 @@ INVALID_CUE: Final = ROOT / "schemas/fixtures/invalid/cue_end_before_start.json"
 
 INVALID_LEGACY: Final = ROOT / "schemas/fixtures/invalid/legacy_asr_event.json"
 
-INVALID_RTP_CODEC: Final = (
-    ROOT / "schemas/fixtures/invalid/rtp_codec_wrong_payload_type.json"
+INVALID_RETIRED_MIC_RTP: Final = (
+    ROOT / "schemas/fixtures/invalid/retired_mic_rtp_source_registration.json"
 )
 
 
@@ -114,7 +114,12 @@ def test_protocol_validator_rejects_retired_mic_rtp_source_registration() -> Non
 
 
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--expect-invalid", str(INVALID_RTP_CODEC)],
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--expect-invalid",
+            str(INVALID_RETIRED_MIC_RTP),
+        ],
         check=False,
         text=True,
         capture_output=True,
