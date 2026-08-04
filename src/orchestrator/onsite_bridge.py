@@ -81,8 +81,8 @@ type OnsiteOutputFinished = Callable[[StreamKey, CancellationEpoch], Awaitable[N
 
 type OnsiteOutputAuthorization = Callable[[StreamKey, CancellationEpoch], bool]
 
-type OnsiteAgentPlanOutputLease = Callable[
-    [StreamKey, CancellationEpoch, str], CancellationEpoch | None
+type OnsiteAgentPlanOutputPreparation = Callable[
+    [StreamKey, CancellationEpoch, str], Awaitable[CancellationEpoch | None]
 ]
 
 type OnsiteReplacement = Callable[
@@ -110,7 +110,7 @@ def _allow_output(stream: StreamKey, epoch: CancellationEpoch) -> bool:
     return True
 
 
-def _reuse_requested_output_epoch(
+async def _prepare_reuse_requested_output_epoch(
     stream: StreamKey, epoch: CancellationEpoch, turn_id: str
 ) -> CancellationEpoch:
     _ = (stream, turn_id)
@@ -214,8 +214,8 @@ class OnsiteExplainerBridge:
 
     authorize_output: OnsiteOutputAuthorization = field(default=_allow_output)
 
-    allocate_agent_plan_output: OnsiteAgentPlanOutputLease = field(
-        default=_reuse_requested_output_epoch
+    prepare_agent_plan_output: OnsiteAgentPlanOutputPreparation = field(
+        default=_prepare_reuse_requested_output_epoch
     )
 
     observability: OnsiteObservability | None = None
@@ -232,11 +232,11 @@ class OnsiteExplainerBridge:
         """Install the transport's scheduler-owned output admission callback."""
         self.authorize_output = callback
 
-    def set_agent_plan_output_allocator(
-        self, callback: OnsiteAgentPlanOutputLease
+    def set_agent_plan_output_preparer(
+        self, callback: OnsiteAgentPlanOutputPreparation
     ) -> None:
-        """Install the scheduler-owned lease allocator for Brain-originated TTS."""
-        self.allocate_agent_plan_output = callback
+        """Install the async first-frame/cutover admission callback."""
+        self.prepare_agent_plan_output = callback
 
     def set_replacement_callback(self, callback: OnsiteReplacement) -> None:
         self.begin_replacement = callback
@@ -721,7 +721,7 @@ class OnsiteExplainerBridge:
                     output_started,
                 )
             chunks = await asyncio.to_thread(self.synthesize, text, cancellation)
-            output_epoch = self.allocate_agent_plan_output(stream, epoch, turn_id)
+            output_epoch = await self.prepare_agent_plan_output(stream, epoch, turn_id)
             if not chunks or output_epoch is None:
                 return False
             packetizer = TtsPcmRtpPacketizer(
@@ -792,7 +792,7 @@ class OnsiteExplainerBridge:
                 if len(buffered) < L16_FRAME_BYTES:
                     continue
                 if packetizer is None:
-                    output_epoch = self.allocate_agent_plan_output(
+                    output_epoch = await self.prepare_agent_plan_output(
                         stream, epoch, turn_id
                     )
                     if output_epoch is None:
@@ -807,7 +807,9 @@ class OnsiteExplainerBridge:
             if packetizer is None:
                 if not buffered:
                     return False
-                output_epoch = self.allocate_agent_plan_output(stream, epoch, turn_id)
+                output_epoch = await self.prepare_agent_plan_output(
+                    stream, epoch, turn_id
+                )
                 if output_epoch is None:
                     return False
                 packetizer = TtsPcmRtpPacketizer(stream, output_epoch)

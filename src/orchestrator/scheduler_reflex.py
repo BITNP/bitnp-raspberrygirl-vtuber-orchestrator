@@ -210,6 +210,55 @@ class SchedulerOutputFence:
 
         return replacement, flush
 
+    def interrupt_for_turn(
+        self,
+        *,
+        stream: StreamKey,
+        segment_id: SegmentId,
+        turn_id: str,
+        correlation: EnvelopeCorrelation,
+    ) -> tuple[OutputLease, StreamFlush] | None:
+        """Prepare a first-frame-ready replacement for the current turn.
+
+        Unlike reflex interruption this must not start a second scheduler turn:
+        the response TTS task is already owned by ``turn_id``.
+        """
+        if str(self._scheduler.snapshot.active_turn_id) != turn_id:
+            return None
+        active = self._leases.get(stream)
+        if active is None:
+            return None
+        generation = active.generation + 1
+        replacement = OutputLease(
+            stream=stream,
+            turn_id=TurnId(turn_id),
+            segment_id=segment_id,
+            cancellation_epoch=CancellationEpoch(generation),
+            generation=generation,
+            target_generated_ssrc=GeneratedSsrc(
+                generated_ssrc(stream, CancellationEpoch(generation))
+            ),
+        )
+        self._last_generation[stream] = generation
+        self._flush_sequence += 1
+        flush = StreamFlush(
+            stream=stream,
+            turn_id=active.turn_id,
+            segment_id=active.segment_id,
+            cancellation_epoch=replacement.cancellation_epoch,
+            request_id=FlushRequestId(
+                f"{stream.session_id}:{stream.stream_id}:flush:{self._flush_sequence}"
+            ),
+            target_generated_ssrc=active.target_generated_ssrc,
+            correlation=correlation,
+        )
+        self._pending[stream] = _PendingReplacement(active, replacement, flush)
+        _ = self._retained.pop(stream, None)
+        return replacement, flush
+
+    def has_active_lease(self, stream: StreamKey) -> bool:
+        return stream in self._leases
+
     def acknowledge(self, acknowledgement: FlushAcknowledgement) -> bool:
         pending = self._pending.get(acknowledgement.stream)
 

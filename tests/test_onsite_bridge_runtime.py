@@ -18,7 +18,12 @@ from orchestrator.pipeline_contracts import ASRAudienceEvent, PipelineConfig
 from orchestrator.retrieval import RetrievalFixtureProvider
 from orchestrator.scheduler_reflex import SchedulerOutputFence
 from orchestrator.sessions import SessionScheduler
-from orchestrator.streaming_contracts import CancellationEpoch, StreamKey
+from orchestrator.streaming_contracts import (
+    CancellationEpoch,
+    FlushAcknowledgement,
+    StreamFlush,
+    StreamKey,
+)
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_hub import RtpHub
 from orchestrator.transport_runtime import ControlHandler, TransportRuntime
@@ -254,7 +259,7 @@ def test_mic_source_disconnect_does_not_turn_rtp_into_an_asr_utterance() -> None
     asyncio.run(_source_disconnect_finalizes_proof())
 
 
-def test_agent_plan_tts_uses_allocated_output_epoch_after_prior_playback() -> None:
+def test_agent_plan_tts_replaces_only_after_sound_flush_ack() -> None:
 
     asyncio.run(_agent_plan_output_epoch_proof())
 
@@ -322,13 +327,22 @@ async def _agent_plan_output_epoch_proof() -> None:
         session_id=SessionId("session-onsite-runtime"),
         turn_id_prefix="turn-agent-plan-output",
     )
-    hub.set_output_fence(SchedulerOutputFence(scheduler))
+    fence = SchedulerOutputFence(scheduler)
+    hub.set_output_fence(fence)
     command_epochs: list[int] = []
 
     async def record_command(_stream: StreamKey, epoch: int) -> None:
         command_epochs.append(epoch)
 
     hub.set_output_command_callback(record_command)
+
+    async def acknowledge_flush(flush: StreamFlush) -> None:
+        assert fence.acknowledge(FlushAcknowledgement.from_flush(flush))
+
+    async def admit_flush(_flush: StreamFlush) -> bool:
+        return True
+
+    hub.set_replacement_callbacks(acknowledge_flush, admit_flush)
     hub.register_control(_source_registration(), "127.0.0.1")
     hub.register_control(_sink_registration(), "127.0.0.1")
     stream = StreamKey("session-onsite-runtime", "stream-onsite-runtime")
@@ -346,13 +360,13 @@ async def _agent_plan_output_epoch_proof() -> None:
     )
     await asyncio.sleep(0)
 
-    # Then: the hub's fresh lease is used consistently for both the command and
-    # outgoing RTP instead of treating the Mic input epoch as an output epoch.
+    # Then: the old lease stays live until the flush callback acknowledges it;
+    # this current turn then receives the next output epoch without a new turn.
 
     assert emitted is True
     assert scheduler.snapshot.revision == revision
     assert scheduler.snapshot.active_turn_id == turn_id
-    assert command_epochs == [0, 1]
+    assert command_epochs == [0]
     assert len(transport.sent) == 1
     packet, endpoint = transport.sent[0]
     assert endpoint == ("127.0.0.1", 5006)

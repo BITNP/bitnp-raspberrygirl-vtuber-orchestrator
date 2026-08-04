@@ -69,10 +69,10 @@ class OnsiteBridge(Protocol):
         callback: Callable[[StreamKey, CancellationEpoch], bool],
     ) -> None: ...
 
-    def set_agent_plan_output_allocator(
+    def set_agent_plan_output_preparer(
         self,
         callback: Callable[
-            [StreamKey, CancellationEpoch, str], CancellationEpoch | None
+            [StreamKey, CancellationEpoch, str], Awaitable[CancellationEpoch | None]
         ],
     ) -> None: ...
 
@@ -369,8 +369,8 @@ class RtpHub:
 
         if bridge is not None:
             bridge.set_output_authorizer(self.authorize_onsite_output)
-            bridge.set_agent_plan_output_allocator(
-                self.allocate_onsite_agent_plan_output
+            bridge.set_agent_plan_output_preparer(
+                self.prepare_onsite_agent_plan_output
             )
 
     def authorize_onsite_output(
@@ -434,6 +434,43 @@ class RtpHub:
             self._output_command_tasks.add(task)
             task.add_done_callback(self._output_command_tasks.discard)
         return lease.cancellation_epoch
+
+    async def prepare_onsite_agent_plan_output(
+        self, stream: StreamKey, input_epoch: CancellationEpoch, turn_id: str
+    ) -> CancellationEpoch | None:
+        """Admit a prepared first frame without interrupting current playback.
+
+        A fresh stream can allocate immediately.  With an active lease, this
+        is the sole route through the scheduler-owned Sound flush task; callers
+        retain their first frame until its exact acknowledgement is committed.
+        """
+        output_fence = self._output_fence
+        if output_fence is None:
+            return input_epoch
+        if not output_fence.has_active_lease(stream):
+            return self.allocate_onsite_agent_plan_output(stream, input_epoch, turn_id)
+        correlation = self._correlations.get(stream)
+        if (
+            correlation is None
+            or self._replacement_flush_callback is None
+            or self._replacement_admit_callback is None
+        ):
+            return None
+        prepared = output_fence.interrupt_for_turn(
+            stream=stream,
+            segment_id=SegmentId(f"agent-{turn_id}"),
+            turn_id=turn_id,
+            correlation=correlation,
+        )
+        if prepared is None:
+            return None
+        replacement, flush = prepared
+        schedule = self._replacement_task_schedule
+        task_id = schedule(stream, replacement, flush) if schedule is not None else None
+        if task_id is False:
+            _ = output_fence.abandon_replacement(stream)
+            return None
+        return await self._await_replacement_flush(stream, replacement, flush, task_id)
 
     @property
     def route_ready(self) -> bool:
