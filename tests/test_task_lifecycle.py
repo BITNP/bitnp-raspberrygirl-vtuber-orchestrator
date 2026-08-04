@@ -70,3 +70,35 @@ def test_terminal_task_is_retained_until_explicit_tombstone_cleanup() -> None:
     removed = registry.clear_terminal_tombstones()
     assert tuple(record.request.task_id for record in removed) == (task_id,)
     assert registry.task(task_id) is None
+
+
+def test_terminal_tombstone_expires_only_after_its_monotonic_ttl() -> None:
+    now = 100
+    registry = TaskRegistry(
+        session_id=SessionId("session-1"),
+        config=SchedulerTaskConfig(
+            frozenset(TaskKind), max_children_per_task=2, tombstone_ttl_ms=50
+        ),
+        clock=lambda: now,
+    )
+    request = TaskRequest(
+        task_id=TaskId("task-ttl"),
+        session_id=SessionId("session-1"),
+        turn_id=TurnId("turn-1"),
+        parent_task_id=None,
+        deadline_ms=TaskDeadlineMs(200),
+        snapshot_revision=StateRevision(2),
+        idempotency_key=IdempotencyKey("task-ttl"),
+        kind=TaskKind.INTERACTIVE,
+    )
+    assert registry.register(request).__class__.__name__ == "TaskRegistrationAccepted"
+    assert registry.enqueue(request.task_id) is not None
+    assert registry.claim(request.task_id) is not None
+    assert registry.cancel(request.task_id, reason="interrupt") is not None
+
+    assert registry.expire_terminal_tombstones(now_ms=149) == ()
+    assert registry.task(request.task_id) is not None
+    removed = registry.expire_terminal_tombstones(now_ms=150)
+    assert tuple(record.request.task_id for record in removed) == (request.task_id,)
+    assert registry.task(request.task_id) is None
+    assert registry.register(request).__class__.__name__ == "TaskRegistrationAccepted"
