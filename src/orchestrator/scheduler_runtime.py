@@ -517,6 +517,20 @@ class SessionRuntime:
         )
         return transition.state.phase is TurnPhase.CUTOVER_PENDING
 
+    def response_cutover_failed(self, turn_id: TurnId) -> bool:
+        """Keep the retained lease authoritative after a failed replacement."""
+        state = self.turn_coordinator.state
+        if (
+            state.turn_id != str(turn_id)
+            or state.epoch != int(self.cancellation_epoch)
+            or state.phase is not TurnPhase.CUTOVER_PENDING
+        ):
+            return False
+        transition = self.turn_coordinator.restore_retained_playback(
+            turn_id=str(turn_id), epoch=int(self.cancellation_epoch)
+        )
+        return transition.state.phase is TurnPhase.PLAYING
+
     def response_playback_finished(self) -> bool:
         """Consume a Sound-validated physical completion for the active turn.
 
@@ -1786,8 +1800,10 @@ class SessionRuntime:
             return
         if int(record.request.deadline_ms) < self.clock():
             _ = self.task_registry.timeout(task_id)
+            _ = self.response_cutover_failed(record.request.turn_id)
             return
         _ = self.task_registry.fail(task_id, reason=reason)
+        _ = self.response_cutover_failed(record.request.turn_id)
 
     def _apply_agent_plan(
         self,

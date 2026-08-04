@@ -83,3 +83,21 @@ def test_runtime_replacement_requires_cutover_before_playback() -> None:
     assert pending.effects == (StateEffect.FLUSH_SOUND,)
     playing = coordinator.playback_started(turn_id="turn-2", epoch=8)
     assert playing.state.phase is TurnPhase.PLAYING
+
+
+def test_rejected_replacement_restores_the_retained_playback_turn() -> None:
+    coordinator = AgentStateReducer()
+    _ = coordinator.enqueue(turn_id="turn-old", epoch=7)
+    _ = coordinator.start_reasoning(turn_id="turn-old", epoch=7)
+    _ = coordinator.start_synthesizing(turn_id="turn-old", epoch=7)
+    _ = coordinator.playback_started(turn_id="turn-old", epoch=7)
+    _ = coordinator.enqueue(turn_id="turn-new", epoch=8, replacement=True)
+    _ = coordinator.start_reasoning(turn_id="turn-new", epoch=8)
+    _ = coordinator.start_synthesizing(turn_id="turn-new", epoch=8)
+    _ = coordinator.await_cutover(turn_id="turn-new", epoch=8)
+
+    restored = coordinator.restore_retained_playback(turn_id="turn-new", epoch=8)
+
+    assert restored.state.phase is TurnPhase.PLAYING
+    assert restored.state.turn_id == "turn-old"
+    assert restored.state.retained_playback_turn_id is None

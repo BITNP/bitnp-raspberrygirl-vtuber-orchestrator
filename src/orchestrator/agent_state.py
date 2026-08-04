@@ -48,6 +48,7 @@ class AgentState:
     phase: TurnPhase = TurnPhase.IDLE
     pending_interrupt: bool = False
     turn_id: str | None = None
+    retained_playback_turn_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +93,11 @@ class TurnCoordinator:
                 phase=TurnPhase.QUEUED,
                 pending_interrupt=replacement,
                 turn_id=turn_id,
+                retained_playback_turn_id=(
+                    self._state.turn_id
+                    if replacement and self._state.phase is TurnPhase.PLAYING
+                    else None
+                ),
             )
         )
 
@@ -124,13 +130,32 @@ class TurnCoordinator:
         )
 
     def playback_started(self, *, turn_id: str, epoch: int) -> StateTransition:
-        return self._advance(
-            turn_id,
-            epoch,
-            {TurnPhase.SYNTHESIZING, TurnPhase.CUTOVER_PENDING},
-            TurnPhase.PLAYING,
+        state = self._state
+        if (
+            state.turn_id != turn_id
+            or state.epoch != epoch
+            or state.phase not in {TurnPhase.SYNTHESIZING, TurnPhase.CUTOVER_PENDING}
+        ):
+            return StateTransition(state)
+        return self._set(
+            AgentState(epoch, TurnPhase.PLAYING, turn_id=turn_id),
             StateEffect.EMIT_AUDIO,
         )
+
+    def restore_retained_playback(
+        self, *, turn_id: str, epoch: int
+    ) -> StateTransition:
+        """Abandon a rejected replacement while the old lease keeps playing."""
+        state = self._state
+        retained = state.retained_playback_turn_id
+        if (
+            state.turn_id != turn_id
+            or state.epoch != epoch
+            or state.phase is not TurnPhase.CUTOVER_PENDING
+            or retained is None
+        ):
+            return StateTransition(state)
+        return self._set(AgentState(epoch, TurnPhase.PLAYING, turn_id=retained))
 
     def playback_finished(self, *, turn_id: str, epoch: int) -> StateTransition:
         return self._advance(
@@ -286,7 +311,14 @@ class TurnCoordinator:
         ):
             return StateTransition(state)
         return self._set(
-            AgentState(epoch, phase, state.pending_interrupt, turn_id), *effects
+            AgentState(
+                epoch,
+                phase,
+                state.pending_interrupt,
+                turn_id,
+                state.retained_playback_turn_id,
+            ),
+            *effects,
         )
 
     def _set(self, state: AgentState, *effects: StateEffect) -> StateTransition:

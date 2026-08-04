@@ -78,6 +78,8 @@ task 的结果栅栏允许切换。
 任务。替换播放必须先获首帧和匹配的 Sound flush ACK；成功时先取消旧字幕 timeline，
 失败则旧音频与旧 timeline 都保持。`PLAYING → COMPLETED` 只能由 Sound 已通过输出
 lease 校验的 `finished` 事件触发；TTS provider 完成或重复/过期 finished 都不能结束逻辑 turn。
+如果 replacement flush 被拒绝、超时或失效，`TurnCoordinator` 会恢复已保留旧 lease 的
+`PLAYING` 状态；新 turn 不得写入 context、memory 或 timeline。
 
 迁移期间通过 `ORCHESTRATOR_RESPONSE_EXECUTION_MODE` 按 session 选择
 `legacy_execute`、`new_shadow` 或 `new_execute`（默认）。`new_shadow` 运行新模型、
