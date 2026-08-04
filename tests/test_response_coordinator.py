@@ -53,6 +53,12 @@ class _Tools:
         return "检索结果"
 
 
+class _FailingTools:
+    async def execute(self, request: object, snapshot: BrainStateSnapshot) -> str:
+        _ = request, snapshot
+        raise OSError
+
+
 def test_tool_intent_has_one_final_answer_call_without_reopening_tools() -> None:
     brain = _Brain(
         [ResponseProposal("", "knowledge"), ResponseProposal("答案", "answer")]
@@ -87,3 +93,30 @@ def test_stale_turn_cannot_commit_a_model_result() -> None:
 
     with pytest.raises(ResponseSupersededError):
         _ = asyncio.run(coordinator.respond(_snapshot(), is_current=lambda: False))
+
+
+def test_failed_tool_still_has_exactly_one_tools_disabled_final_answer() -> None:
+    brain = _Brain(
+        [ResponseProposal("", "knowledge"), ResponseProposal("暂不可用", "answer")]
+    )
+    coordinator = AsyncResponseCoordinator(
+        brain,
+        IntentRouter(
+            (
+                IntentSpec(
+                    "knowledge",
+                    "knowledge",
+                    "local",
+                    "knowledge.lookup",
+                    lambda snapshot: {"query": snapshot.input.text},
+                ),
+            )
+        ),
+        _FailingTools(),
+    )
+
+    result = asyncio.run(coordinator.respond(_snapshot()))
+
+    assert result.proposal == ResponseProposal("暂不可用", "answer")
+    assert result.observation == "工具调用未成功完成。请基于已知信息简短说明。"
+    assert brain.allowed == [frozenset({"answer", "knowledge"}), frozenset({"answer"})]
