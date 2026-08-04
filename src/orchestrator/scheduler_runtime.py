@@ -813,6 +813,7 @@ class SessionRuntime:
         )
         result = pipeline.run(snapshot)
         self._agent_results.append(result)
+        self._record_legacy_plan_result(result, turn_id, correlation)
         if isinstance(result, PlanAccepted):
             self._apply_agent_plan(
                 result, audience_input, turn_id, correlation, composition
@@ -883,6 +884,7 @@ class SessionRuntime:
         )
         result = await pipeline.run(snapshot)
         self._agent_results.append(result)
+        self._record_legacy_plan_result(result, turn_id, correlation)
         if isinstance(result, PlanAccepted):
             self._apply_agent_plan(
                 result, audience_input, turn_id, correlation, composition
@@ -891,6 +893,33 @@ class SessionRuntime:
             _LOGGER.debug(
                 "agent_plan_rejected turn=%s reason=%s", turn_id, result.reason
             )
+
+    def _record_legacy_plan_result(
+        self,
+        result: PlanResult,
+        turn_id: TurnId,
+        correlation: EventCorrelation,
+    ) -> None:
+        """Emit migration-only, redacted evidence for an explicit legacy run."""
+        if isinstance(result, PlanAccepted):
+            outcome = (
+                f"accepted=True;tools={len(result.plan.tool_requests)};"
+                f"observations={len(result.observations)};"
+                f"response={bool(result.plan.response_text)}"
+            )
+        else:
+            outcome = f"accepted=False;reason={result.reason}"
+        self.operational_journal.append(
+            OperationalRecord(
+                stage="legacy_plan",
+                trace_id=str(correlation.trace_id),
+                session_id=str(correlation.session_id),
+                turn_id=str(turn_id),
+                segment_id=None,
+                task_id=None,
+                outcome=outcome,
+            )
+        )
 
     async def _run_async_response(  # noqa: C901, PLR0911, PLR0912, PLR0915
         self,

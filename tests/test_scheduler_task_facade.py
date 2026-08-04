@@ -236,6 +236,14 @@ def test_runtime_routes_comment_through_agent_gate_and_brain_snapshot() -> None:
     assert runtime.interaction_ingress.data.memory.snapshot.entries[0].value == "小莓"
     assert effects.media == [MediaOperation("synthesize", text="answer")]
     assert effects.frontend == [FrontendOperation("caption", "answer")]
+    legacy_record = next(
+        record
+        for record in runtime.operational_journal.records
+        if record.stage == "legacy_plan"
+    )
+    assert legacy_record.outcome == (
+        "accepted=True;tools=0;observations=0;response=True"
+    )
 
 
 def test_runtime_emits_reducer_approved_tts_task_once() -> None:

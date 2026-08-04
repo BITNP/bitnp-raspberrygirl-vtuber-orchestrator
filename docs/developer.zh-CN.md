@@ -90,6 +90,8 @@ stage，作为 replay 准入证据；若影子模式缺少新协调器，运行�
 到 legacy 副作用路径。
 `new_execute` 若缺少 Gate 或 ResponseCoordinator 也同样 fail-closed；不会隐式构造
 mock AgentPlan pipeline 或回退到 legacy 执行。`legacy_execute` 仅允许显式迁移/回滚配置。
+每次显式 legacy 执行都写入不含正文的迁移审计（接受/拒绝、工具数、观察数或拒绝原因），
+以便与 shadow/replay 报告比较；该审计不能作为继续保留 legacy 的长期理由。
 
 Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 保持回放和健康检查能力。Frontend 不参与 onsite audio loop；字幕 cue 在协议层准备就绪，但不要把同步字幕渲染描述为已完成能力。
 
