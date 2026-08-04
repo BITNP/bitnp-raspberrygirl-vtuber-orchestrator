@@ -25,6 +25,8 @@ class McpToolAllowance:
     timeout_ms: int
     max_request_bytes: int
 
+    max_response_bytes: int = 16_384
+
     def __post_init__(self) -> None:
         if (
             self.server.strip() == ""
@@ -32,6 +34,7 @@ class McpToolAllowance:
             or self.capability.strip() == ""
             or self.timeout_ms <= 0
             or self.max_request_bytes <= 0
+            or self.max_response_bytes <= 0
         ):
             raise McpAllowlistError
 
@@ -89,8 +92,30 @@ class AllowlistedMcpToolExecutor:
             )
         except (OSError, TimeoutError, ValueError):
             return None
+        return self._observation(allowance, result)
+
+    @staticmethod
+    def _observation(
+        allowance: McpToolAllowance, result: dict[str, object] | None
+    ) -> str | None:
         if result is None:
             return None
+        try:
+            result_bytes = json.dumps(result, ensure_ascii=False).encode()
+        except (TypeError, ValueError):
+            return None
+        if len(result_bytes) > allowance.max_response_bytes:
+            return json.dumps(
+                {
+                    "source": "mcp",
+                    "server": allowance.server,
+                    "tool": allowance.tool,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "result": None,
+                    "error": "工具返回超过受限大小, 未采用原始内容。",
+                },
+                ensure_ascii=False,
+            )
         return json.dumps(
             {
                 "source": "mcp",

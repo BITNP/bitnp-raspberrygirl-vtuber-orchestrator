@@ -18,6 +18,8 @@ from orchestrator.mcp_allowlist import (
 class _Requester:
     calls: list[tuple[str, int]]
 
+    result: dict[str, object] | None = None
+
     def request(
         self,
         allowance: McpToolAllowance,
@@ -26,7 +28,11 @@ class _Requester:
         timeout_ms: int,
     ) -> dict[str, object] | None:
         self.calls.append((allowance.name, timeout_ms))
-        return {"url": "https://example.test", "echo": arguments}
+        return (
+            {"url": "https://example.test", "echo": arguments}
+            if self.result is None
+            else self.result
+        )
 
 
 def _snapshot(capabilities: frozenset[str]) -> BrainStateSnapshot:
@@ -78,3 +84,20 @@ def test_allowlist_rejects_duplicate_entries_and_oversized_requests() -> None:
         is None
     )
     assert requester.calls == []
+
+
+def test_allowlist_bounds_oversized_untrusted_result() -> None:
+    allowance = McpToolAllowance("web", "search", "network.search", 500, 64, 8)
+    requester = _Requester([], {"content": "远大于观察上限的工具返回"})
+    executor = AllowlistedMcpToolExecutor(StaticMcpAllowlist((allowance,)), requester)
+
+    observation = executor.execute(
+        ToolRequest("mcp", "web/search", {"query": "测试"}),
+        _snapshot(frozenset({"mcp:web/search"})),
+    )
+
+    assert observation is not None
+    parsed = parse_json_value(observation)
+    assert isinstance(parsed, dict)
+    assert parsed["result"] is None
+    assert parsed["error"] == "工具返回超过受限大小, 未采用原始内容。"
