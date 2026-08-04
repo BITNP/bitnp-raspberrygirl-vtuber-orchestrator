@@ -9,7 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, cast
 
-from orchestrator.agent_state import AgentStateReducer, GateOutcome, StateEffect
+from orchestrator.agent_state import GateOutcome, StateEffect, TurnCoordinator
 from orchestrator.asr_semantic_gate import AsrGateDecision
 from orchestrator.llm import CancellationToken
 from orchestrator.observability import (
@@ -187,7 +187,7 @@ class OnsiteStreamActor:
 
     _output_epoch: CancellationEpoch | None = None
 
-    _state: AgentStateReducer = field(default_factory=AgentStateReducer)
+    _state: TurnCoordinator = field(default_factory=TurnCoordinator)
 
     def __post_init__(self) -> None:
         self._chunk_space.set()

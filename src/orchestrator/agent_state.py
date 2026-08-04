@@ -54,8 +54,14 @@ class StateTransition:
 
 
 @final
-class AgentStateReducer:
-    """Enforces delayed Sound interruption and rejects stale provider output."""
+class TurnCoordinator:
+    """Own the turn's transport-free reasoning, cutover, and playback states.
+
+    Provider adapters return observations to this coordinator; they do not
+    choose media effects themselves.  The legacy name remains an alias below
+    while SessionRuntime's response path is migrated onto this same state
+    machine.
+    """
 
     def __init__(self) -> None:
         self._state = AgentState()
@@ -143,3 +149,8 @@ class AgentStateReducer:
     def _set(self, state: AgentState, *effects: StateEffect) -> StateTransition:
         self._state = state
         return StateTransition(state, effects)
+
+
+# Transitional import surface for existing callers.  New code must depend on
+# TurnCoordinator so the coordinator is visibly the turn authority.
+AgentStateReducer = TurnCoordinator
