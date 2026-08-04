@@ -16,6 +16,7 @@ from orchestrator.config import OrchestratorConfig, load_config_from_env
 from orchestrator.ids import SessionId
 from orchestrator.observability import OnsiteObservability
 from orchestrator.onsite_bridge import build_onsite_bridge
+from orchestrator.response_execution_mode import ResponseExecutionMode
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 from orchestrator.transport_config import load_transport_config_from_env
@@ -51,6 +52,11 @@ async def run_transport() -> None:
             session_id=session_id,
             turn_id_prefix="turn",
             task_config=SchedulerTaskConfig(frozenset(TaskKind), 1),
+            response_execution_mode=getattr(
+                config,
+                "response_execution_mode",
+                ResponseExecutionMode.NEW_EXECUTE,
+            ),
         )
         if brain_completion is not None:
             session_runtime.async_agent_gate = build_async_agent_gate(

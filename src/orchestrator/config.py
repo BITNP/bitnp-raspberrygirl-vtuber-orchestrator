@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, NewType, override
 
+from orchestrator.response_execution_mode import ResponseExecutionMode
+
 DEFAULT_SERVICE_NAME: Final = "orchestrator"
 
 DEFAULT_SERVICE_VERSION: Final = "0.1.0"
@@ -54,6 +56,8 @@ SERVICE_NAME_KEY: Final = "ORCHESTRATOR_SERVICE_NAME"
 SERVICE_VERSION_KEY: Final = "ORCHESTRATOR_SERVICE_VERSION"
 
 SESSION_ID_PREFIX_KEY: Final = "ORCHESTRATOR_SESSION_ID_PREFIX"
+
+RESPONSE_EXECUTION_MODE_KEY: Final = "ORCHESTRATOR_RESPONSE_EXECUTION_MODE"
 
 LlmProvider = Literal["mock", "openai_compatible"]
 
@@ -121,6 +125,8 @@ class OrchestratorConfigInput:
 
     tls_ca_path: str | None = None
 
+    response_execution_mode: ResponseExecutionMode = ResponseExecutionMode.NEW_EXECUTE
+
 
 @dataclass(frozen=True, slots=True)
 class OrchestratorConfig:
@@ -162,6 +168,8 @@ class OrchestratorConfig:
     trusted_lan_token: TrustedLanToken | None = None
 
     tls_ca_path: Path | None = None
+
+    response_execution_mode: ResponseExecutionMode = ResponseExecutionMode.NEW_EXECUTE
 
     @classmethod
     def parse(cls, config: OrchestratorConfigInput) -> "OrchestratorConfig":
@@ -209,6 +217,7 @@ class OrchestratorConfig:
             tts_mode=config.tts_mode,
             trusted_lan_token=config.trusted_lan_token,
             tls_ca_path=_parse_optional_path(config.tls_ca_path),
+            response_execution_mode=config.response_execution_mode,
         )
 
 
@@ -250,6 +259,9 @@ def load_config_from_env(env: Mapping[str, str] | None = None) -> OrchestratorCo
             tts_mode=_parse_tts_mode(source.get(TTS_MODE_KEY)),
             trusted_lan_token=_parse_optional_token(source.get(TRUSTED_LAN_TOKEN_KEY)),
             tls_ca_path=source.get(TLS_CA_PATH_KEY),
+            response_execution_mode=_parse_response_execution_mode(
+                source.get(RESPONSE_EXECUTION_MODE_KEY)
+            ),
         )
     )
 
@@ -301,6 +313,15 @@ def _parse_tts_mode(raw_mode: str | None) -> TtsMode:
             return mode
         case _:
             raise ConfigParseError(field_name=TTS_MODE_KEY)
+
+
+def _parse_response_execution_mode(raw_mode: str | None) -> ResponseExecutionMode:
+    if raw_mode is None:
+        return ResponseExecutionMode.NEW_EXECUTE
+    try:
+        return ResponseExecutionMode(raw_mode.strip())
+    except ValueError as error:
+        raise ConfigParseError(field_name=RESPONSE_EXECUTION_MODE_KEY) from error
 
 
 def _require_provider_fields(
