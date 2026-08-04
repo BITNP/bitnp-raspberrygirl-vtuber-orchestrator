@@ -492,6 +492,11 @@ class SessionRuntime:
         pipeline = self.async_agent_pipeline
         coordinator = self.async_response_coordinator
         gate = self.async_agent_gate
+        if (
+            self.response_execution_mode is ResponseExecutionMode.NEW_SHADOW
+            and coordinator is None
+        ):
+            return self._reject(proposal.correlation, "shadow_coordinator_missing")
         if pipeline is None and not (coordinator is not None and gate is not None):
             return self.receive_comment(proposal)
         correlation = proposal.correlation
@@ -1890,6 +1895,11 @@ class SessionRuntime:
         pipeline = self.async_agent_pipeline
         coordinator = self.async_response_coordinator
         gate = self.async_agent_gate
+        if (
+            self.response_execution_mode is ResponseExecutionMode.NEW_SHADOW
+            and coordinator is None
+        ):
+            return self._reject(correlation, "shadow_coordinator_missing")
         if pipeline is None and not (coordinator is not None and gate is not None):
             return self.receive_asr_final(event, correlation)
         if correlation in self._correlations:
