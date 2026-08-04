@@ -8,21 +8,23 @@ from typing import Protocol
 from orchestrator.agent_pipeline import (
     AgentPipeline,
     AsyncAgentPipeline,
-    BrainStateSnapshot,
     FrontendOperation,
-    GateDecision,
     MediaOperation,
     PlanAccepted,
     PlanResult,
-    TaskSnapshot,
-)
-from orchestrator.agent_pipeline import (
-    AudienceInput as BrainAudienceInput,
-)
-from orchestrator.agent_pipeline import (
-    AudienceSource as BrainAudienceSource,
 )
 from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
+from orchestrator.brain_contracts import (
+    AudienceInput as BrainAudienceInput,
+)
+from orchestrator.brain_contracts import (
+    AudienceSource as BrainAudienceSource,
+)
+from orchestrator.brain_contracts import (
+    BrainStateSnapshot,
+    GateDecision,
+    TaskSnapshot,
+)
 from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.context_compactor import AsyncContextCompactor
 from orchestrator.control_ingress import (

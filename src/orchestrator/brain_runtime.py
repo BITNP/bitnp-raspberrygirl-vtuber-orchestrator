@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Protocol, cast, final
 from orchestrator.agent_pipeline import (
     AgentPipeline,
     AsyncAgentPipeline,
+)
+from orchestrator.brain_contracts import (
     AudienceInput,
     BrainStateSnapshot,
     GateDecision,

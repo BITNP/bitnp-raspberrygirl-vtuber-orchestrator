@@ -14,7 +14,7 @@ from orchestrator.response_contracts import ResponseProposal
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from orchestrator.agent_pipeline import BrainStateSnapshot, ToolRequest
+    from orchestrator.brain_contracts import BrainStateSnapshot, ToolRequest
     from orchestrator.intent_router import IntentRouter
 
 

@@ -14,17 +14,26 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol, cast, final
 
+from orchestrator.brain_contracts import (
+    AudienceInput,
+    AudienceSource,
+    BrainStateSnapshot,
+    GateDecision,
+    PlaybackSnapshot,
+    TaskSnapshot,
+    ToolRequest,
+)
 from orchestrator.json_boundary import JsonBoundaryError, JsonValue, parse_json_value
 
-
-class AudienceSource(StrEnum):
-    ASR = "asr"
-    COMMENT = "comment"
-
-
-class GateDecision(StrEnum):
-    ACCEPT = "accept"
-    DISCARD = "discard"
+__all__ = (
+    "AudienceInput",
+    "AudienceSource",
+    "BrainStateSnapshot",
+    "GateDecision",
+    "PlaybackSnapshot",
+    "TaskSnapshot",
+    "ToolRequest",
+)
 
 
 class PlanStage(StrEnum):
@@ -34,68 +43,6 @@ class PlanStage(StrEnum):
 
 class PlanError(ValueError):
     """A model proposal was not a valid, bounded AgentPlan."""
-
-
-@dataclass(frozen=True, slots=True)
-class AudienceInput:
-    session_id: str
-    trace_id: str
-    sequence: int
-    source: AudienceSource
-    received_at_ms: int
-    text: str
-
-    def __post_init__(self) -> None:
-        if not self.session_id or not self.trace_id or self.sequence < 0:
-            raise ValueError("audience input correlation is invalid")
-        if not self.text.strip() or len(self.text) > 4_000:
-            raise ValueError("audience input text is invalid")
-
-
-@dataclass(frozen=True, slots=True)
-class TaskSnapshot:
-    task_id: str
-    kind: str
-    lane: str
-    status: str
-    deadline_ms: int
-    owner_turn_id: str
-    cancellation_reason: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PlaybackSnapshot:
-    status: str = "idle"
-    position_ms: int = 0
-    active_audio_id: str | None = None
-    replacement_audio_id: str | None = None
-    replacement_first_frame_ready: bool = False
-    flush_accepted: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class BrainStateSnapshot:
-    session_id: str
-    turn_id: str
-    revision: int
-    cancellation_epoch: int
-    input: AudienceInput
-    context_summary: str
-    recent_context: tuple[str, ...]
-    memory_markdown: str
-    capabilities: frozenset[str]
-    tasks: tuple[TaskSnapshot, ...] = ()
-    playback: PlaybackSnapshot = PlaybackSnapshot()
-    frontend_caption: str = ""
-    frontend_animation: str | None = None
-    ppt_deck_id: str | None = None
-    ppt_page: int | None = None
-    context_revision: int = 0
-    memory_revision: int = 0
-    context_budget: int = 0
-    compaction_required: bool = False
-    knowledge_references: tuple[str, ...] = ()
-    mcp_allowlist: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,13 +63,6 @@ class FrontendOperation:
     kind: str
     value: str | int | None = None
     deck_id: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ToolRequest:
-    kind: str
-    name: str
-    arguments: dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol, final, override
 
 if TYPE_CHECKING:
-    from orchestrator.agent_pipeline import BrainStateSnapshot, ToolRequest
+    from orchestrator.brain_contracts import BrainStateSnapshot, ToolRequest
 
 
 class McpAllowlistError(ValueError):

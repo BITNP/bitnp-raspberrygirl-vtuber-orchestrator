@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import final
 
-from orchestrator.agent_pipeline import BrainStateSnapshot, ToolRequest
+from orchestrator.brain_contracts import BrainStateSnapshot, ToolRequest
 
 type ArgumentBuilder = Callable[[BrainStateSnapshot], dict[str, object] | None]
 
