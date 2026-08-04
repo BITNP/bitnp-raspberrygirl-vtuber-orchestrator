@@ -517,6 +517,27 @@ class SessionRuntime:
         )
         return transition.state.phase is TurnPhase.CUTOVER_PENDING
 
+    def response_playback_finished(self) -> bool:
+        """Consume a Sound-validated physical completion for the active turn.
+
+        The caller reaches this method only after ``SchedulerOutputFence`` has
+        matched stream, turn, segment and output lease epoch.  The response
+        state deliberately uses the session cancellation epoch instead of the
+        independent output generation, so a stale media event cannot complete
+        a newer logical turn.
+        """
+        state = self.turn_coordinator.state
+        if (
+            state.turn_id is None
+            or state.epoch != int(self.cancellation_epoch)
+            or state.phase is not TurnPhase.PLAYING
+        ):
+            return False
+        transition = self.turn_coordinator.playback_finished(
+            turn_id=state.turn_id, epoch=int(self.cancellation_epoch)
+        )
+        return transition.state.phase is TurnPhase.COMPLETED
+
     def _cancel_active_response_providers(
         self, cancelled: tuple[TaskRecord, ...]
     ) -> None:

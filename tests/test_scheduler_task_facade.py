@@ -699,6 +699,9 @@ def test_memory_extraction_runs_only_after_tts_output_is_accepted() -> None:
         )
         await asyncio.sleep(0)
         assert runtime.response_turn_state.phase is TurnPhase.PLAYING
+        assert runtime.response_playback_finished()
+        assert runtime.response_turn_state.phase is TurnPhase.COMPLETED
+        assert not runtime.response_playback_finished()
 
     asyncio.run(exercise())
 

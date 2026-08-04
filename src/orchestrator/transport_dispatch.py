@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, replace
-from typing import Protocol, final
+from typing import TYPE_CHECKING, Protocol, final
 
 from orchestrator.ids import ConnectionId
 from orchestrator.observability import (
@@ -32,6 +32,9 @@ from orchestrator.transport_control import (
     StreamState,
     parse_control_event,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _CODEC = {
     "format": "L16",
@@ -113,6 +116,16 @@ class TransportControlDispatch:
 
         self._output_fence: OutputFence | None = None
 
+        # Called only after OutputFence accepted an exact Sound finished event.
+        # The callback is observational state reduction, never transport I/O.
+        self._playback_finished_callback: Callable[[StreamKey], None] | None = None
+
+    def set_playback_finished_callback(
+        self, callback: Callable[[StreamKey], None] | None
+    ) -> None:
+        """Receive only physically verified playback completion events."""
+        self._playback_finished_callback = callback
+
     async def register(  # noqa: C901, PLR0911
         self, raw_message: str, peer_ip: str, connection: ControlPeer
     ) -> None:
@@ -165,20 +178,12 @@ class TransportControlDispatch:
                 segment_id=segment_id,
                 cancellation_epoch=cancellation_epoch,
             ):
-                output_fence = self._output_fence
-
-                if output_fence is not None:
-                    _ = output_fence.finish(
-                        stream=StreamKey(session_id, stream_id),
-                        turn_id=turn_id,
-                        segment_id=segment_id,
-                        cancellation_epoch=cancellation_epoch,
-                    )
-
-                    # A normal playback finish releases only its output lease.
-                    # Mic has no epoch-update control message, so advancing the
-                    # route generation here would reject every subsequent ASR
-                    # final still carrying Mic's active input epoch.
+                self._finish_playback(
+                    stream=StreamKey(session_id, stream_id),
+                    turn_id=turn_id,
+                    segment_id=segment_id,
+                    cancellation_epoch=cancellation_epoch,
+                )
                 return
 
             case StreamState():
@@ -200,6 +205,32 @@ class TransportControlDispatch:
                 return
 
         await self._dispatch_start(StreamKey(event.session_id, event.stream_id))
+
+    def _finish_playback(
+        self,
+        *,
+        stream: StreamKey,
+        turn_id: TurnId | None,
+        segment_id: SegmentId | None,
+        cancellation_epoch: CancellationEpoch | None,
+    ) -> None:
+        output_fence = self._output_fence
+        if output_fence is None:
+            return
+        finished = output_fence.finish(
+            stream=stream,
+            turn_id=turn_id,
+            segment_id=segment_id,
+            cancellation_epoch=cancellation_epoch,
+        )
+        if finished:
+            callback = self._playback_finished_callback
+            if callback is not None:
+                callback(stream)
+
+        # A normal playback finish releases only its output lease.  Mic has no
+        # epoch-update control message, so advancing the route generation here
+        # would reject every later ASR final carrying Mic's active input epoch.
 
     async def request_stream_flush(self, flush: StreamFlush) -> None:
         correlation = flush.correlation or self._hub.correlation(flush.stream)

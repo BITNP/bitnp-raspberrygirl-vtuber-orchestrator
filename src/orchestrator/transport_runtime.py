@@ -151,6 +151,9 @@ class TransportRuntime:
         self._hub.set_output_finished_callback(
             self._control_dispatch.finish_generated_stream
         )
+        self._control_dispatch.set_playback_finished_callback(
+            self._on_verified_playback_finished
+        )
         self._hub.set_output_command_callback(self._control_dispatch.announce_output)
         self._hub.set_replacement_callbacks(
             self._control_dispatch.request_stream_flush,
@@ -387,8 +390,12 @@ class TransportRuntime:
             # Hub retains its compatibility path for that deliberately narrow
             # contract-test mode.
             return None
-        if not session_runtime.response_cutover_pending(
-            SchedulerTurnId(str(replacement.turn_id))
+        response_state = session_runtime.response_turn_state
+        if (
+            response_state.turn_id == str(replacement.turn_id)
+            and not session_runtime.response_cutover_pending(
+                SchedulerTurnId(str(replacement.turn_id))
+            )
         ):
             # A replacement may only ask Sound to flush after this exact
             # response turn has prepared its first frame.  Rejecting here
@@ -426,6 +433,13 @@ class TransportRuntime:
         session_runtime = self._runtime_for_session(stream.session_id)
         if session_runtime is not None:
             session_runtime.fail_sound_flush(task_id, reason=reason)
+
+    def _on_verified_playback_finished(self, stream: StreamKey) -> None:
+        """Advance the logical turn only after Sound released its exact lease."""
+        session_runtime = self._runtime_for_session(stream.session_id)
+        if session_runtime is None:
+            return
+        _ = session_runtime.response_playback_finished()
 
     @property
     def flush_failures(self) -> tuple[FlushFailure, ...]:

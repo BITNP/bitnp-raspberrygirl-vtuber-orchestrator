@@ -463,6 +463,37 @@ def test_finished_playback_never_requires_mic_epoch_advance() -> None:
     assert len(fence.finishes) == 1
 
 
+def test_finished_playback_notifies_turn_reducer_only_after_fence_accepts() -> None:
+    route = _RouteWithoutEpochAdvance()
+    dispatcher = TransportControlDispatch(route)
+    fence = _RecordingOutputFence()
+    dispatcher.set_output_fence(fence)
+    finished_streams: list[StreamKey] = []
+    dispatcher.set_playback_finished_callback(
+        finished_streams.append
+    )
+
+    asyncio.run(
+        dispatcher.register(
+            _envelope(
+                "media.stream.state",
+                "sound",
+                {
+                    "stream_id": STREAM_ID,
+                    "state": "finished",
+                    "cancellation_epoch": 2,
+                },
+            ),
+            SINK_PEER[0],
+            RecordingControlPeer(),
+        )
+    )
+
+    assert finished_streams == [
+        StreamKey(session_id=SESSION_ID, stream_id=STREAM_ID)
+    ]
+
+
 def test_runtime_reports_ready_after_listeners_start_and_closes_them() -> None:
     # Given: injected control and datagram listeners for an explicit loopback runtime.
 

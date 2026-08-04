@@ -76,7 +76,8 @@ task 的结果栅栏允许切换。
 经过 task/revision/data-snapshot/epoch/deadline 栅栏，再允许创建下一任务或提交结果。
 音频首帧被接受后才写入 transient context，并才会安排 memory/compaction maintenance
 任务。替换播放必须先获首帧和匹配的 Sound flush ACK；成功时先取消旧字幕 timeline，
-失败则旧音频与旧 timeline 都保持。
+失败则旧音频与旧 timeline 都保持。`PLAYING → COMPLETED` 只能由 Sound 已通过输出
+lease 校验的 `finished` 事件触发；TTS provider 完成或重复/过期 finished 都不能结束逻辑 turn。
 
 迁移期间通过 `ORCHESTRATOR_RESPONSE_EXECUTION_MODE` 按 session 选择
 `legacy_execute`、`new_shadow` 或 `new_execute`（默认）。`new_shadow` 运行新模型、
