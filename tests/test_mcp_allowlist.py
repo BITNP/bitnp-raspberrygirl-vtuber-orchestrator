@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from orchestrator.agent_pipeline import (
+from orchestrator.brain_contracts import (
     AudienceInput,
     AudienceSource,
     BrainStateSnapshot,

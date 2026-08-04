@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from orchestrator.agent_pipeline import (
+from orchestrator.brain_contracts import (
     AudienceInput,
     AudienceSource,
     BrainStateSnapshot,

@@ -1,22 +1,16 @@
 # ruff: noqa: RUF001
 import asyncio
-import json
 from dataclasses import dataclass, field, replace
 
-from orchestrator.agent_pipeline import (
-    AsyncAgentPipeline,
+from orchestrator.brain_contracts import (
     AudienceInput,
     AudienceSource,
     BrainStateSnapshot,
     GateDecision,
-    PlanAccepted,
     ToolRequest,
 )
 from orchestrator.brain_runtime import (
-    AsyncJsonAgentBrain,
-    AsyncJsonAgentGate,
     AsyncJsonMemoryCandidateExtractor,
-    JsonAgentBrain,
     JsonAgentGate,
     JsonResponseBrain,
     McpIntentRegistration,
@@ -110,53 +104,6 @@ def test_gate_uses_chinese_non_streaming_json_prompt_and_fails_closed() -> None:
     assert completion.requests[0].timeout_seconds == 5.0
 
 
-def test_brain_injects_full_snapshot_and_marks_observations_untrusted() -> None:
-    plan = json.dumps(
-        {
-            "response_text": "您好",
-            "expected_revision": 5,
-            "state_operations": [],
-            "media_operations": [],
-            "frontend_operations": [],
-            "tool_requests": [],
-            "citations": [],
-            "memory_patches": [],
-        }
-    )
-    completion = _Completion([plan, plan])
-    brain = JsonAgentBrain(completion)
-
-    assert brain.plan(_snapshot()) == plan
-    assert brain.plan(_snapshot(), observations=("检索结果",)) == plan
-    assert "核心输出铁律" in completion.requests[0].prompt.system
-    assert "输出格式严格对照示例" in completion.requests[0].prompt.system
-    assert "以下 8 个键" in completion.requests[0].prompt.system
-    assert '"media_operations": []' in completion.requests[0].prompt.system
-    assert "TTS 任务不写入" in completion.requests[0].prompt.system
-    assert "只有 `ppt.load` 与 `ppt.navigate` 使用 `deck_id`" in (
-        completion.requests[0].prompt.system
-    )
-    assert "memory_patches" in completion.requests[0].prompt.system
-    assert '"cancellation_epoch":2' in completion.requests[0].prompt.user
-    assert "目标 revision=5" in completion.requests[0].prompt.user
-    assert '"capabilities":["knowledge.lookup"]' in completion.requests[0].prompt.user
-    assert "frozenset" not in completion.requests[0].prompt.user
-    assert "bitnp-memory-state" not in completion.requests[0].prompt.user
-    assert "最终规划：禁止再请求工具" in completion.requests[1].prompt.user
-    assert "工具观察：" in completion.requests[1].prompt.user
-
-
-def test_repair_requires_the_exact_snapshot_revision() -> None:
-    completion = _Completion(["{}"])
-    brain = JsonAgentBrain(completion)
-
-    assert brain.repair(_snapshot(), '{"expected_revision": 6}') == "{}"
-    assert "修复目标 revision=5" in completion.requests[0].prompt.user
-    assert "AgentPlan JSON 修复器" in completion.requests[0].prompt.system
-    assert "tool_requests 必须为 []" in completion.requests[0].prompt.system
-    assert "无效提案也以不可信 JSON 包提供" in completion.requests[0].prompt.system
-
-
 def test_minimal_response_brain_has_no_plan_or_repair_contract() -> None:
     completion = _Completion(['{"reply":"您好","intent":"answer"}', "not-json"])
     brain = JsonResponseBrain(completion)
@@ -217,53 +164,6 @@ def test_readonly_knowledge_tool_returns_versioned_untrusted_observation() -> No
     assert "product.md:1" in observation
 
 
-def test_async_json_brain_runs_gate_and_final_tool_plan_without_blocking() -> None:
-    initial = json.dumps(
-        {
-            "response_text": "",
-            "expected_revision": 5,
-            "state_operations": [],
-            "media_operations": [],
-            "frontend_operations": [],
-            "tool_requests": [
-                {"kind": "knowledge", "name": "local", "arguments": {}}
-            ],
-            "citations": [],
-            "memory_patches": [],
-        }
-    )
-    final = json.dumps(
-        {
-            "response_text": "已查到资料",
-            "expected_revision": 5,
-            "state_operations": [],
-            "media_operations": [],
-            "frontend_operations": [],
-            "tool_requests": [],
-            "citations": [],
-            "memory_patches": [],
-        }
-    )
-    completion = _AsyncCompletion(['{"decision":"accept"}', initial, final])
-    pipeline = AsyncAgentPipeline(
-        AsyncJsonAgentGate(completion),
-        AsyncJsonAgentBrain(completion),
-        _AsyncTools(),
-    )
-
-    async def run() -> object:
-        decision = await pipeline.submit(_input())
-        assert decision.value == "accept"
-        return await pipeline.run(_snapshot())
-
-    result = asyncio.run(run())
-
-    assert isinstance(result, PlanAccepted)
-    assert result.plan.response_text == "已查到资料"
-    assert len(completion.requests) == 3
-    assert "工具观察" in completion.requests[2].prompt.user
-
-
 def test_async_memory_extractor_uses_the_bounded_chinese_contract() -> None:
     completion = _AsyncCompletion(
         ['{"key":"drink_preference","value":"喜欢绿茶","confidence":95}']
@@ -303,13 +203,6 @@ def test_response_coordinator_maps_every_mcp_tool_to_trusted_arguments() -> None
     observation = asyncio.run(coordinator.execute_tool(request, snapshot))
     assert observation is not None
     assert requester.arguments == [{"query": "介绍产品"}]
-
-
-class _AsyncTools:
-    async def execute(self, request: ToolRequest, snapshot: BrainStateSnapshot) -> str:
-        _ = request, snapshot
-        return "本地知识 observation"
-
 
 @dataclass
 class _McpRequester:
