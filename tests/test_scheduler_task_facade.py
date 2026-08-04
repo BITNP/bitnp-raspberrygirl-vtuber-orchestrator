@@ -22,6 +22,7 @@ from orchestrator.response_coordinator import AsyncResponseCoordinator
 from orchestrator.response_execution_mode import ResponseExecutionMode
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import EventCorrelation, EventSequence, StateRevision
+from orchestrator.shadow_replay import ShadowReplayEvidence, audit_shadow_replay
 from orchestrator.state_snapshots import MemoryRevision
 from orchestrator.task_reducer import TaskEffect, TaskResult
 from orchestrator.task_registry import (
@@ -689,6 +690,10 @@ def test_new_shadow_never_executes_selected_tool_or_creates_effect_tasks() -> No
     correlation = EventCorrelation(
         TraceId("shadow"), SessionId("session-shadow"), EventSequence(1)
     )
+    context_revision_before = (
+        runtime.interaction_ingress.data.context.snapshot.generation
+    )
+    memory_revision_before = runtime.interaction_ingress.data.memory.snapshot.revision
 
     outcome = asyncio.run(
         runtime.receive_comment_async(CommentProposal("查询", correlation))
@@ -710,6 +715,22 @@ def test_new_shadow_never_executes_selected_tool_or_creates_effect_tasks() -> No
         "empty=True;phase=completed"
     )
     assert runtime.response_turn_state.phase is TurnPhase.COMPLETED
+    report = audit_shadow_replay(
+        ShadowReplayEvidence(
+            records=runtime.operational_journal.records,
+            task_records=runtime.task_registry.records,
+            context_revision_before=int(context_revision_before),
+            context_revision_after=int(
+                runtime.interaction_ingress.data.context.snapshot.generation
+            ),
+            memory_revision_before=int(memory_revision_before),
+            memory_revision_after=int(
+                runtime.interaction_ingress.data.memory.snapshot.revision
+            ),
+        )
+    )
+    assert report.accepted
+    assert report.selected_intents == frozenset({"knowledge"})
 
 
 def test_memory_extraction_runs_only_after_tts_output_is_accepted() -> None:
