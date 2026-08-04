@@ -112,6 +112,7 @@ class OpenAICompatibleLLMRuntimeAdapter:
         client = self._client(request)
         stream: Stream[ChatCompletionChunk] | None = None
         release = _bind(cancellation, client.close)
+        stream_release = _noop
         try:
             stream = client.chat.completions.create(
                 model=self.model,
@@ -120,6 +121,7 @@ class OpenAICompatibleLLMRuntimeAdapter:
                 stream=True,
                 timeout=self._timeout(request),
             )
+            stream_release = _bind(cancellation, stream.close)
             parts: list[str] = []
             for chunk in stream:
                 if cancellation is not None and cancellation.cancelled:
@@ -144,6 +146,7 @@ class OpenAICompatibleLLMRuntimeAdapter:
             if cancellation is None or not cancellation.cancelled:
                 raise provider_error(error) from error
         finally:
+            stream_release()
             if stream is not None:
                 stream.close()
             release()
@@ -180,3 +183,7 @@ def _bind(
     cancellation: CancellationToken | None, callback: Callable[[], None]
 ) -> Callable[[], None]:
     return (lambda: None) if cancellation is None else cancellation.bind(callback)
+
+
+def _noop() -> None:
+    return
