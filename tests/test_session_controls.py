@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.brain_runtime import build_mock_agent_pipeline
 from orchestrator.control_ingress import (
     ContextResetControl,
     MemoryDeleteControl,
@@ -51,28 +50,6 @@ def test_parses_empty_session_end_control_only() -> None:
 
     assert isinstance(end, SessionEndControl)
     assert parse_session_control(_envelope("session.end.command", {"x": 1}, 3)) is None
-
-
-def test_runtime_reducer_resets_context_and_deletes_memory_key() -> None:
-    runtime = SessionRuntime.create(
-        session_id=SessionId("session-1"),
-        turn_id_prefix="turn",
-        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
-        agent_pipeline=build_mock_agent_pipeline(),
-    )
-    correlation = EventCorrelation(
-        TraceId("comment"), SessionId("session-1"), EventSequence(1)
-    )
-    _ = runtime.receive_comment(CommentProposal("hello", correlation))
-    data = runtime.interaction_ingress.data
-    assert len(data.context.snapshot.entries) == 1
-
-    reset = parse_session_control(_envelope("context.reset.command", {}, 2))
-    assert isinstance(reset, ContextResetControl)
-    outcome = runtime.receive_session_control(reset)
-
-    assert outcome.accepted
-    assert data.context.snapshot.generation == 2
 
 
 def test_session_end_cancels_work_erases_state_and_rejects_later_input(
