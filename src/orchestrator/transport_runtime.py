@@ -8,7 +8,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from http import HTTPStatus
 from time import monotonic_ns
-from typing import TYPE_CHECKING, Protocol, final, override
+from typing import TYPE_CHECKING, Literal, Protocol, final, override
 
 from websockets.asyncio.server import serve
 
@@ -25,13 +25,22 @@ from orchestrator.frontend_effects import (
     send_caption_timeline,
     send_frontend_operation,
 )
-from orchestrator.ids import SessionId, TraceId
+from orchestrator.ids import (
+    SegmentId as SchedulerSegmentId,
+)
+from orchestrator.ids import (
+    SessionId,
+    TraceId,
+)
+from orchestrator.ids import (
+    TurnId as SchedulerTurnId,
+)
 from orchestrator.interaction_ingress import parse_comment_proposal
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.sessions import EventCorrelation, EventSequence
-from orchestrator.streaming_contracts import StreamKey
+from orchestrator.streaming_contracts import EnvelopeIdentity, StreamKey
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import (
     AsrFinal,
@@ -55,7 +64,7 @@ if TYPE_CHECKING:
     from orchestrator.ids import TurnId
     from orchestrator.observability import OnsiteObservability
     from orchestrator.runtime_contracts import RuntimeOutcome
-    from orchestrator.scheduler_reflex import SchedulerOutputFence
+    from orchestrator.scheduler_reflex import OutputLease, SchedulerOutputFence
     from orchestrator.scheduler_runtime import SessionRuntime
     from orchestrator.streaming_contracts import (
         CancellationEpoch,
@@ -146,6 +155,12 @@ class TransportRuntime:
         self._hub.set_replacement_callbacks(
             self._control_dispatch.request_stream_flush,
             self._control_dispatch.admit_replacement,
+        )
+        self._hub.set_replacement_task_callbacks(
+            self._schedule_sound_flush_task,
+            self._sound_flush_task_is_current,
+            self._complete_sound_flush_task,
+            self._fail_sound_flush_task,
         )
 
         self._datagram_transport: DatagramSender | None = None
@@ -331,6 +346,50 @@ class TransportRuntime:
         self, stream: StreamKey, segment_id: SegmentId
     ) -> CancellationEpoch | None:
         return await self._hub.begin_onsite_replacement(stream, segment_id)
+
+    def _schedule_sound_flush_task(
+        self, stream: StreamKey, replacement: OutputLease, flush: StreamFlush
+    ) -> TaskId | Literal[False] | None:
+        """Admit a replacement cutover through the owning session runtime."""
+        session_runtime = self._runtime_for_session(stream.session_id)
+        correlation = flush.correlation
+        if session_runtime is None or correlation is None:
+            # Standalone transport operation has no scheduler state to own.  The
+            # Hub retains its compatibility path for that deliberately narrow
+            # contract-test mode.
+            return None
+        task_id = session_runtime.schedule_sound_flush(
+            SchedulerTurnId(str(replacement.turn_id)),
+            SchedulerSegmentId(str(replacement.segment_id)),
+            request_id=str(flush.request_id),
+            correlation=_event_correlation(correlation),
+        )
+        return False if task_id is None else task_id
+
+    def _sound_flush_task_is_current(self, stream: StreamKey, task_id: TaskId) -> bool:
+        session_runtime = self._runtime_for_session(stream.session_id)
+        return (
+            session_runtime is not None
+            and session_runtime.sound_flush_is_current(task_id)
+        )
+
+    def _complete_sound_flush_task(self, stream: StreamKey, task_id: TaskId) -> bool:
+        session_runtime = self._runtime_for_session(stream.session_id)
+        correlation = self._hub.correlation(stream)
+        return (
+            session_runtime is not None
+            and correlation is not None
+            and session_runtime.complete_sound_flush(
+                task_id, _event_correlation(correlation)
+            )
+        )
+
+    def _fail_sound_flush_task(
+        self, stream: StreamKey, task_id: TaskId, reason: str
+    ) -> None:
+        session_runtime = self._runtime_for_session(stream.session_id)
+        if session_runtime is not None:
+            session_runtime.fail_sound_flush(task_id, reason=reason)
 
     @property
     def flush_failures(self) -> tuple[FlushFailure, ...]:
@@ -760,6 +819,15 @@ async def _listen_control(
         config.control_bind_port,
         process_request=authorize,
         ssl=ssl_context,
+    )
+
+
+def _event_correlation(correlation: EnvelopeIdentity) -> EventCorrelation:
+    """Convert an authenticated transport envelope into scheduler correlation."""
+    return EventCorrelation(
+        TraceId(correlation.trace_id),
+        SessionId(correlation.session_id),
+        EventSequence(correlation.seq),
     )
 
 

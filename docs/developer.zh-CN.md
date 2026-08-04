@@ -54,7 +54,7 @@ Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口
 
 回复可含 `<action name="..."/>` 和 `<expression name="..."/>`。Orchestrator 只保留 allowlist 内的标记；TTS 接收去标记文本。未来 Frontend 使用 canonical `vtuber.caption.timeline.command` / `vtuber.caption.timeline.cancel` 事件按 `inline-cue/v1` 渲染字幕与 cue。
 
-LLM、MCP、TTS、flush、字幕投递、记忆提取和上下文压缩必须由 `TaskRegistry` 生命周期管理。字幕 timeline 在首个 RTP 帧获准后登记为短生命周期 interactive 任务；投递前重新核验 session、turn、revision、数据快照、epoch、deadline 与能力，投递成功也须经 reducer 提交。前端不可用只使该字幕任务失败，绝不回滚音频。任务结果提交前需校验 session、turn、revision、epoch 和 deadline；取消先关闭结果栅栏，再取消 provider，因此迟到结果不得产生媒体、上下文、记忆或前端效果。replacement TTS 必须持有首个有效 RTP 帧并等待 Sound flush ACK，失败时原播放保持不变。
+LLM、MCP、TTS、flush、字幕投递、记忆提取和上下文压缩必须由 `TaskRegistry` 生命周期管理。字幕 timeline 在首个 RTP 帧获准后登记为短生命周期 interactive 任务；投递前重新核验 session、turn、revision、数据快照、epoch、deadline 与能力，投递成功也须经 reducer 提交。Sound replacement 在发出 flush 前也登记 interactive 任务，ACK 只会暂存新 lease；仅当该任务仍当前且 reducer 接受切换结果时才提交新 lease。ACK 后取消、过期或结果拒绝会回滚到旧 lease，使旧音频继续播放。前端不可用只使该字幕任务失败，绝不回滚音频。任务结果提交前需校验 session、turn、revision、epoch 和 deadline；取消先关闭结果栅栏，再取消 provider，因此迟到结果不得产生媒体、上下文、记忆或前端效果。replacement TTS 必须持有首个有效 RTP 帧并等待 Sound flush ACK，失败时原播放保持不变。
 
 Orchestrator 的调度器把工作分为 reflex、interactive、deliberative 和 maintenance lane。反射类行为，如打断、TTS gate 和 RTP 输出 gate，不能等待 LLM、检索、MCP 或后台任务。
 

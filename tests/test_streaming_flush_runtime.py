@@ -11,9 +11,11 @@ from orchestrator.ids import SessionId
 from orchestrator.json_boundary import parse_json_value
 from orchestrator.observability import OnsiteObservability
 from orchestrator.scheduler_reflex import SchedulerOutputFence
+from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import SessionScheduler
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
+    FlushAcknowledgement,
     FlushRequestId,
     GeneratedSsrc,
     SegmentId,
@@ -21,6 +23,7 @@ from orchestrator.streaming_contracts import (
     StreamKey,
     TurnId,
 )
+from orchestrator.task_registry import SchedulerTaskConfig, TaskKind, TaskState
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import EnvelopeCorrelation
 from orchestrator.transport_runtime import TransportRuntime
@@ -124,6 +127,37 @@ def test_runtime_rejects_invalid_ack_and_missing_ack_timeout() -> None:
 
 def test_runtime_holds_replacement_until_sound_acknowledges_flush() -> None:
     asyncio.run(_delayed_replacement_proof())
+
+
+def test_runtime_registers_session_owned_flush_before_admitting_replacement() -> None:
+    asyncio.run(_session_owned_replacement_proof())
+
+
+def test_acknowledged_flush_can_restore_old_lease_before_task_commit() -> None:
+    scheduler = SessionScheduler(
+        session_id=SessionId("session-001"), turn_id_prefix="turn-reflex"
+    )
+    fence = SchedulerOutputFence(scheduler)
+    stream = StreamKey(session_id="session-001", stream_id="stream-001")
+    correlation = EnvelopeCorrelation("trace-source-001", "session-001", 29)
+    active = fence.activate(
+        stream=stream,
+        segment_id=SegmentId("segment-active"),
+        target_generated_ssrc=GeneratedSsrc(0x1234_5678),
+        correlation=correlation,
+    )
+    replacement, flush = fence.interrupt(
+        stream=stream,
+        segment_id=SegmentId("segment-new"),
+        correlation=correlation,
+    )
+
+    assert fence.acknowledge(FlushAcknowledgement.from_flush(flush))
+    assert fence.can_emit(stream, replacement.cancellation_epoch)
+
+    assert fence.abandon_replacement(stream)
+    assert fence.can_emit(stream, active.cancellation_epoch)
+    assert not fence.can_emit(stream, replacement.cancellation_epoch)
 
 
 async def _matching_ack_proof() -> None:
@@ -353,6 +387,59 @@ async def _delayed_replacement_proof() -> None:
     assert fence.can_emit(stream, active.cancellation_epoch) is False
     assert fence.can_emit(stream, flush.cancellation_epoch) is True
     assert _event_types(sink.sent).count("media.stream.command") == 2
+
+    await _close_runtime(runtime, source, sink, tasks)
+
+
+async def _session_owned_replacement_proof() -> None:
+    runtime = TransportRuntime(
+        _config(),
+        datagram_listener=_datagram_listener,
+        control_listener=_control_listener,
+    )
+    session_runtime = SessionRuntime.create(
+        session_id=SessionId("session-001"),
+        turn_id_prefix="turn-reflex",
+        task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 4),
+    )
+    runtime.set_session_runtime(session_runtime)
+    source, sink, tasks = await _registered_runtime(runtime)
+    fence = session_runtime.output_fence
+    stream = StreamKey(session_id="session-001", stream_id="stream-001")
+    correlation = EnvelopeCorrelation("trace-source-001", "session-001", 29)
+    active = fence.activate(
+        stream=stream,
+        segment_id=SegmentId("segment-active"),
+        target_generated_ssrc=GeneratedSsrc(0x1234_5678),
+        correlation=correlation,
+    )
+
+    prepared = asyncio.create_task(
+        runtime.begin_onsite_replacement(stream, SegmentId("segment-new"))
+    )
+    await asyncio.sleep(0)
+    flush_task = next(
+        record
+        for record in session_runtime.task_registry.records
+        if str(record.request.task_id).startswith("sound-flush-")
+    )
+    assert flush_task.state is TaskState.RUNNING
+    assert fence.can_emit(stream, active.cancellation_epoch)
+
+    flush = next(
+        _flush_from_message(message)
+        for message in sink.sent
+        if _envelope_value(message)["event_type"] == "media.stream.flush"
+    )
+    await sink.incoming.put(_acknowledgement(flush))
+
+    assert await prepared == flush.cancellation_epoch
+    completed = session_runtime.task_registry.task(flush_task.request.task_id)
+    assert completed is not None
+    assert completed.state is TaskState.COMPLETED
+    assert session_runtime.observables.task_commits[-1].effect.effect_type == (
+        "sound.flush.admitted"
+    )
 
     await _close_runtime(runtime, source, sink, tasks)
 

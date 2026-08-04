@@ -158,6 +158,30 @@ def test_started_timeline_delivery_is_a_claimed_and_reducer_fenced_task() -> Non
     assert completed.state is TaskState.COMPLETED
 
 
+def test_sound_flush_is_a_claimed_and_reducer_fenced_task() -> None:
+    runtime = _runtime()
+    turn_id = runtime.scheduler.snapshot.active_turn_id
+    assert turn_id is not None
+    correlation = _correlation("flush", 2)
+
+    task_id = runtime.schedule_sound_flush(
+        turn_id,
+        SegmentId("segment-replacement"),
+        request_id="flush-1",
+        correlation=correlation,
+    )
+
+    assert task_id is not None
+    record = runtime.task_registry.task(task_id)
+    assert record is not None
+    assert record.state is TaskState.RUNNING
+    assert runtime.sound_flush_is_current(task_id)
+    assert runtime.complete_sound_flush(task_id, correlation)
+    completed = runtime.task_registry.task(task_id)
+    assert completed is not None
+    assert completed.state is TaskState.COMPLETED
+
+
 def test_new_turn_closes_pending_timeline_delivery_before_frontend_io() -> None:
     runtime = _runtime()
     turn_id = runtime.scheduler.snapshot.active_turn_id

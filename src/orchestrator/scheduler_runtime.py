@@ -1306,6 +1306,88 @@ class SessionRuntime:
         """Close a delivery task that could not reach the frontend."""
         _ = self.task_registry.fail(task_id, reason=reason)
 
+    def schedule_sound_flush(
+        self,
+        turn_id: TurnId,
+        segment_id: SegmentId,
+        *,
+        request_id: str,
+        correlation: EventCorrelation,
+    ) -> TaskId | None:
+        """Register a replacement cutover before any Sound control I/O.
+
+        The transport adapter owns the wire exchange, but it cannot decide
+        whether a late acknowledgement may switch playback.  This short-lived
+        interactive task is the scheduler-owned fence for that exchange.
+        """
+        task_id = TaskId(f"sound-flush-{request_id}")
+        outcome = self.schedule_task(
+            TaskRequest(
+                task_id=task_id,
+                session_id=self.scheduler.snapshot.session_id,
+                turn_id=turn_id,
+                parent_task_id=None,
+                deadline_ms=TaskDeadlineMs(self.clock() + 3_000),
+                snapshot_revision=self.scheduler.snapshot.revision,
+                idempotency_key=IdempotencyKey(str(task_id)),
+                kind=TaskKind.INTERACTIVE,
+                segment_id=segment_id,
+            ),
+            correlation,
+        )
+        if not outcome.accepted or self.executor.claim(task_id) is None:
+            _ = self.cancel_task(task_id, correlation)
+            return None
+        return task_id
+
+    def sound_flush_is_current(self, task_id: TaskId) -> bool:
+        """Fence a flush immediately before it can admit replacement output."""
+        record = self.task_registry.task(task_id)
+        if record is None or record.state is not TaskState.RUNNING:
+            return False
+        request = record.request
+        if int(request.deadline_ms) < self.clock():
+            _ = self.task_registry.timeout(task_id)
+            return False
+        return (
+            request.session_id == self.scheduler.snapshot.session_id
+            and request.turn_id == self.scheduler.snapshot.active_turn_id
+            and request.snapshot_revision == self.scheduler.snapshot.revision
+            and request.data_snapshot == self._task_data_snapshot
+            and request.cancellation_epoch == int(self.cancellation_epoch)
+            and request.capability_snapshot.issubset(self.agent_capabilities)
+        )
+
+    def complete_sound_flush(
+        self, task_id: TaskId, correlation: EventCorrelation
+    ) -> bool:
+        """Commit a Sound-acknowledged cutover through the result reducer."""
+        record = self.task_registry.task(task_id)
+        if record is None:
+            return False
+        return self.reduce_task(
+            TaskResult(
+                task_id=task_id,
+                session_id=record.request.session_id,
+                turn_id=record.request.turn_id,
+                snapshot_revision=record.request.snapshot_revision,
+                effect=TaskEffect("sound.flush.admitted", str(task_id)),
+                cancellation_epoch=record.request.cancellation_epoch,
+                segment_id=record.request.segment_id,
+            ),
+            correlation,
+        ).accepted
+
+    def fail_sound_flush(self, task_id: TaskId, *, reason: str) -> None:
+        """Close a rejected, cancelled, or stale replacement cutover task."""
+        record = self.task_registry.task(task_id)
+        if record is None or record.state is not TaskState.RUNNING:
+            return
+        if int(record.request.deadline_ms) < self.clock():
+            _ = self.task_registry.timeout(task_id)
+            return
+        _ = self.task_registry.fail(task_id, reason=reason)
+
     def _apply_agent_plan(
         self,
         accepted: PlanAccepted,

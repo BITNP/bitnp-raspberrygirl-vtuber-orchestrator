@@ -69,6 +69,17 @@ class SchedulerOutputFence:
 
         self._pending: dict[StreamKey, _PendingReplacement] = {}
 
+        # An ACK permits a prepared first frame to proceed, but it is not the
+        # scheduler commit.  Retain the prior lease until the flush task has
+        # crossed its result fence so cancellation immediately after ACK can
+        # restore uninterrupted old playback.
+        self._acknowledged: dict[StreamKey, _PendingReplacement] = {}
+
+        # A rejected cutover restores an old turn which is no longer the
+        # scheduler's active turn.  Keep that lease explicitly eligible until
+        # Sound reports its natural finish or another replacement supersedes it.
+        self._retained: dict[StreamKey, OutputLease] = {}
+
         self._flush_sequence = 0
 
     def activate(
@@ -150,6 +161,8 @@ class SchedulerOutputFence:
         self._leases[stream] = lease
         self._last_generation[stream] = generation
         _ = self._pending.pop(stream, None)
+        _ = self._acknowledged.pop(stream, None)
+        _ = self._retained.pop(stream, None)
         return lease
 
     def interrupt(
@@ -193,6 +206,7 @@ class SchedulerOutputFence:
         # audience keeps hearing the already-buffered old response until a new
         # first frame is ready and Sound has committed the replacement.
         self._pending[stream] = _PendingReplacement(active, replacement, flush)
+        _ = self._retained.pop(stream, None)
 
         return replacement, flush
 
@@ -206,12 +220,36 @@ class SchedulerOutputFence:
 
         self._leases[acknowledgement.stream] = pending.lease
         del self._pending[acknowledgement.stream]
+        self._acknowledged[acknowledgement.stream] = pending
 
         return True
 
     def abandon_replacement(self, stream: StreamKey) -> bool:
         """Keep the current lease when a prepared replacement cannot be admitted."""
-        return self._pending.pop(stream, None) is not None
+        if self._pending.pop(stream, None) is not None:
+            return True
+        acknowledged = self._acknowledged.pop(stream, None)
+        if acknowledged is None:
+            return False
+        if self._leases.get(stream) == acknowledged.lease:
+            self._leases[stream] = acknowledged.previous
+            self._retained[stream] = acknowledged.previous
+        return True
+
+    def commit_replacement(
+        self, stream: StreamKey, epoch: CancellationEpoch
+    ) -> bool:
+        """Make an ACKed replacement irreversible after reducer acceptance."""
+        acknowledged = self._acknowledged.get(stream)
+        if (
+            acknowledged is None
+            or acknowledged.lease.cancellation_epoch != epoch
+            or self._leases.get(stream) != acknowledged.lease
+        ):
+            return False
+        del self._acknowledged[stream]
+        _ = self._retained.pop(stream, None)
+        return True
 
     def can_emit(self, stream: StreamKey, epoch: CancellationEpoch) -> bool:
         lease = self._leases.get(stream)
@@ -221,6 +259,9 @@ class SchedulerOutputFence:
         pending = self._pending.get(stream)
         if pending is not None:
             return epoch == pending.previous.cancellation_epoch
+        retained = self._retained.get(stream)
+        if retained == lease:
+            return epoch == lease.cancellation_epoch
         return epoch == lease.cancellation_epoch and str(lease.turn_id) == str(
             self._scheduler.snapshot.active_turn_id
         )
@@ -251,6 +292,7 @@ class SchedulerOutputFence:
             return False
 
         del self._leases[stream]
+        _ = self._retained.pop(stream, None)
 
         return True
 

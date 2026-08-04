@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from time import monotonic
-from typing import TYPE_CHECKING, Protocol, cast, final, override
+from typing import TYPE_CHECKING, Literal, Protocol, cast, final, override
 
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
@@ -32,8 +32,9 @@ if TYPE_CHECKING:
 
     from orchestrator.ids import ConnectionId
     from orchestrator.observability import OnsiteObservability, OnsiteStage
-    from orchestrator.scheduler_reflex import SchedulerOutputFence
+    from orchestrator.scheduler_reflex import OutputLease, SchedulerOutputFence
     from orchestrator.streaming_pipeline_actors import StreamPipelineActors
+    from orchestrator.task_registry import TaskId
 
 
 type PeerAddress = tuple[str, int]
@@ -173,6 +174,26 @@ class RtpHub:
             Callable[[StreamFlush], Awaitable[bool]] | None
         ) = None
 
+        # Production replacement exchanges are owned by SessionRuntime tasks.
+        # Kept optional for standalone transport-contract tests and for routes
+        # which have not yet been attached to a session runtime.
+        self._replacement_task_schedule: (
+            Callable[
+                [StreamKey, OutputLease, StreamFlush],
+                TaskId | Literal[False] | None,
+            ]
+            | None
+        ) = None
+        self._replacement_task_is_current: (
+            Callable[[StreamKey, TaskId], bool] | None
+        ) = None
+        self._replacement_task_complete: (
+            Callable[[StreamKey, TaskId], bool] | None
+        ) = None
+        self._replacement_task_fail: (
+            Callable[[StreamKey, TaskId, str], None] | None
+        ) = None
+
         self._voice_evidence_callback: Callable[[VoiceEvidence], bool] | None = None
 
         self._last_asr_sequences: dict[StreamKey, int] = {}
@@ -205,6 +226,21 @@ class RtpHub:
     ) -> None:
         self._replacement_flush_callback = request_flush
         self._replacement_admit_callback = admit_replacement
+
+    def set_replacement_task_callbacks(
+        self,
+        schedule: Callable[
+            [StreamKey, OutputLease, StreamFlush], TaskId | Literal[False] | None
+        ],
+        is_current: Callable[[StreamKey, TaskId], bool],
+        complete: Callable[[StreamKey, TaskId], bool],
+        fail: Callable[[StreamKey, TaskId, str], None],
+    ) -> None:
+        """Install the scheduler-owned lifecycle for replacement flushes."""
+        self._replacement_task_schedule = schedule
+        self._replacement_task_is_current = is_current
+        self._replacement_task_complete = complete
+        self._replacement_task_fail = fail
 
     def set_voice_evidence_callback(
         self, callback: Callable[[VoiceEvidence], bool]
@@ -255,17 +291,99 @@ class RtpHub:
             )
         except (KeyError, RuntimeError):
             return None
-        await request_flush(flush)
-        deadline = monotonic() + 3.0
-        while monotonic() < deadline:
-            if output_fence.can_emit(stream, replacement.cancellation_epoch):
-                if await admit_replacement(flush):
-                    return replacement.cancellation_epoch
+        schedule = self._replacement_task_schedule
+        if schedule is not None:
+            scheduled = schedule(stream, replacement, flush)
+            if scheduled is False:
                 _ = output_fence.abandon_replacement(stream)
                 return None
-            await asyncio.sleep(0.01)
+        else:
+            scheduled = None
+        return await self._await_replacement_flush(
+            stream, replacement, flush, scheduled
+        )
+
+    async def _await_replacement_flush(
+        self,
+        stream: StreamKey,
+        replacement: OutputLease,
+        flush: StreamFlush,
+        task_id: TaskId | None,
+    ) -> CancellationEpoch | None:
+        """Wait for one exact Sound acknowledgement behind a task result fence."""
+        # The caller captured both collaborators before creating the pending
+        # replacement, so this exchange has a stable control surface.
+        output_fence = cast("SchedulerOutputFence", self._output_fence)
+        request_flush = cast(
+            "Callable[[StreamFlush], Awaitable[None]]",
+            self._replacement_flush_callback,
+        )
+        admitted = False
+        reason = "sound_flush_timeout"
+        try:
+            if self._replacement_task_current(stream, task_id):
+                await request_flush(flush)
+            else:
+                reason = "sound_flush_stale_before_request"
+            deadline = monotonic() + 3.0
+            while reason == "sound_flush_timeout" and monotonic() < deadline:
+                if not self._replacement_task_current(stream, task_id):
+                    reason = "sound_flush_stale"
+                    break
+                if output_fence.can_emit(stream, replacement.cancellation_epoch):
+                    result = await self._admit_replacement_if_current(
+                        stream, flush, task_id
+                    )
+                    if result is None and output_fence.commit_replacement(
+                        stream, replacement.cancellation_epoch
+                    ):
+                        admitted = True
+                    else:
+                        reason = result or "sound_flush_result_rejected"
+                    break
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            self._fail_replacement_task(stream, task_id, "sound_flush_cancelled")
+            _ = output_fence.abandon_replacement(stream)
+            raise
+        except OSError:
+            reason = "sound_flush_transport_failed"
+        if admitted:
+            return replacement.cancellation_epoch
+        self._fail_replacement_task(stream, task_id, reason)
         _ = output_fence.abandon_replacement(stream)
         return None
+
+    async def _admit_replacement_if_current(
+        self, stream: StreamKey, flush: StreamFlush, task_id: TaskId | None
+    ) -> str | None:
+        if not self._replacement_task_current(stream, task_id):
+            return "sound_flush_stale_before_admission"
+        admit = self._replacement_admit_callback
+        if admit is None or not await admit(flush):
+            return "sound_flush_admission_rejected"
+        if not self._complete_replacement_task(stream, task_id):
+            return "sound_flush_result_rejected"
+        return None
+
+    def _replacement_task_current(
+        self, stream: StreamKey, task_id: TaskId | None
+    ) -> bool:
+        current = self._replacement_task_is_current
+        return task_id is None or current is None or current(stream, task_id)
+
+    def _complete_replacement_task(
+        self, stream: StreamKey, task_id: TaskId | None
+    ) -> bool:
+        complete = self._replacement_task_complete
+        return task_id is None or complete is None or complete(stream, task_id)
+
+    def _fail_replacement_task(
+        self, stream: StreamKey, task_id: TaskId | None, reason: str
+    ) -> None:
+        fail = self._replacement_task_fail
+        if task_id is not None and fail is not None:
+            fail(stream, task_id, reason)
 
     def attach_transport(self, transport: DatagramSender) -> None:
         self._transport = transport
