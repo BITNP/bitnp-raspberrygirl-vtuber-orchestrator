@@ -1,6 +1,8 @@
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
+from time import monotonic_ns
 from typing import NewType, final
 
 from orchestrator.ids import SegmentId, SessionId, TurnId
@@ -88,6 +90,8 @@ class SchedulerTaskConfig:
 
     max_retries: int = 0
 
+    tombstone_ttl_ms: int = 60_000
+
 
 @dataclass(frozen=True, slots=True)
 class TaskRequest:
@@ -135,6 +139,8 @@ class TaskRecord:
 
     superseded_by: TaskId | None
 
+    terminal_at_ms: int | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class TaskRegistrationAccepted:
@@ -162,7 +168,13 @@ type TaskRegistrationResult = (
 @final
 class TaskRegistry:
 
-    def __init__(self, *, session_id: SessionId, config: SchedulerTaskConfig) -> None:
+    def __init__(
+        self,
+        *,
+        session_id: SessionId,
+        config: SchedulerTaskConfig,
+        clock: Callable[[], int] | None = None,
+    ) -> None:
         self._session_id = session_id
 
         self._config = config
@@ -170,6 +182,12 @@ class TaskRegistry:
         self._records: dict[TaskId, TaskRecord] = {}
 
         self._idempotency: dict[IdempotencyKey, TaskId] = {}
+
+        self._clock = (lambda: monotonic_ns() // 1_000_000) if clock is None else clock
+
+        if config.tombstone_ttl_ms <= 0:
+            field_name = "tombstone_ttl_ms"
+            raise ValueError(field_name)
 
     @property
     def records(self) -> tuple[TaskRecord, ...]:
@@ -201,6 +219,19 @@ class TaskRegistry:
             del self._records[record.request.task_id]
             del self._idempotency[record.request.idempotency_key]
         return terminal
+
+    def expire_terminal_tombstones(self, *, now_ms: int) -> tuple[TaskRecord, ...]:
+        """Bound terminal retention while retaining a late-result rejection window."""
+        expired = tuple(
+            record
+            for record in self._records.values()
+            if record.terminal_at_ms is not None
+            and now_ms - record.terminal_at_ms >= self._config.tombstone_ttl_ms
+        )
+        for record in expired:
+            del self._records[record.request.task_id]
+            del self._idempotency[record.request.idempotency_key]
+        return expired
 
     def register(self, request: TaskRequest) -> TaskRegistrationResult:
         existing_task_id = self._idempotency.get(request.idempotency_key)
@@ -393,6 +424,14 @@ class TaskRegistry:
         return None
 
     def _store(self, record: TaskRecord) -> TaskRecord:
+        if record.state in {
+            TaskState.CANCELLED,
+            TaskState.SUPERSEDED,
+            TaskState.TIMED_OUT,
+            TaskState.SUCCEEDED,
+            TaskState.FAILED,
+        } and record.terminal_at_ms is None:
+            record = replace(record, terminal_at_ms=self._clock())
         self._records[record.request.task_id] = record
 
         return record

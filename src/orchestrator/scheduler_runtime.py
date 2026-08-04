@@ -342,6 +342,7 @@ class SessionRuntime:
         task_registry = TaskRegistry(
             session_id=session_id,
             config=task_config,
+            clock=clock,
         )
 
         task_reducer = TaskResultReducer(task_registry)
@@ -2253,6 +2254,7 @@ class SessionRuntime:
         return self.interaction_ingress.data.task_snapshot
 
     def _admit_task(self, request: TaskRequest) -> TaskRegistrationResult:
+        _ = self.task_registry.expire_terminal_tombstones(now_ms=self.clock())
         if request.cancellation_epoch != int(self.cancellation_epoch):
             return TaskRegistrationRejected(TaskRegistrationRejection.STALE_SNAPSHOT)
         rejection = scheduling_rejection(request, self.scheduler.snapshot)
