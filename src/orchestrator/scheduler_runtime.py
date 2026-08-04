@@ -861,6 +861,16 @@ class SessionRuntime:
             # never executes a selected tool or creates TTS/context/frontend/
             # memory work; the accepted LLM task and this diagnostic are its
             # entire observable footprint.
+            compiled = parse_inline_cues(
+                initial.reply,
+                allowed_actions=envelope.allowed_actions,
+                allowed_expressions=envelope.allowed_expressions,
+            )
+            outcome = (
+                f"intent={initial.intent};cues={len(compiled.cues)};"
+                f"rejected_cues={compiled.rejected_cues};"
+                f"empty={not compiled.spoken_text.strip()}"
+            )
             self.operational_journal.append(
                 OperationalRecord(
                     stage="response_shadow",
@@ -869,7 +879,7 @@ class SessionRuntime:
                     turn_id=str(turn_id),
                     segment_id=str(envelope.segment_id),
                     task_id=str(response_task_id),
-                    outcome=initial.intent,
+                    outcome=outcome,
                 )
             )
             return
