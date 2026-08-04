@@ -387,6 +387,13 @@ class TransportRuntime:
             # Hub retains its compatibility path for that deliberately narrow
             # contract-test mode.
             return None
+        if not session_runtime.response_cutover_pending(
+            SchedulerTurnId(str(replacement.turn_id))
+        ):
+            # A replacement may only ask Sound to flush after this exact
+            # response turn has prepared its first frame.  Rejecting here
+            # leaves the old lease untouched in SchedulerOutputFence.
+            return False
         task_id = session_runtime.schedule_sound_flush(
             SchedulerTurnId(str(replacement.turn_id)),
             SchedulerSegmentId(str(replacement.segment_id)),

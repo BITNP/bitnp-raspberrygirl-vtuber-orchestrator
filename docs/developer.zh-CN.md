@@ -62,9 +62,14 @@ Orchestrator 的调度器把工作分为 reflex、interactive、deliberative 和
 
 每个接受的输入由协调器从不可变快照生成内部 `ExecutionEnvelope`。它固定
 `session_id`、`turn_id`、`segment_id`、revision、cancellation epoch、deadline、媒体
-替换策略以及动作/表情 allowlist；这些字段绝不来自模型。正常状态为
-`QUEUED → REASONING → WAITING_TOOL（可选）→ SYNTHESIZING → PLAYING → COMPLETED`，
-任一未完成状态都可因新输入、deadline、能力撤销或会话结束进入 `CANCELLED`。
+替换策略以及动作/表情 allowlist；这些字段绝不来自模型。`SessionRuntime` 只能将
+已经被 `SessionScheduler` 接纳的 `turn_id` 与 epoch 交给 `TurnCoordinator`，不能由
+provider 回调自行推进状态。正常状态为
+`QUEUED → REASONING → WAITING_TOOL（可选）→ SYNTHESIZING → CUTOVER_PENDING（仅替换）→ PLAYING → COMPLETED`，
+任一未完成状态都可因新输入、deadline、能力撤销或会话结束进入 `CANCELLED`。旧 epoch、
+旧 turn 或错误 phase 的回调只记录诊断，绝不推进状态或产生效果。替换期间当前逻辑 turn
+可以处在准备状态，但旧物理 playback lease 仍由 `SchedulerOutputFence` 保留，直到 flush
+task 的结果栅栏允许切换。
 
 初始 LLM、受控工具、最终 LLM、TTS、记忆提取和上下文压缩分别登记为 task。初始与
 最终 LLM 最多各一次；最终调用仅允许 `answer`。工具、LLM 或维护 provider 的返回先

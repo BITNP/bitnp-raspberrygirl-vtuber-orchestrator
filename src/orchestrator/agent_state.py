@@ -13,12 +13,14 @@ from typing import final
 @unique
 class TurnPhase(StrEnum):
     IDLE = "idle"
-    GATE_PENDING = "gate_pending"
+    QUEUED = "queued"
     REASONING = "reasoning"
-    TTS_PENDING = "tts_pending"
-    AUDIO_READY = "audio_ready"
+    WAITING_TOOL = "waiting_tool"
+    SYNTHESIZING = "synthesizing"
     CUTOVER_PENDING = "cutover_pending"
     PLAYING = "playing"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 
@@ -45,6 +47,7 @@ class AgentState:
     epoch: int = 0
     phase: TurnPhase = TurnPhase.IDLE
     pending_interrupt: bool = False
+    turn_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +73,100 @@ class TurnCoordinator:
     def state(self) -> AgentState:
         return self._state
 
+    def enqueue(
+        self, *, turn_id: str, epoch: int, replacement: bool = False
+    ) -> StateTransition:
+        """Admit one scheduler-owned turn before any provider work begins.
+
+        ``SessionScheduler`` remains the revision authority and passes its
+        already-admitted id here.  In particular this method never creates a
+        turn or advances an epoch itself.  A replacement may begin while the
+        previous lease is still playing; the media fence retains that lease,
+        while this coordinator tracks the new turn's work.
+        """
+        if epoch < self._state.epoch:
+            return StateTransition(self._state)
+        return self._set(
+            AgentState(
+                epoch=epoch,
+                phase=TurnPhase.QUEUED,
+                pending_interrupt=replacement,
+                turn_id=turn_id,
+            )
+        )
+
+    def start_reasoning(self, *, turn_id: str, epoch: int) -> StateTransition:
+        return self._advance(
+            turn_id, epoch, {TurnPhase.QUEUED}, TurnPhase.REASONING,
+            StateEffect.START_REASONING,
+        )
+
+    def wait_for_tool(self, *, turn_id: str, epoch: int) -> StateTransition:
+        return self._advance(
+            turn_id, epoch, {TurnPhase.REASONING}, TurnPhase.WAITING_TOOL,
+        )
+
+    def resume_reasoning(self, *, turn_id: str, epoch: int) -> StateTransition:
+        return self._advance(
+            turn_id, epoch, {TurnPhase.WAITING_TOOL}, TurnPhase.REASONING,
+        )
+
+    def start_synthesizing(self, *, turn_id: str, epoch: int) -> StateTransition:
+        return self._advance(
+            turn_id, epoch, {TurnPhase.REASONING}, TurnPhase.SYNTHESIZING,
+            StateEffect.START_TTS,
+        )
+
+    def await_cutover(self, *, turn_id: str, epoch: int) -> StateTransition:
+        return self._advance(
+            turn_id, epoch, {TurnPhase.SYNTHESIZING}, TurnPhase.CUTOVER_PENDING,
+            StateEffect.FLUSH_SOUND,
+        )
+
+    def playback_started(self, *, turn_id: str, epoch: int) -> StateTransition:
+        return self._advance(
+            turn_id,
+            epoch,
+            {TurnPhase.SYNTHESIZING, TurnPhase.CUTOVER_PENDING},
+            TurnPhase.PLAYING,
+            StateEffect.EMIT_AUDIO,
+        )
+
+    def playback_finished(self, *, turn_id: str, epoch: int) -> StateTransition:
+        return self._advance(
+            turn_id, epoch, {TurnPhase.PLAYING}, TurnPhase.COMPLETED,
+            StateEffect.FINISH_AUDIO,
+        )
+
+    def cancel(self, *, turn_id: str, epoch: int) -> StateTransition:
+        return self._advance(
+            turn_id,
+            epoch,
+            {
+                TurnPhase.QUEUED,
+                TurnPhase.REASONING,
+                TurnPhase.WAITING_TOOL,
+                TurnPhase.SYNTHESIZING,
+                TurnPhase.CUTOVER_PENDING,
+            },
+            TurnPhase.CANCELLED,
+            StateEffect.CANCEL_DELIBERATIVE,
+        )
+
+    def fail(self, *, turn_id: str, epoch: int) -> StateTransition:
+        return self._advance(
+            turn_id,
+            epoch,
+            {
+                TurnPhase.QUEUED,
+                TurnPhase.REASONING,
+                TurnPhase.WAITING_TOOL,
+                TurnPhase.SYNTHESIZING,
+                TurnPhase.CUTOVER_PENDING,
+            },
+            TurnPhase.FAILED,
+        )
+
     def gate(self, outcome: GateOutcome) -> StateTransition:
         state = self._state
         if outcome is GateOutcome.DISCARD:
@@ -79,15 +176,15 @@ class TurnCoordinator:
             TurnPhase.FAILED,
         }:
             return self._set(
-                AgentState(state.epoch, TurnPhase.REASONING),
+                AgentState(state.epoch, TurnPhase.REASONING, turn_id=state.turn_id),
                 StateEffect.START_REASONING,
             )
         if outcome is GateOutcome.ACCEPT and state.phase in {
             TurnPhase.REASONING,
-            TurnPhase.TTS_PENDING,
+            TurnPhase.SYNTHESIZING,
         }:
             return self._set(
-                AgentState(state.epoch + 1, TurnPhase.REASONING),
+                AgentState(state.epoch + 1, TurnPhase.REASONING, turn_id=state.turn_id),
                 StateEffect.CANCEL_DELIBERATIVE,
                 StateEffect.START_REASONING,
             )
@@ -110,33 +207,50 @@ class TurnCoordinator:
         if not has_text:
             return self._set(AgentState(epoch, TurnPhase.FAILED))
         return self._set(
-            AgentState(epoch, TurnPhase.TTS_PENDING, self._state.pending_interrupt),
+            AgentState(
+                epoch,
+                TurnPhase.SYNTHESIZING,
+                self._state.pending_interrupt,
+                self._state.turn_id,
+            ),
             StateEffect.START_TTS,
         )
 
     def audio_ready(self, epoch: int) -> StateTransition:
         state = self._state
-        if epoch != state.epoch or state.phase is not TurnPhase.TTS_PENDING:
+        if epoch != state.epoch or state.phase is not TurnPhase.SYNTHESIZING:
             return StateTransition(state)
         if state.pending_interrupt:
             return self._set(
                 AgentState(
-                    epoch, TurnPhase.CUTOVER_PENDING, pending_interrupt=True
+                    epoch,
+                    TurnPhase.CUTOVER_PENDING,
+                    pending_interrupt=True,
+                    turn_id=state.turn_id,
                 ),
                 StateEffect.FLUSH_SOUND,
             )
-        return self._set(AgentState(epoch, TurnPhase.PLAYING), StateEffect.EMIT_AUDIO)
+        return self._set(
+            AgentState(epoch, TurnPhase.PLAYING, turn_id=state.turn_id),
+            StateEffect.EMIT_AUDIO,
+        )
 
     def flush_acknowledged(self, epoch: int) -> StateTransition:
         state = self._state
         if epoch != state.epoch or state.phase is not TurnPhase.CUTOVER_PENDING:
             return StateTransition(state)
-        return self._set(AgentState(epoch, TurnPhase.PLAYING), StateEffect.EMIT_AUDIO)
+        return self._set(
+            AgentState(epoch, TurnPhase.PLAYING, turn_id=state.turn_id),
+            StateEffect.EMIT_AUDIO,
+        )
 
     def audio_finished(self, epoch: int) -> StateTransition:
         if epoch != self._state.epoch or self._state.phase is not TurnPhase.PLAYING:
             return StateTransition(self._state)
-        return self._set(AgentState(epoch, TurnPhase.IDLE), StateEffect.FINISH_AUDIO)
+        return self._set(
+            AgentState(epoch, TurnPhase.COMPLETED, turn_id=self._state.turn_id),
+            StateEffect.FINISH_AUDIO,
+        )
 
     def failed(self, epoch: int, *, audio_started: bool) -> StateTransition:
         if epoch != self._state.epoch:
@@ -144,7 +258,28 @@ class TurnCoordinator:
         # Provider failure is terminal for its turn.  The runtime records the
         # structured error and emits no recovery speech or frontend status.
         _ = audio_started
-        return self._set(AgentState(epoch, TurnPhase.FAILED))
+        return self._set(
+            AgentState(epoch, TurnPhase.FAILED, turn_id=self._state.turn_id)
+        )
+
+    def _advance(
+        self,
+        turn_id: str,
+        epoch: int,
+        allowed: set[TurnPhase],
+        phase: TurnPhase,
+        *effects: StateEffect,
+    ) -> StateTransition:
+        state = self._state
+        if (
+            state.turn_id != turn_id
+            or state.epoch != epoch
+            or state.phase not in allowed
+        ):
+            return StateTransition(state)
+        return self._set(
+            AgentState(epoch, phase, state.pending_interrupt, turn_id), *effects
+        )
 
     def _set(self, state: AgentState, *effects: StateEffect) -> StateTransition:
         self._state = state

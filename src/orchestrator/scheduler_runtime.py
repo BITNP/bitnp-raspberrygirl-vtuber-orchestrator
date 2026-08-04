@@ -13,6 +13,7 @@ from orchestrator.agent_pipeline import (
     PlanAccepted,
     PlanResult,
 )
+from orchestrator.agent_state import AgentState, TurnCoordinator, TurnPhase
 from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
 from orchestrator.brain_contracts import (
     AudienceInput as BrainAudienceInput,
@@ -259,6 +260,11 @@ class SessionRuntime:
 
     mode_policy: AdaptiveAgentPolicy
 
+    # This is the sole logical-state owner for the minimal response path.
+    # SessionScheduler remains authoritative for ids/revisions and
+    # SchedulerOutputFence remains authoritative for Sound lease cutover.
+    turn_coordinator: TurnCoordinator = field(default_factory=TurnCoordinator)
+
     agent_pipeline: AgentPipeline | None = None
 
     async_agent_pipeline: AsyncAgentPipeline | None = None
@@ -453,11 +459,63 @@ class SessionRuntime:
 
     def _advance_turn_epoch(self) -> None:
         """Fence and cancel unfinished work before a newer turn can run."""
+        state = self.turn_coordinator.state
+        if (
+            state.turn_id is not None
+            and state.epoch == int(self.cancellation_epoch)
+            and state.phase
+            not in {TurnPhase.IDLE, TurnPhase.PLAYING, TurnPhase.COMPLETED}
+        ):
+            _ = self.turn_coordinator.cancel(
+                turn_id=state.turn_id, epoch=state.epoch
+            )
         self.cancellation_epoch = CancellationEpoch(int(self.cancellation_epoch) + 1)
         cancelled = self.task_registry.cancel_pending(reason="superseded_turn")
         self._cancel_preoutput_tts(cancelled)
         self._cancel_active_response_providers(cancelled)
         self._cancel_active_preoutput_tts_providers(cancelled)
+
+    @property
+    def response_turn_state(self) -> AgentState:
+        """Expose an immutable lifecycle view for diagnostics and tests."""
+        return self.turn_coordinator.state
+
+    def _begin_response_turn(self, turn_id: TurnId) -> None:
+        """Move an already-admitted scheduler turn into reasoning.
+
+        A pre-existing PLAYING state represents the retained lease.  The new
+        response is marked as a replacement, while actual Sound cutover stays
+        fenced by ``SchedulerOutputFence`` and its flush task.
+        """
+        previous = self.turn_coordinator.state
+        replacement = previous.phase is TurnPhase.PLAYING
+        epoch = int(self.cancellation_epoch)
+        _ = self.turn_coordinator.enqueue(
+            turn_id=str(turn_id), epoch=epoch, replacement=replacement
+        )
+        _ = self.turn_coordinator.start_reasoning(
+            turn_id=str(turn_id), epoch=epoch
+        )
+
+    def response_cutover_pending(self, turn_id: TurnId) -> bool:
+        """Record that a prepared replacement first frame awaits Sound ACK.
+
+        This is invoked only after the bridge has a valid first RTP frame and
+        before the transport opens its reducer-owned flush task.  It neither
+        emits audio nor changes the output lease; both remain owned by the
+        transport's exact flush acknowledgement path.
+        """
+        state = self.turn_coordinator.state
+        if (
+            state.turn_id != str(turn_id)
+            or state.epoch != int(self.cancellation_epoch)
+            or state.phase is not TurnPhase.SYNTHESIZING
+        ):
+            return False
+        transition = self.turn_coordinator.await_cutover(
+            turn_id=str(turn_id), epoch=int(self.cancellation_epoch)
+        )
+        return transition.state.phase is TurnPhase.CUTOVER_PENDING
 
     def _cancel_active_response_providers(
         self, cancelled: tuple[TaskRecord, ...]
@@ -598,6 +656,7 @@ class SessionRuntime:
             return self._reject(correlation, "scheduler_rejected")
         accepted_turn = TurnId(outcome.turn_id)
         self._advance_turn_epoch()
+        self._begin_response_turn(accepted_turn)
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
         await self._run_selected_async_path(
@@ -889,6 +948,9 @@ class SessionRuntime:
             correlation,
         )
         if not scheduled.accepted or self.executor.claim(response_task_id) is None:
+            _ = self.turn_coordinator.fail(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             _LOGGER.debug("response_task_not_admitted turn=%s", turn_id)
             return
         try:
@@ -896,14 +958,23 @@ class SessionRuntime:
                 response_task_id, coordinator.initial_response(snapshot)
             )
         except _ResponseProviderCancelledError:
+            _ = self.turn_coordinator.cancel(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             _LOGGER.debug("initial_response_cancelled turn=%s", turn_id)
             return
         except TimeoutError:
+            _ = self.turn_coordinator.fail(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             _LOGGER.debug("initial_response_timed_out turn=%s", turn_id)
             return
         except (OSError, ValueError):
             _ = self.task_registry.fail(
                 response_task_id, reason="initial_response_provider_failed"
+            )
+            _ = self.turn_coordinator.fail(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
             )
             _LOGGER.exception("initial_response_provider_failed turn=%s", turn_id)
             return
@@ -911,9 +982,15 @@ class SessionRuntime:
             _ = self.task_registry.fail(
                 response_task_id, reason="initial_response_provider_invalid"
             )
+            _ = self.turn_coordinator.fail(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             return
         if not self._response_envelope_is_current(envelope):
             _ = self.cancel_task(response_task_id, correlation)
+            _ = self.turn_coordinator.cancel(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             _LOGGER.debug("response_superseded turn=%s", turn_id)
             return
         initial_accepted = self.reduce_task(
@@ -929,6 +1006,9 @@ class SessionRuntime:
             correlation,
         )
         if not initial_accepted.accepted:
+            _ = self.turn_coordinator.cancel(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             _LOGGER.debug("initial_response_result_rejected turn=%s", turn_id)
             return
 
@@ -970,6 +1050,9 @@ class SessionRuntime:
             )
             return
 
+        _ = self.turn_coordinator.wait_for_tool(
+            turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+        )
         request = coordinator.tool_request(initial, snapshot)
         observation = "工具调用未成功完成。请基于已知信息简短说明。"
         parent_task_id = response_task_id
@@ -1008,6 +1091,9 @@ class SessionRuntime:
                         provider_output if isinstance(provider_output, str) else None
                     )
                 except _ResponseProviderCancelledError:
+                    _ = self.turn_coordinator.cancel(
+                        turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+                    )
                     _LOGGER.debug("response_tool_cancelled turn=%s", turn_id)
                     return
                 except TimeoutError:
@@ -1018,6 +1104,9 @@ class SessionRuntime:
                     _LOGGER.exception("response_tool_provider_failed turn=%s", turn_id)
                 if not self._response_envelope_is_current(envelope):
                     _ = self.cancel_task(tool_task_id, correlation)
+                    _ = self.turn_coordinator.cancel(
+                        turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+                    )
                     return
                 if tool_output is None:
                     _ = self.task_registry.fail(
@@ -1037,8 +1126,15 @@ class SessionRuntime:
                         correlation,
                     )
                     if not tool_accepted.accepted:
+                        _ = self.turn_coordinator.cancel(
+                            turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+                        )
                         return
                     observation = tool_output
+
+        _ = self.turn_coordinator.resume_reasoning(
+            turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+        )
 
         final_task_id = TaskId(f"response-llm-final-{turn_id}")
         final_scheduled = self.schedule_task(
@@ -1056,12 +1152,18 @@ class SessionRuntime:
             correlation,
         )
         if not final_scheduled.accepted or self.executor.claim(final_task_id) is None:
+            _ = self.turn_coordinator.fail(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             return
         try:
             final = await self._await_response_provider(
                 final_task_id, coordinator.final_response(snapshot, observation)
             )
         except _ResponseProviderCancelledError:
+            _ = self.turn_coordinator.cancel(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             _LOGGER.debug("final_response_cancelled turn=%s", turn_id)
             return
         except TimeoutError:
@@ -1098,9 +1200,15 @@ class SessionRuntime:
             _ = self.task_registry.fail(
                 final_task_id, reason="final_response_provider_invalid"
             )
+            _ = self.turn_coordinator.fail(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             return
         if not self._response_envelope_is_current(envelope):
             _ = self.cancel_task(final_task_id, correlation)
+            _ = self.turn_coordinator.cancel(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             return
         final_accepted = self.reduce_task(
             TaskResult(
@@ -1115,6 +1223,9 @@ class SessionRuntime:
             correlation,
         )
         if not final_accepted.accepted:
+            _ = self.turn_coordinator.cancel(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
+            )
             return
         self._apply_coordinated_response(
             CoordinatedResponse(final, request, observation),
@@ -1205,8 +1316,14 @@ class SessionRuntime:
             )
         )
         if not parsed.spoken_text.strip():
+            _ = self.turn_coordinator.fail(
+                turn_id=str(envelope.turn_id), epoch=envelope.cancellation_epoch
+            )
             _LOGGER.debug("response_rejected_empty turn=%s", envelope.turn_id)
             return
+        _ = self.turn_coordinator.start_synthesizing(
+            turn_id=str(envelope.turn_id), epoch=envelope.cancellation_epoch
+        )
         provenance = ContextProvenance(
             session_id=SessionId(audience_input.session_id),
             turn_id=envelope.turn_id,
@@ -1240,6 +1357,9 @@ class SessionRuntime:
             )
         else:
             _ = self.cancel_task(task_id, correlation)
+            _ = self.turn_coordinator.fail(
+                turn_id=str(envelope.turn_id), epoch=envelope.cancellation_epoch
+            )
 
     def _commit_response_after_output_started(
         self, task_id: TaskId, correlation: EventCorrelation
@@ -1904,6 +2024,10 @@ class SessionRuntime:
             ).accepted
             if committed:
                 self._commit_response_after_output_started(task_id, correlation)
+                _ = self.turn_coordinator.playback_started(
+                    turn_id=str(record.request.turn_id),
+                    epoch=record.request.cancellation_epoch,
+                )
                 if execution.output_started is not None:
                     execution.output_started()
             return committed
@@ -1925,6 +2049,10 @@ class SessionRuntime:
             _ = self.cancel_task(task_id, correlation)
             _ = self._agent_tts_text.pop(task_id, None)
             _ = self._pending_response_commits.pop(task_id, None)
+            _ = self.turn_coordinator.fail(
+                turn_id=str(record.request.turn_id),
+                epoch=record.request.cancellation_epoch,
+            )
             return False
         _ = self._agent_tts_text.pop(task_id, None)
         return True
@@ -2171,6 +2299,7 @@ class SessionRuntime:
             return self._reject(correlation, "scheduler_rejected")
         accepted_turn = transition.accepted_event.turn_id
         self._advance_turn_epoch()
+        self._begin_response_turn(accepted_turn)
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
         await self._run_selected_async_path(

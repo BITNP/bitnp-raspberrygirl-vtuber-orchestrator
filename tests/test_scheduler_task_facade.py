@@ -12,6 +12,7 @@ from orchestrator.agent_pipeline import (
     GateDecision,
     MediaOperation,
 )
+from orchestrator.agent_state import TurnPhase
 from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.ids import SegmentId, SessionId, TraceId, TurnId
 from orchestrator.intent_router import IntentRouter, IntentSpec
@@ -367,6 +368,11 @@ def test_async_response_is_registry_owned_before_it_can_admit_tts() -> None:
     assert records[0].state is TaskState.COMPLETED
     assert records[1].request.parent_task_id == records[0].request.task_id
     assert records[1].state is TaskState.RUNNING
+    assert runtime.response_turn_state.phase is TurnPhase.SYNTHESIZING
+    assert runtime.response_turn_state.turn_id == "turn-0001"
+    assert runtime.response_cutover_pending(TurnId("turn-0001"))
+    assert runtime.response_turn_state.phase is TurnPhase.CUTOVER_PENDING
+    assert not runtime.response_cutover_pending(TurnId("turn-0001"))
 
 
 def test_async_tool_turn_records_initial_tool_and_final_provider_tasks() -> None:
@@ -418,6 +424,7 @@ def test_async_tool_turn_records_initial_tool_and_final_provider_tasks() -> None
     ]
     assert records[1].request.parent_task_id == records[0].request.task_id
     assert records[2].request.parent_task_id == records[1].request.task_id
+    assert runtime.response_turn_state.phase is TurnPhase.SYNTHESIZING
 
 
 def test_async_tool_task_uses_its_trusted_intent_deadline() -> None:
@@ -485,6 +492,7 @@ def test_response_provider_timeout_closes_its_registry_task() -> None:
     assert task is not None
     assert task.state is TaskState.TIMED_OUT
     assert runtime.active_response_provider_task_ids == frozenset()
+    assert runtime.response_turn_state.phase is TurnPhase.FAILED
 
 
 def test_new_turn_cancels_the_active_response_provider_after_fencing() -> None:
@@ -690,6 +698,7 @@ def test_memory_extraction_runs_only_after_tts_output_is_accepted() -> None:
             outcome.turn_id, synthesize, correlation
         )
         await asyncio.sleep(0)
+        assert runtime.response_turn_state.phase is TurnPhase.PLAYING
 
     asyncio.run(exercise())
 

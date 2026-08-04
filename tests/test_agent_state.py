@@ -46,3 +46,40 @@ def test_failed_pre_audio_turn_has_no_recovery_effect() -> None:
     failed = reducer.failed(0, audio_started=False)
     assert failed.state.phase is TurnPhase.FAILED
     assert failed.effects == ()
+
+
+def test_runtime_turn_lifecycle_rejects_stale_provider_callbacks() -> None:
+    coordinator = AgentStateReducer()
+
+    queued = coordinator.enqueue(turn_id="turn-1", epoch=7)
+    assert queued.state.phase is TurnPhase.QUEUED
+    reasoning = coordinator.start_reasoning(turn_id="turn-1", epoch=7)
+    assert reasoning.state.phase is TurnPhase.REASONING
+    waiting = coordinator.wait_for_tool(turn_id="turn-1", epoch=7)
+    assert waiting.state.phase is TurnPhase.WAITING_TOOL
+    resumed = coordinator.resume_reasoning(turn_id="turn-1", epoch=7)
+    assert resumed.state.phase is TurnPhase.REASONING
+    synthesizing = coordinator.start_synthesizing(turn_id="turn-1", epoch=7)
+    assert synthesizing.state.phase is TurnPhase.SYNTHESIZING
+
+    stale = coordinator.playback_started(turn_id="turn-1", epoch=6)
+    assert stale.state.phase is TurnPhase.SYNTHESIZING
+    assert stale.effects == ()
+
+    playing = coordinator.playback_started(turn_id="turn-1", epoch=7)
+    assert playing.state.phase is TurnPhase.PLAYING
+    completed = coordinator.playback_finished(turn_id="turn-1", epoch=7)
+    assert completed.state.phase is TurnPhase.COMPLETED
+
+
+def test_runtime_replacement_requires_cutover_before_playback() -> None:
+    coordinator = AgentStateReducer()
+    _ = coordinator.enqueue(turn_id="turn-2", epoch=8, replacement=True)
+    _ = coordinator.start_reasoning(turn_id="turn-2", epoch=8)
+    _ = coordinator.start_synthesizing(turn_id="turn-2", epoch=8)
+
+    pending = coordinator.await_cutover(turn_id="turn-2", epoch=8)
+    assert pending.state.phase is TurnPhase.CUTOVER_PENDING
+    assert pending.effects == (StateEffect.FLUSH_SOUND,)
+    playing = coordinator.playback_started(turn_id="turn-2", epoch=8)
+    assert playing.state.phase is TurnPhase.PLAYING
