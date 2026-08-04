@@ -67,6 +67,12 @@ class AsyncResponseCoordinator:
             return None
         return self.router.request(proposal.intent, snapshot)
 
+    def tool_timeout_ms(self, proposal: ResponseProposal) -> int | None:
+        """Expose the registered, model-independent budget for a tool turn."""
+        if proposal.intent == "answer":
+            return None
+        return self.router.timeout_for(proposal.intent)
+
     async def execute_tool(
         self, request: ToolRequest, snapshot: BrainStateSnapshot
     ) -> str | None:

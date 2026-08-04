@@ -69,6 +69,11 @@ class IntentRouter:
             return None
         return ToolRequest(spec.tool_kind, spec.tool_name, arguments)
 
+    def timeout_for(self, intent_id: str) -> int | None:
+        """Return the trusted execution budget for an already selected intent."""
+        spec = self._specs.get(intent_id)
+        return None if spec is None else spec.timeout_ms
+
     @property
     def specs(self) -> tuple[IntentSpec, ...]:
         """Expose immutable startup registrations for configuration validation."""

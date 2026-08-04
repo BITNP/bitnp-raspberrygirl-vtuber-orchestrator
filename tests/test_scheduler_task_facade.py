@@ -420,6 +420,110 @@ def test_async_tool_turn_records_initial_tool_and_final_provider_tasks() -> None
     assert records[2].request.parent_task_id == records[1].request.task_id
 
 
+def test_async_tool_task_uses_its_trusted_intent_deadline() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        clock=lambda: 100,
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _ToolResponseBrain(),
+            IntentRouter(
+                (
+                    IntentSpec(
+                        "knowledge",
+                        "knowledge",
+                        "local",
+                        "knowledge.lookup",
+                        lambda snapshot: {"query": snapshot.input.text},
+                        timeout_ms=7,
+                    ),
+                )
+            ),
+            _AsyncTools(),
+        ),
+        agent_capabilities=frozenset({"knowledge.lookup"}),
+    )
+
+    outcome = asyncio.run(
+        runtime.receive_comment_async(
+            CommentProposal("查询", _correlation("async-tool-deadline", 1))
+        )
+    )
+
+    assert outcome.accepted
+    tool_task = runtime.task_registry.task(TaskId("response-tool-turn-0001"))
+    assert tool_task is not None
+    assert tool_task.request.deadline_ms == TaskDeadlineMs(107)
+
+
+def test_response_provider_timeout_closes_its_registry_task() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _HangingResponseBrain(), IntentRouter(()), _AsyncNoTools()
+        ),
+        response_task_timeout_ms=10,
+    )
+
+    outcome = asyncio.run(
+        runtime.receive_comment_async(
+            CommentProposal("问题", _correlation("async-timeout", 1))
+        )
+    )
+
+    assert outcome.accepted
+    task = runtime.task_registry.task(TaskId("response-llm-initial-turn-0001"))
+    assert task is not None
+    assert task.state is TaskState.TIMED_OUT
+    assert runtime.active_response_provider_task_ids == frozenset()
+
+
+def test_new_turn_cancels_the_active_response_provider_after_fencing() -> None:
+    brain = _FirstResponseBlocks()
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            brain, IntentRouter(()), _AsyncNoTools()
+        ),
+    )
+
+    async def exercise() -> None:
+        first = asyncio.create_task(
+            runtime.receive_comment_async(
+                CommentProposal("第一句", _correlation("async-cancel-1", 1))
+            )
+        )
+        _ = await brain.started.wait()
+        second = await runtime.receive_comment_async(
+            CommentProposal("第二句", _correlation("async-cancel-2", 2))
+        )
+        first_outcome = await first
+        assert first_outcome.accepted
+        assert second.accepted
+
+    asyncio.run(exercise())
+
+    first_task = runtime.task_registry.task(TaskId("response-llm-initial-turn-0001"))
+    assert first_task is not None
+    assert first_task.state is TaskState.CANCELLED
+    assert brain.cancelled
+    assert runtime.active_response_provider_task_ids == frozenset()
+
+
 def test_new_shadow_never_executes_selected_tool_or_creates_effect_tasks() -> None:
     tools = _CountingAsyncTools()
     runtime = SessionRuntime.create(
@@ -681,6 +785,32 @@ class _AsyncAcceptPipeline:
 class _AsyncResponseBrain:
     async def respond(self, *args: object, **kwargs: object) -> ResponseProposal:
         _ = args, kwargs
+        return ResponseProposal("answer", "answer")
+
+
+class _HangingResponseBrain:
+    async def respond(self, *args: object, **kwargs: object) -> ResponseProposal:
+        _ = args, kwargs
+        _ = await asyncio.Event().wait()
+        return ResponseProposal("不应返回", "answer")
+
+
+class _FirstResponseBlocks:
+    def __init__(self) -> None:
+        self.started: asyncio.Event = asyncio.Event()
+        self.cancelled: bool = False
+        self.calls: int = 0
+
+    async def respond(self, *args: object, **kwargs: object) -> ResponseProposal:
+        _ = args, kwargs
+        self.calls += 1
+        if self.calls == 1:
+            _ = self.started.set()
+            try:
+                _ = await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
         return ResponseProposal("answer", "answer")
 
 

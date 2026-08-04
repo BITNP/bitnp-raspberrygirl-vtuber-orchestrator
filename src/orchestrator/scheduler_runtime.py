@@ -143,6 +143,10 @@ _LOGGER = logging.getLogger(__name__)
 
 type AgentTtsSynthesize = Callable[[str, Callable[[], bool]], Awaitable[bool]]
 
+
+class _ResponseProviderCancelledError(Exception):
+    """A fenced response task had its owned provider coroutine cancelled."""
+
 def _monotonic_ms() -> int:
     return monotonic_ns() // 1_000_000
 
@@ -265,6 +269,8 @@ class SessionRuntime:
     # a TTS task is still pre-output and therefore safe to stop.
     preoutput_tts_cancellation: Callable[[TurnId], None] | None = None
 
+    response_task_timeout_ms: int = 30_000
+
     clock: Callable[[], int] = _monotonic_ms
 
     cancellation_epoch: CancellationEpoch = field(
@@ -296,6 +302,10 @@ class SessionRuntime:
     )
 
     _maintenance_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+
+    _active_response_provider_tasks: dict[TaskId, asyncio.Task[object]] = field(
+        default_factory=dict
+    )
 
     _voice_evidence_ranges: list[tuple[str, int, int]] = field(default_factory=list)
 
@@ -331,7 +341,11 @@ class SessionRuntime:
         agent_capabilities: frozenset[str] | None = None,
         agent_mcp_allowlist: frozenset[str] | None = None,
         agent_effect_dispatcher: AgentEffectDispatcher | None = None,
+        response_task_timeout_ms: int = 30_000,
     ) -> "SessionRuntime":
+        if response_task_timeout_ms <= 0:
+            field_name = "response_task_timeout_ms"
+            raise ValueError(field_name)
         scheduler = SessionScheduler(
             session_id=session_id,
             turn_id_prefix=turn_id_prefix,
@@ -384,6 +398,7 @@ class SessionRuntime:
                 frozenset() if agent_mcp_allowlist is None else agent_mcp_allowlist
             ),
             agent_effect_dispatcher=agent_effect_dispatcher,
+            response_task_timeout_ms=response_task_timeout_ms,
         )
 
     @property
@@ -423,6 +438,18 @@ class SessionRuntime:
         self.cancellation_epoch = CancellationEpoch(int(self.cancellation_epoch) + 1)
         cancelled = self.task_registry.cancel_pending(reason="superseded_turn")
         self._cancel_preoutput_tts(cancelled)
+        self._cancel_active_response_providers(cancelled)
+
+    def _cancel_active_response_providers(
+        self, cancelled: tuple[TaskRecord, ...]
+    ) -> None:
+        """Stop provider work only after the registry has closed its result gate."""
+        for record in cancelled:
+            provider_task = self._active_response_provider_tasks.get(
+                record.request.task_id
+            )
+            if provider_task is not None and not provider_task.done():
+                _ = provider_task.cancel()
 
     def set_preoutput_tts_cancellation(
         self, callback: Callable[[TurnId], None] | None
@@ -803,7 +830,7 @@ class SessionRuntime:
             segment_id=SegmentId(f"agent-{turn_id}"),
             revision=self.scheduler.snapshot.revision,
             cancellation_epoch=int(self.cancellation_epoch),
-            deadline_ms=self.clock() + 30_000,
+            deadline_ms=self.clock() + self.response_task_timeout_ms,
             allowed_actions=frozenset(
                 {"breathe", "dance", "explain_point", "speak", "wave", "nod"}
             ),
@@ -829,12 +856,25 @@ class SessionRuntime:
             _LOGGER.debug("response_task_not_admitted turn=%s", turn_id)
             return
         try:
-            initial = await coordinator.initial_response(snapshot)
-        except (OSError, TimeoutError, ValueError):
+            initial = await self._await_response_provider(
+                response_task_id, coordinator.initial_response(snapshot)
+            )
+        except _ResponseProviderCancelledError:
+            _LOGGER.debug("initial_response_cancelled turn=%s", turn_id)
+            return
+        except TimeoutError:
+            _LOGGER.debug("initial_response_timed_out turn=%s", turn_id)
+            return
+        except (OSError, ValueError):
             _ = self.task_registry.fail(
                 response_task_id, reason="initial_response_provider_failed"
             )
             _LOGGER.exception("initial_response_provider_failed turn=%s", turn_id)
+            return
+        if not isinstance(initial, ResponseProposal):
+            _ = self.task_registry.fail(
+                response_task_id, reason="initial_response_provider_invalid"
+            )
             return
         if not self._response_envelope_is_current(envelope):
             _ = self.cancel_task(response_task_id, correlation)
@@ -899,13 +939,19 @@ class SessionRuntime:
         parent_task_id = response_task_id
         if request is not None:
             tool_task_id = TaskId(f"response-tool-{turn_id}")
+            tool_timeout_ms = coordinator.tool_timeout_ms(initial)
+            tool_deadline_ms = envelope.deadline_ms
+            if tool_timeout_ms is not None:
+                tool_deadline_ms = min(
+                    tool_deadline_ms, self.clock() + tool_timeout_ms
+                )
             tool_scheduled = self.schedule_task(
                 TaskRequest(
                     task_id=tool_task_id,
                     session_id=envelope.session_id,
                     turn_id=envelope.turn_id,
                     parent_task_id=response_task_id,
-                    deadline_ms=TaskDeadlineMs(envelope.deadline_ms),
+                    deadline_ms=TaskDeadlineMs(tool_deadline_ms),
                     snapshot_revision=envelope.revision,
                     idempotency_key=IdempotencyKey(str(tool_task_id)),
                     kind=TaskKind.DELIBERATIVE,
@@ -919,8 +965,19 @@ class SessionRuntime:
             ):
                 parent_task_id = tool_task_id
                 try:
-                    tool_output = await coordinator.execute_tool(request, snapshot)
-                except (OSError, TimeoutError, ValueError):
+                    provider_output = await self._await_response_provider(
+                        tool_task_id, coordinator.execute_tool(request, snapshot)
+                    )
+                    tool_output = (
+                        provider_output if isinstance(provider_output, str) else None
+                    )
+                except _ResponseProviderCancelledError:
+                    _LOGGER.debug("response_tool_cancelled turn=%s", turn_id)
+                    return
+                except TimeoutError:
+                    tool_output = None
+                    _LOGGER.debug("response_tool_timed_out turn=%s", turn_id)
+                except (OSError, ValueError):
                     tool_output = None
                     _LOGGER.exception("response_tool_provider_failed turn=%s", turn_id)
                 if not self._response_envelope_is_current(envelope):
@@ -965,8 +1022,26 @@ class SessionRuntime:
         if not final_scheduled.accepted or self.executor.claim(final_task_id) is None:
             return
         try:
-            final = await coordinator.final_response(snapshot, observation)
-        except (OSError, TimeoutError, ValueError):
+            final = await self._await_response_provider(
+                final_task_id, coordinator.final_response(snapshot, observation)
+            )
+        except _ResponseProviderCancelledError:
+            _LOGGER.debug("final_response_cancelled turn=%s", turn_id)
+            return
+        except TimeoutError:
+            _LOGGER.debug("final_response_timed_out turn=%s", turn_id)
+            if self._response_envelope_is_current(envelope):
+                self._apply_coordinated_response(
+                    CoordinatedResponse(
+                        ResponseProposal("抱歉, 我暂时无法完成这项查询。", "answer")
+                    ),
+                    audience_input,
+                    envelope,
+                    correlation,
+                    parent_task_id,
+                )
+            return
+        except (OSError, ValueError):
             _ = self.task_registry.fail(
                 final_task_id, reason="final_response_provider_failed"
             )
@@ -982,6 +1057,11 @@ class SessionRuntime:
                     correlation,
                     response_task_id,
                 )
+            return
+        if not isinstance(final, ResponseProposal):
+            _ = self.task_registry.fail(
+                final_task_id, reason="final_response_provider_invalid"
+            )
             return
         if not self._response_envelope_is_current(envelope):
             _ = self.cancel_task(final_task_id, correlation)
@@ -1016,6 +1096,41 @@ class SessionRuntime:
             now_ms=self.clock(),
             session_ended=self._ended,
         )
+
+    async def _await_response_provider(
+        self,
+        task_id: TaskId,
+        operation: Awaitable[ResponseProposal | str | None],
+    ) -> ResponseProposal | str | None:
+        """Bind one provider coroutine to its registry task and absolute deadline."""
+        record = self.task_registry.task(task_id)
+        if record is None or record.state is not TaskState.RUNNING:
+            raise _ResponseProviderCancelledError
+        remaining_ms = int(record.request.deadline_ms) - self.clock()
+        if remaining_ms <= 0:
+            _ = self.task_registry.timeout(task_id)
+            raise TimeoutError
+        provider_task = asyncio.ensure_future(operation)
+        self._active_response_provider_tasks[task_id] = provider_task
+        try:
+            return await asyncio.wait_for(provider_task, timeout=remaining_ms / 1_000)
+        except TimeoutError:
+            _ = self.task_registry.timeout(task_id)
+            raise
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
+            raise _ResponseProviderCancelledError from None
+        finally:
+            _ = self._active_response_provider_tasks.pop(task_id, None)
+            if not provider_task.done():
+                _ = provider_task.cancel()
+
+    @property
+    def active_response_provider_task_ids(self) -> frozenset[TaskId]:
+        """Expose active provider ownership without leaking mutable task handles."""
+        return frozenset(self._active_response_provider_tasks)
 
     def _apply_coordinated_response(
         self,
@@ -1974,6 +2089,7 @@ class SessionRuntime:
             return self._reject(correlation, "session_ended")
         cancelled = self.task_registry.cancel_pending(reason="session_ended")
         self._cancel_preoutput_tts(cancelled)
+        self._cancel_active_response_providers(cancelled)
         for command_id in tuple(self._active_deck_tasks.values()):
             _ = self.deck_dispatcher.cancel(command_id)
         self._deck_intents.clear()
