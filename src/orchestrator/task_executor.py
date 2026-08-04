@@ -42,19 +42,25 @@ class TaskLaneExecutor:
             return False
 
         match record.state:
-            case TaskState.PENDING:
+            case TaskState.ADMITTED:
+                if self.registry.enqueue(request.task_id) is None:
+                    return False
                 lane.append(request)
-
                 return True
 
             case (
                 TaskState.CANCELLED
                 | TaskState.SUPERSEDED
                 | TaskState.TIMED_OUT
-                | TaskState.COMPLETED
+                | TaskState.SUCCEEDED
                 | TaskState.FAILED
                 | TaskState.RUNNING
+                | TaskState.CANCELLING
+                | TaskState.QUEUED
             ):
+                return False
+
+            case _:
                 return False
 
     def claim(self, task_id: TaskId) -> TaskRequest | None:
@@ -79,7 +85,7 @@ class TaskLaneExecutor:
                     continue
 
                 match record.state:
-                    case TaskState.PENDING:
+                    case TaskState.QUEUED:
                         if now_ms > request.deadline_ms:
                             _ = self.registry.timeout(request.task_id)
 
@@ -93,10 +99,15 @@ class TaskLaneExecutor:
                         TaskState.CANCELLED
                         | TaskState.SUPERSEDED
                         | TaskState.TIMED_OUT
-                        | TaskState.COMPLETED
+                        | TaskState.SUCCEEDED
                         | TaskState.FAILED
                         | TaskState.RUNNING
+                        | TaskState.CANCELLING
+                        | TaskState.ADMITTED
                     ):
+                        continue
+
+                    case _:
                         continue
 
         return None

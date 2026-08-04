@@ -121,10 +121,17 @@ class TaskResultReducer:
 
 def _lifecycle_rejection(record: TaskRecord) -> TaskResultRejection | None:
     match record.state:
-        case TaskState.PENDING | TaskState.RUNNING:
+        case TaskState.RUNNING:
             return None
 
-        case TaskState.CANCELLED:
+        case (
+            TaskState.CREATED
+            | TaskState.ADMITTED
+            | TaskState.QUEUED
+            | TaskState.CANCELLING
+            | TaskState.CANCELLED
+            | TaskState.FAILED
+        ):
             return TaskResultRejection.CANCELLED
 
         case TaskState.SUPERSEDED:
@@ -133,11 +140,8 @@ def _lifecycle_rejection(record: TaskRecord) -> TaskResultRejection | None:
         case TaskState.TIMED_OUT:
             return TaskResultRejection.DEADLINE_EXCEEDED
 
-        case TaskState.COMPLETED:
+        case TaskState.SUCCEEDED:
             return TaskResultRejection.ALREADY_COMPLETED
-
-        case TaskState.FAILED:
-            return TaskResultRejection.CANCELLED
 
 
 def _snapshot_rejection(

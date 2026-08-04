@@ -31,6 +31,7 @@ def _running_record() -> tuple[TaskRegistry, TaskId]:
         )
     )
     assert result.__class__.__name__ == "TaskRegistrationAccepted"
+    assert registry.enqueue(task_id) is not None
     assert registry.claim(task_id) is not None
     return registry, task_id
 

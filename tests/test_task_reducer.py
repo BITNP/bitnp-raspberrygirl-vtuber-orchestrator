@@ -387,7 +387,8 @@ def _register(registry: TaskRegistry, request: TaskRequest) -> None:
 
     match registry.register(request):
         case TaskRegistrationAccepted():
-            pass
+            assert registry.enqueue(request.task_id) is not None
+            assert registry.claim(request.task_id) is not None
 
         case TaskRegistrationDuplicate():
             pytest.fail("test setup reused an idempotency key")

@@ -26,20 +26,33 @@ class TaskKind(StrEnum):
     MAINTENANCE = "maintenance"
 
 
-@unique
 class TaskState(StrEnum):
 
-    PENDING = "pending"
+    CREATED = "created"
+
+    ADMITTED = "admitted"
+
+    QUEUED = "queued"
+
+    # Compatibility spelling for callers which formerly used the single
+    # pre-worker state.  It is intentionally the queued state, never a second
+    # lifecycle phase.
+    PENDING = QUEUED
 
     RUNNING = "running"
+
+    SUCCEEDED = "succeeded"
+
+    # Compatibility spelling for provider success accepted by the reducer.
+    COMPLETED = SUCCEEDED
+
+    CANCELLING = "cancelling"
 
     CANCELLED = "cancelled"
 
     SUPERSEDED = "superseded"
 
     TIMED_OUT = "timed_out"
-
-    COMPLETED = "completed"
 
     FAILED = "failed"
 
@@ -180,7 +193,7 @@ class TaskRegistry:
                 TaskState.CANCELLED,
                 TaskState.SUPERSEDED,
                 TaskState.TIMED_OUT,
-                TaskState.COMPLETED,
+                TaskState.SUCCEEDED,
                 TaskState.FAILED,
             }
         )
@@ -200,7 +213,7 @@ class TaskRegistry:
         if rejection is not None:
             return TaskRegistrationRejected(rejection)
 
-        record = TaskRecord(request, TaskState.PENDING, None, None)
+        record = TaskRecord(request, TaskState.ADMITTED, None, None)
 
         self._records[request.task_id] = record
 
@@ -228,22 +241,35 @@ class TaskRegistry:
     def cancel(self, task_id: TaskId, *, reason: str) -> TaskRecord | None:
         record = self._records.get(task_id)
 
-        if record is None or record.state not in {TaskState.PENDING, TaskState.RUNNING}:
+        if record is None or record.state not in {
+            TaskState.ADMITTED,
+            TaskState.QUEUED,
+            TaskState.RUNNING,
+        }:
             return None
-
-        return self._store(
+        # Close the result gate before returning.  Provider cancellation is
+        # dispatched by the coordinator after this synchronous transition.
+        cancelling = self._store(
             replace(
                 record,
-                state=TaskState.CANCELLED,
+                state=TaskState.CANCELLING,
                 cancellation_reason=reason,
                 superseded_by=None,
             )
         )
+        return self._store(replace(cancelling, state=TaskState.CANCELLED))
+
+    def enqueue(self, task_id: TaskId) -> TaskRecord | None:
+        """Record that an admitted task has entered its lane queue."""
+        record = self._records.get(task_id)
+        if record is None or record.state is not TaskState.ADMITTED:
+            return None
+        return self._store(replace(record, state=TaskState.QUEUED))
 
     def claim(self, task_id: TaskId) -> TaskRecord | None:
         """Atomically transfer an admitted task from a queue to a worker."""
         record = self._records.get(task_id)
-        if record is None or record.state is not TaskState.PENDING:
+        if record is None or record.state is not TaskState.QUEUED:
             return None
         return self._store(
             replace(
@@ -257,7 +283,7 @@ class TaskRegistry:
     def withdraw(self, task_id: TaskId) -> TaskRecord | None:
         record = self._records.get(task_id)
 
-        if record is None or record.state is not TaskState.PENDING:
+        if record is None or record.state is not TaskState.ADMITTED:
             return None
 
         del self._records[task_id]
@@ -283,7 +309,7 @@ class TaskRegistry:
         if (
             record is None
             or replacement is None
-            or record.state is not TaskState.PENDING
+            or record.state not in {TaskState.QUEUED, TaskState.RUNNING}
             or record.request.turn_id == replacement.request.turn_id
         ):
             return None
@@ -300,7 +326,11 @@ class TaskRegistry:
     def timeout(self, task_id: TaskId) -> TaskRecord | None:
         record = self._records.get(task_id)
 
-        if record is None or record.state not in {TaskState.PENDING, TaskState.RUNNING}:
+        if record is None or record.state not in {
+            TaskState.ADMITTED,
+            TaskState.QUEUED,
+            TaskState.RUNNING,
+        }:
             return None
 
         return self._store(
@@ -318,7 +348,7 @@ class TaskRegistry:
         return self._store(
             replace(
                 record,
-                state=TaskState.COMPLETED,
+                state=TaskState.SUCCEEDED,
                 cancellation_reason=None,
                 superseded_by=None,
             )

@@ -2193,7 +2193,7 @@ class SessionRuntime:
         for task_id in tuple(self._deck_intents):
             record = self.task_registry.task(task_id)
 
-            if record is None or record.state is not TaskState.PENDING:
+            if record is None or record.state is not TaskState.QUEUED:
                 intent = self._deck_intents.pop(task_id)
 
                 self._cancel_pending_deck_presentation(intent.command.command_id)

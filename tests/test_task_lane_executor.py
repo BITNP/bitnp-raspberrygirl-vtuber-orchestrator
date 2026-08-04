@@ -14,6 +14,7 @@ from orchestrator.task_registry import (
     TaskRegistrationAccepted,
     TaskRegistry,
     TaskRequest,
+    TaskState,
 )
 
 
@@ -120,6 +121,22 @@ def test_executor_claims_a_task_for_a_dedicated_runtime_path() -> None:
     assert record is not None
     assert record.state.value == "running"
     assert executor.next(now_ms=0) is None
+
+
+def test_registry_records_admission_before_lane_queueing() -> None:
+    registry = _registry()
+    executor = TaskLaneExecutor(registry, max_pending_per_lane=1)
+    request = _request(TaskKind.INTERACTIVE, 1)
+
+    _admit(registry, request)
+    admitted = registry.task(request.task_id)
+    assert admitted is not None
+    assert admitted.state is TaskState.ADMITTED
+
+    assert executor.enqueue(request)
+    queued = registry.task(request.task_id)
+    assert queued is not None
+    assert queued.state is TaskState.QUEUED
 
 
 def _registry() -> TaskRegistry:
