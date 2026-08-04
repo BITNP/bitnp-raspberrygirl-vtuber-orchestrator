@@ -43,7 +43,7 @@ def test_load_config_from_env_parses_response_execution_mode() -> None:
 
     with pytest.raises(ConfigParseError, match="ORCHESTRATOR_RESPONSE_EXECUTION_MODE"):
         _ = load_config_from_env(
-            {"ORCHESTRATOR_RESPONSE_EXECUTION_MODE": "legacy_execute"}
+            {"ORCHESTRATOR_RESPONSE_EXECUTION_MODE": "unsupported"}
         )
 
 

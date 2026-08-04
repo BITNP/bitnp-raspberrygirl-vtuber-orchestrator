@@ -1,6 +1,6 @@
 """Caption timeline delivery over the control WebSocket.
 
-The old generic frontend-operation dispatcher was retired with AgentPlan.  A
+The old generic frontend-operation dispatcher was retired. A
 timeline is emitted only after the response media gate has admitted audio.
 """
 

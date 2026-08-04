@@ -116,7 +116,7 @@ def test_minimal_response_brain_has_no_plan_or_repair_contract() -> None:
     assert fallback.reply == "not-json"
     assert fallback.used_text_fallback
     assert "受限意图" in completion.requests[0].prompt.system
-    assert "AgentPlan" not in completion.requests[0].prompt.system
+    assert "完整执行计划" not in completion.requests[0].prompt.system
     assert "allowed_intents" in completion.requests[0].prompt.user
 
 

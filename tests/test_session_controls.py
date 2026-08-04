@@ -64,10 +64,6 @@ def test_session_end_cancels_work_erases_state_and_rejects_later_input(
     root = session_storage_root(SessionId("session-1"))
     root.mkdir(parents=True, exist_ok=True)
     _ = (root / "memory.md").write_text("session state", encoding="utf-8")
-    correlation = EventCorrelation(
-        TraceId("comment"), SessionId("session-1"), EventSequence(1)
-    )
-    assert runtime.receive_comment(CommentProposal("hello", correlation)).accepted
     end = parse_session_control(_envelope("session.end.command", {}, 2))
     assert isinstance(end, SessionEndControl)
 

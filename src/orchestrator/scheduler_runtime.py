@@ -5,16 +5,7 @@ from dataclasses import dataclass, field, replace
 from time import monotonic_ns
 from typing import Protocol
 
-from orchestrator.agent_pipeline import (
-    AgentPipeline,
-    AsyncAgentPipeline,
-    FrontendOperation,
-    MediaOperation,
-    PlanAccepted,
-    PlanResult,
-)
 from orchestrator.agent_state import AgentState, TurnCoordinator, TurnPhase
-from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
 from orchestrator.brain_contracts import (
     AudienceInput as BrainAudienceInput,
 )
@@ -59,8 +50,6 @@ from orchestrator.mcp_adapters import (
 )
 from orchestrator.memory import (
     MemoryCategory,
-    MemoryConfidence,
-    MemoryKey,
     MemoryProposal,
     MemoryProvenance,
     MemorySource,
@@ -157,37 +146,6 @@ def _monotonic_ms() -> int:
     return monotonic_ns() // 1_000_000
 
 
-def _brain_task_kind(value: object) -> TaskKind | None:
-    if value in {"tts", "playback"}:
-        return TaskKind.INTERACTIVE
-    if value in {"retrieval", "mcp"}:
-        return TaskKind.DELIBERATIVE
-    if value in {"context_compaction", "memory_patch"}:
-        return TaskKind.MAINTENANCE
-    return None
-
-
-class AgentEffectDispatcher(Protocol):
-    """Dedicated adapters execute effects only after reducer acceptance."""
-
-    def dispatch_media(
-        self,
-        operation: MediaOperation,
-        *,
-        session_id: SessionId,
-        turn_id: TurnId,
-        cancellation_epoch: CancellationEpoch,
-    ) -> None: ...
-
-    def dispatch_frontend(
-        self,
-        operation: FrontendOperation,
-        *,
-        session_id: SessionId,
-        turn_id: TurnId,
-    ) -> None: ...
-
-
 class AsyncAudienceGate(Protocol):
     async def evaluate(
         self,
@@ -265,10 +223,6 @@ class SessionRuntime:
     # SchedulerOutputFence remains authoritative for Sound lease cutover.
     turn_coordinator: TurnCoordinator = field(default_factory=TurnCoordinator)
 
-    agent_pipeline: AgentPipeline | None = None
-
-    async_agent_pipeline: AsyncAgentPipeline | None = None
-
     async_agent_gate: AsyncAudienceGate | None = None
 
     async_response_coordinator: AsyncResponseCoordinator | None = None
@@ -282,8 +236,6 @@ class SessionRuntime:
     agent_capabilities: frozenset[str] = frozenset()
 
     agent_mcp_allowlist: frozenset[str] = frozenset()
-
-    agent_effect_dispatcher: AgentEffectDispatcher | None = None
 
     # Transport owns raw provider coroutines; the scheduler tells it only when
     # a TTS task is still pre-output and therefore safe to stop.
@@ -308,8 +260,6 @@ class SessionRuntime:
     )
 
     _journal: _RuntimeJournal = field(default_factory=_RuntimeJournal)
-
-    _agent_results: list[PlanResult] = field(default_factory=list)
 
     _agent_tts_text: dict[TaskId, str] = field(default_factory=dict)
 
@@ -353,8 +303,6 @@ class SessionRuntime:
         turn_id_prefix: str,
         task_config: SchedulerTaskConfig,
         clock: Callable[[], int] = _monotonic_ms,
-        agent_pipeline: AgentPipeline | None = None,
-        async_agent_pipeline: AsyncAgentPipeline | None = None,
         async_agent_gate: AsyncAudienceGate | None = None,
         async_response_coordinator: AsyncResponseCoordinator | None = None,
         response_execution_mode: ResponseExecutionMode = (
@@ -364,7 +312,6 @@ class SessionRuntime:
         context_compactor: AsyncContextCompactor | None = None,
         agent_capabilities: frozenset[str] | None = None,
         agent_mcp_allowlist: frozenset[str] | None = None,
-        agent_effect_dispatcher: AgentEffectDispatcher | None = None,
         response_task_timeout_ms: int = 30_000,
     ) -> "SessionRuntime":
         if response_task_timeout_ms <= 0:
@@ -402,12 +349,6 @@ class SessionRuntime:
             ),
             mode_policy=AdaptiveAgentPolicy(),
             clock=clock,
-            # The minimal response coordinator is the only default execution
-            # path.  Legacy AgentPlan execution is opt-in for migration tests
-            # and controlled rollback sessions; it must never be synthesized
-            # as an implicit fallback when production wiring is incomplete.
-            agent_pipeline=agent_pipeline,
-            async_agent_pipeline=async_agent_pipeline,
             async_agent_gate=async_agent_gate,
             async_response_coordinator=async_response_coordinator,
             response_execution_mode=response_execution_mode,
@@ -421,13 +362,8 @@ class SessionRuntime:
             agent_mcp_allowlist=(
                 frozenset() if agent_mcp_allowlist is None else agent_mcp_allowlist
             ),
-            agent_effect_dispatcher=agent_effect_dispatcher,
             response_task_timeout_ms=response_task_timeout_ms,
         )
-
-    @property
-    def agent_results(self) -> tuple[PlanResult, ...]:
-        return tuple(self._agent_results)
 
     @property
     def voice_evidence_ranges(self) -> tuple[tuple[str, int, int], ...]:
@@ -599,52 +535,16 @@ class SessionRuntime:
                 callback(record.request.turn_id)
 
     def receive_comment(self, proposal: CommentProposal) -> RuntimeOutcome:
-        correlation = proposal.correlation
+        """Reject the retired synchronous response path.
 
-        if self._ended:
-            return self._reject(correlation, "session_ended")
-
-        if correlation in self._correlations:
-            return self._reject(correlation, "duplicate_correlation")
-
-        agent_input = self._submit_agent_comment(proposal)
-        if agent_input is None:
-            return self._reject(correlation, "agent_gate_discarded")
-
-        outcome = self.interaction_ingress.receive_comment(
-            text=proposal.text,
-            correlation=correlation,
-        )
-
-        match outcome:
-            case InteractionAccepted(turn_id=turn_id) if turn_id is not None:
-                self._correlations.add(correlation)
-
-                accepted_turn = TurnId(turn_id)
-                self._advance_turn_epoch()
-
-                self._journal.dispatches.append(
-                    RuntimeDispatch(correlation, accepted_turn)
-                )
-
-                self._run_agent_plan(agent_input, accepted_turn, correlation)
-
-                return RuntimeOutcome(
-                    accepted=True,
-                    correlation=correlation,
-                    turn_id=accepted_turn,
-                )
-
-            case InteractionAccepted():
-                return self._reject(correlation, "missing_turn")
-
-            case _:
-                return self._reject(correlation, "scheduler_rejected")
+        Gate, model, tool, and TTS work all have asynchronous task lifecycles;
+        a synchronous callback cannot own their cancellation and result fences.
+        """
+        return self._reject(proposal.correlation, "async_response_required")
 
     async def receive_comment_async(  # noqa: PLR0911
         self, proposal: CommentProposal
     ) -> RuntimeOutcome:
-        pipeline = self.async_agent_pipeline
         coordinator = self.async_response_coordinator
         gate = self.async_agent_gate
         if (
@@ -652,7 +552,7 @@ class SessionRuntime:
             and coordinator is None
         ):
             return self._reject(proposal.correlation, "shadow_coordinator_missing")
-        if pipeline is None and not (coordinator is not None and gate is not None):
+        if coordinator is None or gate is None:
             return self._reject(proposal.correlation, "response_coordinator_missing")
         correlation = proposal.correlation
         if self._ended:
@@ -667,19 +567,11 @@ class SessionRuntime:
             received_at_ms=self.clock(),
             text=proposal.text,
         )
-        if gate is not None and coordinator is not None:
-            decision = await gate.evaluate(
-                audience_input,
-                active_summary=self._frontend_caption,
-                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
-            )
-        elif pipeline is not None:
-            decision = await pipeline.submit(
-                audience_input,
-                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
-            )
-        else:
-            return self._reject(correlation, "async_gate_missing")
+        decision = await gate.evaluate(
+            audience_input,
+            active_summary=self._frontend_caption,
+            recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+        )
         if decision is GateDecision.DISCARD:
             return self._reject(correlation, "agent_gate_discarded")
         outcome = self.interaction_ingress.receive_comment(
@@ -692,231 +584,15 @@ class SessionRuntime:
         self._begin_response_turn(accepted_turn)
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
-        await self._run_selected_async_path(
-            pipeline, coordinator, audience_input, accepted_turn, correlation
+        await self._run_async_response(
+            coordinator,
+            audience_input,
+            accepted_turn,
+            correlation,
+            shadow=self.response_execution_mode is ResponseExecutionMode.NEW_SHADOW,
         )
         return RuntimeOutcome(
             accepted=True, correlation=correlation, turn_id=accepted_turn
-        )
-
-    async def _run_selected_async_path(
-        self,
-        pipeline: AsyncAgentPipeline | None,
-        coordinator: AsyncResponseCoordinator | None,
-        audience_input: BrainAudienceInput,
-        turn_id: TurnId,
-        correlation: EventCorrelation,
-    ) -> None:
-        if coordinator is not None:
-            await self._run_async_response(
-                coordinator,
-                audience_input,
-                turn_id,
-                correlation,
-                shadow=self.response_execution_mode is ResponseExecutionMode.NEW_SHADOW,
-            )
-        elif pipeline is not None:
-            await self._run_async_agent_plan(
-                pipeline, audience_input, turn_id, correlation
-            )
-
-    def _submit_agent_comment(
-        self, proposal: CommentProposal
-    ) -> BrainAudienceInput | None:
-        pipeline = self.agent_pipeline
-        if pipeline is None:
-            return BrainAudienceInput(
-                session_id=str(proposal.correlation.session_id),
-                trace_id=str(proposal.correlation.trace_id),
-                sequence=int(proposal.correlation.sequence),
-                source=BrainAudienceSource.COMMENT,
-                received_at_ms=self.clock(),
-                text=proposal.text,
-            )
-        audience_input = BrainAudienceInput(
-            session_id=str(proposal.correlation.session_id),
-            trace_id=str(proposal.correlation.trace_id),
-            sequence=int(proposal.correlation.sequence),
-            source=BrainAudienceSource.COMMENT,
-            received_at_ms=self.clock(),
-            text=proposal.text,
-        )
-        decision = pipeline.submit(
-            audience_input,
-            recent_turn_context=self.interaction_ingress.data.recent_turn_context,
-        )
-        return audience_input if decision is GateDecision.ACCEPT else None
-
-    def _run_agent_plan(
-        self,
-        audience_input: BrainAudienceInput,
-        turn_id: TurnId,
-        correlation: EventCorrelation,
-    ) -> None:
-        pipeline = self.agent_pipeline
-        if pipeline is None:
-            return
-        composition = self.interaction_ingress.data.context.compose(
-            _BRAIN_CONTEXT_MODEL, _BRAIN_CONTEXT_POLICY
-        )
-        context = composition.snapshot
-        memory = self.interaction_ingress.data.memory.snapshot
-        retrieval = self.interaction_ingress.data.retrieval.snapshot
-        presentation = self.interaction_ingress.reducer.presentation_state
-        ppt_deck_id = (
-            presentation[0] if presentation is not None else self._planned_ppt_deck_id
-        )
-        ppt_page = (
-            presentation[2] if presentation is not None else self._planned_ppt_page
-        )
-        corpus_version = f"{retrieval.corpus_id}@{retrieval.corpus_revision}"
-        index_version = f"{retrieval.index_id}@{retrieval.index_revision}"
-        knowledge_reference = (
-            f"本地知识库: corpus={corpus_version}, index={index_version}"
-        )
-        snapshot = BrainStateSnapshot(
-            session_id=str(self.scheduler.snapshot.session_id),
-            turn_id=str(turn_id),
-            revision=int(self.scheduler.snapshot.revision),
-            cancellation_epoch=int(self.cancellation_epoch),
-            input=audience_input,
-            context_summary=context.summary,
-            recent_context=tuple(entry.text for entry in composition.entries),
-            memory_markdown=render_markdown_memory(
-                memory, self.scheduler.snapshot.session_id
-            ),
-            capabilities=self.agent_capabilities,
-            frontend_caption=self._frontend_caption,
-            frontend_animation=self._frontend_animation,
-            ppt_deck_id=ppt_deck_id,
-            ppt_page=ppt_page,
-            tasks=tuple(
-                TaskSnapshot(
-                    task_id=str(record.request.task_id),
-                    kind=record.request.kind.value,
-                    lane=record.request.kind.value,
-                    status=record.state.value,
-                    deadline_ms=int(record.request.deadline_ms),
-                    owner_turn_id=str(record.request.turn_id),
-                    cancellation_reason=record.cancellation_reason,
-                )
-                for record in self.task_registry.records
-            ),
-            context_revision=int(context.generation),
-            memory_revision=int(memory.revision),
-            context_budget=512,
-            compaction_required=bool(composition.digests),
-            knowledge_references=(knowledge_reference,),
-            mcp_allowlist=self.agent_mcp_allowlist,
-        )
-        result = pipeline.run(snapshot)
-        self._agent_results.append(result)
-        self._record_legacy_plan_result(result, turn_id, correlation)
-        if isinstance(result, PlanAccepted):
-            self._apply_agent_plan(
-                result, audience_input, turn_id, correlation, composition
-            )
-        else:
-            _LOGGER.debug(
-                "agent_plan_rejected turn=%s reason=%s", turn_id, result.reason
-            )
-
-    async def _run_async_agent_plan(
-        self,
-        pipeline: AsyncAgentPipeline,
-        audience_input: BrainAudienceInput,
-        turn_id: TurnId,
-        correlation: EventCorrelation,
-    ) -> None:
-        composition = self.interaction_ingress.data.context.compose(
-            _BRAIN_CONTEXT_MODEL, _BRAIN_CONTEXT_POLICY
-        )
-        context = composition.snapshot
-        memory = self.interaction_ingress.data.memory.snapshot
-        retrieval = self.interaction_ingress.data.retrieval.snapshot
-        presentation = self.interaction_ingress.reducer.presentation_state
-        ppt_deck_id = (
-            presentation[0] if presentation is not None else self._planned_ppt_deck_id
-        )
-        ppt_page = (
-            presentation[2] if presentation is not None else self._planned_ppt_page
-        )
-        corpus_version = f"{retrieval.corpus_id}@{retrieval.corpus_revision}"
-        index_version = f"{retrieval.index_id}@{retrieval.index_revision}"
-        snapshot = BrainStateSnapshot(
-            session_id=str(self.scheduler.snapshot.session_id),
-            turn_id=str(turn_id),
-            revision=int(self.scheduler.snapshot.revision),
-            cancellation_epoch=int(self.cancellation_epoch),
-            input=audience_input,
-            context_summary=context.summary,
-            recent_context=tuple(entry.text for entry in composition.entries),
-            memory_markdown=render_markdown_memory(
-                memory, self.scheduler.snapshot.session_id
-            ),
-            capabilities=self.agent_capabilities,
-            frontend_caption=self._frontend_caption,
-            frontend_animation=self._frontend_animation,
-            ppt_deck_id=ppt_deck_id,
-            ppt_page=ppt_page,
-            tasks=tuple(
-                TaskSnapshot(
-                    task_id=str(record.request.task_id),
-                    kind=record.request.kind.value,
-                    lane=record.request.kind.value,
-                    status=record.state.value,
-                    deadline_ms=int(record.request.deadline_ms),
-                    owner_turn_id=str(record.request.turn_id),
-                    cancellation_reason=record.cancellation_reason,
-                )
-                for record in self.task_registry.records
-            ),
-            context_revision=int(context.generation),
-            memory_revision=int(memory.revision),
-            context_budget=512,
-            compaction_required=bool(composition.digests),
-            knowledge_references=(
-                f"本地知识库: corpus={corpus_version}, index={index_version}",
-            ),
-            mcp_allowlist=self.agent_mcp_allowlist,
-        )
-        result = await pipeline.run(snapshot)
-        self._agent_results.append(result)
-        self._record_legacy_plan_result(result, turn_id, correlation)
-        if isinstance(result, PlanAccepted):
-            self._apply_agent_plan(
-                result, audience_input, turn_id, correlation, composition
-            )
-        else:
-            _LOGGER.debug(
-                "agent_plan_rejected turn=%s reason=%s", turn_id, result.reason
-            )
-
-    def _record_legacy_plan_result(
-        self,
-        result: PlanResult,
-        turn_id: TurnId,
-        correlation: EventCorrelation,
-    ) -> None:
-        """Emit migration-only, redacted evidence for an explicit legacy run."""
-        if isinstance(result, PlanAccepted):
-            outcome = (
-                f"accepted=True;tools={len(result.plan.tool_requests)};"
-                f"observations={len(result.observations)};"
-                f"response={bool(result.plan.response_text)}"
-            )
-        else:
-            outcome = f"accepted=False;reason={result.reason}"
-        self.operational_journal.append(
-            OperationalRecord(
-                stage="legacy_plan",
-                trace_id=str(correlation.trace_id),
-                session_id=str(correlation.session_id),
-                turn_id=str(turn_id),
-                segment_id=None,
-                task_id=None,
-                outcome=outcome,
-            )
         )
 
     async def _run_async_response(  # noqa: C901, PLR0911, PLR0912, PLR0915
@@ -1832,202 +1508,6 @@ class SessionRuntime:
         _ = self.task_registry.fail(task_id, reason=reason)
         _ = self.response_cutover_failed(record.request.turn_id)
 
-    def _apply_agent_plan(
-        self,
-        accepted: PlanAccepted,
-        audience_input: BrainAudienceInput,
-        turn_id: TurnId,
-        correlation: EventCorrelation,
-        composition: ContextComposition,
-    ) -> None:
-        """Commit only reducer-accepted Brain state operations.
-
-        Media/frontend effects remain with their dedicated adapters; this
-        reducer path owns context and scheduler tasks so late provider output
-        cannot write either one directly.
-        """
-        provenance = ContextProvenance(
-            session_id=SessionId(audience_input.session_id),
-            turn_id=turn_id,
-            segment_id=SegmentId(f"agent-{turn_id}"),
-            sequence=ContextSequence(audience_input.sequence),
-            source_id=ContextSourceId(audience_input.trace_id),
-        )
-        self._apply_context_compaction(accepted, composition)
-        self.interaction_ingress.data.consider_context(
-            FinalizedInput(provenance, audience_input.text)
-        )
-        for index, observation in enumerate(accepted.observations):
-            if observation.request.kind != "knowledge":
-                continue
-            self.interaction_ingress.data.consider_context(
-                ToolObservation(
-                    ContextProvenance(
-                        session_id=provenance.session_id,
-                        turn_id=provenance.turn_id,
-                        segment_id=provenance.segment_id,
-                        sequence=ContextSequence(audience_input.sequence),
-                        source_id=ContextSourceId(
-                            f"{audience_input.trace_id}:tool:{index}"
-                        ),
-                    ),
-                    observation.text,
-                )
-            )
-        if accepted.plan.response_text != "":
-            self.interaction_ingress.data.consider_context(
-                AcceptedOutput(provenance, accepted.plan.response_text)
-            )
-        self._apply_memory_patch(accepted, correlation, turn_id)
-        for index, operation in enumerate(accepted.plan.state_operations):
-            if operation.kind == "create_task":
-                self._create_brain_task(
-                    operation.payload,
-                    accepted.plan.response_text,
-                    turn_id,
-                    correlation,
-                    index,
-                )
-            elif operation.kind == "cancel_task":
-                task_id = operation.payload.get("task_id")
-                if isinstance(task_id, str):
-                    _ = self.cancel_task(TaskId(task_id), correlation)
-        self._dispatch_agent_effects(accepted, turn_id)
-
-    def _dispatch_agent_effects(self, accepted: PlanAccepted, turn_id: TurnId) -> None:
-        self._materialize_frontend_operations(accepted.plan.frontend_operations)
-        dispatcher = self.agent_effect_dispatcher
-        if dispatcher is None:
-            return
-        session_id = self.scheduler.snapshot.session_id
-        for operation in accepted.plan.media_operations:
-            dispatcher.dispatch_media(
-                operation,
-                session_id=session_id,
-                turn_id=turn_id,
-                cancellation_epoch=self.cancellation_epoch,
-            )
-        for operation in accepted.plan.frontend_operations:
-            dispatcher.dispatch_frontend(
-                operation,
-                session_id=session_id,
-                turn_id=turn_id,
-            )
-
-    def _materialize_frontend_operations(
-        self, operations: tuple[FrontendOperation, ...]
-    ) -> None:
-        for operation in operations:
-            if operation.kind == "caption" and isinstance(operation.value, str):
-                self._frontend_caption = operation.value
-            elif operation.kind == "animation" and isinstance(operation.value, str):
-                self._frontend_animation = operation.value
-            elif operation.kind == "ppt.load" and isinstance(operation.value, str):
-                self._planned_ppt_deck_id = operation.value
-                self._planned_ppt_page = 1
-            elif operation.kind == "ppt.navigate" and isinstance(operation.value, int):
-                self._planned_ppt_page = operation.value
-
-    def _apply_context_compaction(
-        self, accepted: PlanAccepted, composition: ContextComposition
-    ) -> None:
-        for operation in accepted.plan.state_operations:
-            if operation.kind != "context.compact":
-                continue
-            summary = operation.payload.get("summary")
-            if not isinstance(summary, str):
-                continue
-            try:
-                _ = self.interaction_ingress.data.context.compact(
-                    composition, summary=summary
-                )
-            except ContextCompactionError:
-                return
-
-    def _apply_memory_patch(
-        self,
-        accepted: PlanAccepted,
-        correlation: EventCorrelation,
-        turn_id: TurnId,
-    ) -> None:
-        if not accepted.plan.memory_patches:
-            return
-        patch = accepted.plan.memory_patches[0]
-        key = patch.get("id")
-        operation = patch.get("op")
-        if not isinstance(key, str) or not isinstance(operation, str):
-            return
-        if operation == "delete":
-            self.interaction_ingress.data.delete_memory(MemoryKey(key))
-            return
-        value = patch.get("value")
-        confidence = patch.get("confidence")
-        base_revision = patch.get("base_revision")
-        if (
-            operation not in {"add", "update"}
-            or patch.get("category") != "preference"
-            or not isinstance(value, str)
-            or type(confidence) is not int
-            or type(base_revision) is not int
-        ):
-            return
-        _ = self.interaction_ingress.data.reduce_memory(
-            MemoryProposal(
-                key=MemoryKey(key),
-                value=value,
-                category=MemoryCategory.ORDINARY_PREFERENCE,
-                confidence=MemoryConfidence(confidence),
-                base_revision=ProposalRevision(base_revision),
-                provenance=MemoryProvenance(
-                    source=MemorySource.AGENT_PROPOSAL,
-                    trace_id=correlation.trace_id,
-                    session_id=correlation.session_id,
-                    turn_id=turn_id,
-                    evidence_id=f"brain:{correlation.trace_id}:{correlation.sequence}",
-                ),
-            )
-        )
-
-    def _create_brain_task(
-        self,
-        payload: dict[str, object],
-        response_text: str,
-        turn_id: TurnId,
-        correlation: EventCorrelation,
-        index: int,
-    ) -> None:
-        kind = _brain_task_kind(payload.get("task_kind"))
-        if kind is None:
-            return
-        deadline_ms = payload.get("deadline_ms")
-        deadline = (
-            self.clock() + 30_000
-            if type(deadline_ms) is not int or deadline_ms <= self.clock()
-            else deadline_ms
-        )
-        task_id = TaskId(f"brain-{turn_id}-{index}")
-        outcome = self.schedule_task(
-            TaskRequest(
-                task_id=task_id,
-                session_id=self.scheduler.snapshot.session_id,
-                turn_id=turn_id,
-                parent_task_id=None,
-                deadline_ms=TaskDeadlineMs(deadline),
-                snapshot_revision=self.scheduler.snapshot.revision,
-                idempotency_key=IdempotencyKey(str(task_id)),
-                kind=kind,
-            ),
-            correlation,
-        )
-        if outcome.accepted and payload.get("task_kind") == "tts":
-            # Agent-plan TTS is executed immediately by TransportRuntime, not
-            # by TaskLaneExecutor.next().  Leaving it queued permanently fills
-            # the bounded interactive lane after four conversations.
-            if self.executor.claim(task_id) is not None:
-                self._agent_tts_text[task_id] = response_text
-            else:
-                _ = self.cancel_task(task_id, correlation)
-
     async def run_agent_tts_for_turn(
         self,
         turn_id: TurnId,
@@ -2252,67 +1732,9 @@ class SessionRuntime:
         self,
         event: ASRAudienceEvent,
         correlation: EventCorrelation,
-        gate: AsrSemanticGate | None = None,
     ) -> RuntimeOutcome:
-        if correlation in self._correlations:
-            return self._reject(correlation, "duplicate_correlation")
-        if self._ended:
-            return self._reject(correlation, "session_ended")
-
-        audience_input = BrainAudienceInput(
-            session_id=str(correlation.session_id),
-            trace_id=str(correlation.trace_id),
-            sequence=int(correlation.sequence),
-            source=BrainAudienceSource.ASR,
-            received_at_ms=event.received_at_ms,
-            text=event.text,
-        )
-        pipeline = self.agent_pipeline
-        if (
-            pipeline is not None
-            and pipeline.submit(
-                audience_input,
-                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
-            )
-            is GateDecision.DISCARD
-        ):
-            return self._reject(correlation, "agent_gate_discarded")
-
-        if (
-            pipeline is None
-            and gate is not None
-            and gate.evaluate(event.text) is AsrGateDecision.DISCARD
-        ):
-            return self._reject(correlation, "asr_gate_discarded")
-
-        transition = self.scheduler.apply(
-            StartTurn(
-                expected_revision=self.scheduler.snapshot.revision,
-                event=SchedulerEvent(event_type="asr.final", correlation=correlation),
-            )
-        )
-
-        match transition:
-            case TransitionAccepted(accepted_event=accepted_event):
-                self._correlations.add(correlation)
-                self._advance_turn_epoch()
-
-                self._journal.dispatches.append(
-                    RuntimeDispatch(correlation, accepted_event.turn_id)
-                )
-
-                self._run_agent_plan(
-                    audience_input, accepted_event.turn_id, correlation
-                )
-
-                return RuntimeOutcome(
-                    accepted=True,
-                    correlation=correlation,
-                    turn_id=accepted_event.turn_id,
-                )
-
-            case _:
-                return self._reject(correlation, "scheduler_rejected")
+        _ = event
+        return self._reject(correlation, "async_response_required")
 
     async def receive_asr_final_async(  # noqa: PLR0911
         self,
@@ -2320,7 +1742,6 @@ class SessionRuntime:
         correlation: EventCorrelation,
     ) -> RuntimeOutcome:
         """Run finalized ASR through the same async Gate and Brain as comments."""
-        pipeline = self.async_agent_pipeline
         coordinator = self.async_response_coordinator
         gate = self.async_agent_gate
         if (
@@ -2328,7 +1749,7 @@ class SessionRuntime:
             and coordinator is None
         ):
             return self._reject(correlation, "shadow_coordinator_missing")
-        if pipeline is None and not (coordinator is not None and gate is not None):
+        if coordinator is None or gate is None:
             return self._reject(correlation, "response_coordinator_missing")
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
@@ -2342,19 +1763,11 @@ class SessionRuntime:
             received_at_ms=event.received_at_ms,
             text=event.text,
         )
-        if gate is not None and coordinator is not None:
-            decision = await gate.evaluate(
-                audience_input,
-                active_summary=self._frontend_caption,
-                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
-            )
-        elif pipeline is not None:
-            decision = await pipeline.submit(
-                audience_input,
-                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
-            )
-        else:
-            return self._reject(correlation, "async_gate_missing")
+        decision = await gate.evaluate(
+            audience_input,
+            active_summary=self._frontend_caption,
+            recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+        )
         if decision is GateDecision.DISCARD:
             return self._reject(correlation, "agent_gate_discarded")
         transition = self.scheduler.apply(
@@ -2370,8 +1783,12 @@ class SessionRuntime:
         self._begin_response_turn(accepted_turn)
         self._correlations.add(correlation)
         self._journal.dispatches.append(RuntimeDispatch(correlation, accepted_turn))
-        await self._run_selected_async_path(
-            pipeline, coordinator, audience_input, accepted_turn, correlation
+        await self._run_async_response(
+            coordinator,
+            audience_input,
+            accepted_turn,
+            correlation,
+            shadow=self.response_execution_mode is ResponseExecutionMode.NEW_SHADOW,
         )
         return RuntimeOutcome(
             accepted=True, correlation=correlation, turn_id=accepted_turn

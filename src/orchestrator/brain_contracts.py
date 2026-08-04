@@ -1,7 +1,7 @@
 """Model-neutral immutable inputs and trusted tool requests.
 
-These contracts belong to the minimal response pipeline, not to the retired
-AgentPlan parser.  Legacy code re-exports them during migration.
+These contracts belong to the minimal response pipeline and its trusted
+runtime adapters.
 """
 
 from dataclasses import dataclass
