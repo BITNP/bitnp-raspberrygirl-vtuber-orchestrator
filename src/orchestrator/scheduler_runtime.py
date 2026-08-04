@@ -644,8 +644,6 @@ class SessionRuntime:
     async def receive_comment_async(  # noqa: PLR0911
         self, proposal: CommentProposal
     ) -> RuntimeOutcome:
-        if self.response_execution_mode is ResponseExecutionMode.LEGACY_EXECUTE:
-            return self.receive_comment(proposal)
         pipeline = self.async_agent_pipeline
         coordinator = self.async_response_coordinator
         gate = self.async_agent_gate
@@ -2331,7 +2329,7 @@ class SessionRuntime:
         ):
             return self._reject(correlation, "shadow_coordinator_missing")
         if pipeline is None and not (coordinator is not None and gate is not None):
-            return self.receive_asr_final(event, correlation)
+            return self._reject(correlation, "response_coordinator_missing")
         if correlation in self._correlations:
             return self._reject(correlation, "duplicate_correlation")
         if self._ended:

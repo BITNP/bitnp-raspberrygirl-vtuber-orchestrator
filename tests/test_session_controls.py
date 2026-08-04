@@ -14,7 +14,6 @@ from orchestrator.ids import SessionId, TraceId
 from orchestrator.interaction_ingress import session_storage_root
 from orchestrator.interactions import CommentProposal
 from orchestrator.memory import MemoryKey
-from orchestrator.response_execution_mode import ResponseExecutionMode
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import EventCorrelation, EventSequence
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
@@ -60,7 +59,6 @@ def test_runtime_reducer_resets_context_and_deletes_memory_key() -> None:
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
         agent_pipeline=build_mock_agent_pipeline(),
-        response_execution_mode=ResponseExecutionMode.LEGACY_EXECUTE,
     )
     correlation = EventCorrelation(
         TraceId("comment"), SessionId("session-1"), EventSequence(1)

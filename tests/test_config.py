@@ -41,6 +41,11 @@ def test_load_config_from_env_parses_response_execution_mode() -> None:
             {"ORCHESTRATOR_RESPONSE_EXECUTION_MODE": "unsupported"}
         )
 
+    with pytest.raises(ConfigParseError, match="ORCHESTRATOR_RESPONSE_EXECUTION_MODE"):
+        _ = load_config_from_env(
+            {"ORCHESTRATOR_RESPONSE_EXECUTION_MODE": "legacy_execute"}
+        )
+
 
 def test_load_config_from_env_rejects_invalid_provider_with_ca_bundle_path() -> None:
     with pytest.raises(ConfigParseError, match="ORCHESTRATOR_LLM_PROVIDER"):
