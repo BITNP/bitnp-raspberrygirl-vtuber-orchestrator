@@ -1,7 +1,15 @@
 import pytest
 
 from orchestrator.ids import SegmentId, SessionId, TurnId
-from orchestrator.llm import LLMFinal, LLMPrompt, LLMRequest, MockLLMAdapter
+from orchestrator.llm import (
+    BRAIN_MAX_COMPLETION_TOKENS,
+    LLMFinal,
+    LLMPrompt,
+    LLMRequest,
+    LLMWorkload,
+    MockLLMAdapter,
+    ReasoningMode,
+)
 from orchestrator.transient_context import (
     AcceptedOutput,
     CancelledMaterial,
@@ -25,7 +33,12 @@ from orchestrator.transient_context import (
 def test_llm_final_is_the_complete_output_context_characterization() -> None:
     # Given: the existing adapter's stream lifecycle.
 
-    request = LLMRequest(prompt=LLMPrompt(system="system", user="user"))
+    request = LLMRequest(
+        prompt=LLMPrompt(system="system", user="user"),
+        workload=LLMWorkload.BRAIN,
+        reasoning=ReasoningMode.ENABLED,
+        max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+    )
 
     adapter = MockLLMAdapter(answer_chunks=("first", "second"))
 

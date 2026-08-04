@@ -6,17 +6,25 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, ClassVar, cast, override
+from typing import ClassVar, cast, override
 
 import httpx
+import pytest
 
 from orchestrator.asr_semantic_gate import AsrGateDecision, AsyncAsrSemanticGate
-from orchestrator.llm import LLMFinal, LLMPrompt, LLMRequest
+from orchestrator.llm import (
+    BRAIN_MAX_COMPLETION_TOKENS,
+    GATE_MAX_COMPLETION_TOKENS,
+    MAINTENANCE_MAX_COMPLETION_TOKENS,
+    LLMFinal,
+    LLMPrompt,
+    LLMRequest,
+    LLMWorkload,
+    ReasoningMode,
+)
 from orchestrator.openai_llm_runtime import AsyncOpenAICompatibleLLMRuntime
+from orchestrator.provider_streaming import ProviderResponseError
 from tests.openai_llm_test_helper import OpenAICompatibleLLMRuntimeAdapter
-
-if TYPE_CHECKING:
-    import pytest
 
 
 @dataclass(slots=True)
@@ -101,6 +109,9 @@ def test_runtime_adapter_posts_openai_chat_completion_and_yields_final() -> None
 
     request = LLMRequest(
         prompt=LLMPrompt(system="system context", user="audience question"),
+        workload=LLMWorkload.BRAIN,
+        reasoning=ReasoningMode.ENABLED,
+        max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
         temperature=0.25,
     )
 
@@ -133,7 +144,7 @@ def test_runtime_adapter_posts_openai_chat_completion_and_yields_final() -> None
     assert events == (LLMFinal(text="onsite answer", used_fallback=False),)
 
 
-def test_async_runtime_uses_documented_gate_and_streaming_parameters() -> None:
+def test_async_runtime_routes_deepseek_gate_and_streaming_brain_parameters() -> None:
     captured: list[dict[str, object]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -159,15 +170,34 @@ def test_async_runtime_uses_documented_gate_and_streaming_parameters() -> None:
             endpoint="https://example.test/v1",
             model="test-model",
             api_key="test-key",
+            reasoning_dialect="deepseek",
+            gate_model="gate-model",
+            brain_model="brain-model",
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         )
         try:
-            gate = await runtime.complete_gate(LLMRequest(LLMPrompt("gate", "input")))
+            gate = await runtime.complete_json(
+                LLMRequest(
+                    LLMPrompt("gate", "input"),
+                    workload=LLMWorkload.GATE,
+                    reasoning=ReasoningMode.DISABLED,
+                    max_completion_tokens=GATE_MAX_COMPLETION_TOKENS,
+                    temperature=0.0,
+                    timeout_seconds=5.0,
+                ),
+                schema_name="audience_gate",
+                schema={"type": "object"},
+            )
             events = tuple(
                 [
                     event
                     async for event in runtime.stream(
-                        LLMRequest(LLMPrompt("system", "user"))
+                        LLMRequest(
+                            LLMPrompt("system", "user"),
+                            workload=LLMWorkload.BRAIN,
+                            reasoning=ReasoningMode.ENABLED,
+                            max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+                        )
                     )
                 ]
             )
@@ -179,10 +209,16 @@ def test_async_runtime_uses_documented_gate_and_streaming_parameters() -> None:
 
     assert gate == '{"decision":"accept"}'
     assert captured[0]["stream"] is False
+    assert captured[0]["model"] == "gate-model"
     assert captured[0]["response_format"] == {"type": "json_object"}
     assert captured[0]["thinking"] == {"type": "disabled"}
-    assert captured[0]["max_tokens"] == 32
+    assert captured[0]["temperature"] == 0.0
+    assert captured[0]["max_tokens"] == GATE_MAX_COMPLETION_TOKENS
     assert captured[1]["stream"] is True
+    assert captured[1]["model"] == "brain-model"
+    assert captured[1]["thinking"] == {"type": "enabled"}
+    assert captured[1]["temperature"] == 0.2
+    assert captured[1]["max_tokens"] == BRAIN_MAX_COMPLETION_TOKENS
     assert events[-1] == LLMFinal(text="hello world", used_fallback=False)
 
 
@@ -200,11 +236,17 @@ def test_async_runtime_logs_complete_json_request_and_response(
             endpoint="https://example.test/v1",
             model="test-model",
             api_key="test-key",
+            reasoning_dialect="deepseek",
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         )
         try:
             return await runtime.complete_json(
-                LLMRequest(LLMPrompt("系统", "输入")),
+                LLMRequest(
+                    LLMPrompt("系统", "输入"),
+                    workload=LLMWorkload.BRAIN,
+                    reasoning=ReasoningMode.ENABLED,
+                    max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+                ),
                 schema_name="agent_plan",
                 schema={"type": "object"},
             )
@@ -215,20 +257,21 @@ def test_async_runtime_logs_complete_json_request_and_response(
         assert asyncio.run(run()) == "{}"
 
     messages = [record.getMessage() for record in caplog.records]
-    assert (
-        "llm_json_request model=test-model schema=agent_plan json_mode=true "
-        "thinking=disabled max_tokens=4096 "
-        "system='系统' user='输入'"
-    ) in messages
+    assert any(
+        "llm_json_request workload=brain model=test-model schema=agent_plan" in message
+        and "dialect=deepseek reasoning=enabled temperature=0.2" in message
+        and "max_completion_tokens=8192 system='系统' user='输入'" in message
+        for message in messages
+    )
     assert "llm_json_response model=test-model schema=agent_plan text='{}'" in messages
     assert captured[0]["stream"] is False
-    assert captured[0]["temperature"] == 0.0
-    assert captured[0]["thinking"] == {"type": "disabled"}
+    assert captured[0]["temperature"] == 0.2
+    assert captured[0]["thinking"] == {"type": "enabled"}
     assert captured[0]["response_format"] == {"type": "json_object"}
-    assert captured[0]["max_tokens"] == 4096
+    assert captured[0]["max_tokens"] == BRAIN_MAX_COMPLETION_TOKENS
 
 
-def test_async_gate_discards_rejected_parameters_and_closes_shared_client() -> None:
+def test_async_gate_discards_provider_error_and_closes_shared_client() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/chat/completions"
         return httpx.Response(400, json={"error": {"message": "unsupported"}})
@@ -239,12 +282,24 @@ def test_async_gate_discards_rejected_parameters_and_closes_shared_client() -> N
             endpoint="https://example.test/v1",
             model="test-model",
             api_key="test-key",
+            reasoning_dialect="deepseek",
             http_client=client,
         )
 
         async def provider(request: object) -> str:
             _ = request
-            return await runtime.complete_gate(LLMRequest(LLMPrompt("gate", "input")))
+            return await runtime.complete_json(
+                LLMRequest(
+                    LLMPrompt("gate", "input"),
+                    workload=LLMWorkload.GATE,
+                    reasoning=ReasoningMode.DISABLED,
+                    max_completion_tokens=GATE_MAX_COMPLETION_TOKENS,
+                    temperature=0.0,
+                    timeout_seconds=5.0,
+                ),
+                schema_name="audience_gate",
+                schema={"type": "object"},
+            )
 
         gate = AsyncAsrSemanticGate(provider)
         decision = await gate.evaluate("请继续")
@@ -255,3 +310,112 @@ def test_async_gate_discards_rejected_parameters_and_closes_shared_client() -> N
 
     assert decision is AsrGateDecision.DISCARD
     assert closed
+
+
+def test_async_runtime_maps_openai_reasoning_and_maintenance_model() -> None:
+    captured: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(cast("dict[str, object]", json.loads(request.content)))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    async def run() -> tuple[str, str]:
+        runtime = AsyncOpenAICompatibleLLMRuntime(
+            endpoint="https://example.test/v1",
+            model="default-model",
+            api_key="test-key",
+            reasoning_dialect="openai",
+            brain_model="brain-model",
+            maintenance_model="maintenance-model",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            brain = await runtime.complete_json(
+                LLMRequest(
+                    LLMPrompt("brain", "input"),
+                    workload=LLMWorkload.BRAIN,
+                    reasoning=ReasoningMode.ENABLED,
+                    max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+                ),
+                schema_name="response_proposal",
+                schema={"type": "object"},
+            )
+            maintenance = await runtime.complete_json(
+                LLMRequest(
+                    LLMPrompt("maintenance", "input"),
+                    workload=LLMWorkload.MAINTENANCE,
+                    reasoning=ReasoningMode.DISABLED,
+                    max_completion_tokens=MAINTENANCE_MAX_COMPLETION_TOKENS,
+                    temperature=0.0,
+                    timeout_seconds=10.0,
+                ),
+                schema_name="context_compaction",
+                schema={"type": "object"},
+            )
+            return brain, maintenance
+        finally:
+            await runtime.aclose()
+
+    assert asyncio.run(run()) == ("{}", "{}")
+    assert captured[0]["model"] == "brain-model"
+    assert captured[0]["reasoning_effort"] == "medium"
+    assert captured[0]["max_completion_tokens"] == BRAIN_MAX_COMPLETION_TOKENS
+    assert "thinking" not in captured[0]
+    assert "max_tokens" not in captured[0]
+    assert captured[1]["model"] == "maintenance-model"
+    assert captured[1]["reasoning_effort"] == "none"
+    assert (
+        captured[1]["max_completion_tokens"]
+        == MAINTENANCE_MAX_COMPLETION_TOKENS
+    )
+
+
+def test_reasoning_only_response_fails_without_logging_hidden_reasoning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        _ = request
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {
+                            "content": None,
+                            "reasoning_content": "private-reasoning",
+                        },
+                    }
+                ]
+            },
+        )
+
+    async def run() -> None:
+        runtime = AsyncOpenAICompatibleLLMRuntime(
+            endpoint="https://example.test/v1",
+            model="brain-model",
+            api_key="test-key",
+            reasoning_dialect="deepseek",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            with pytest.raises(ProviderResponseError, match="missing_final"):
+                _ = await runtime.complete_json(
+                    LLMRequest(
+                        LLMPrompt("system", "user"),
+                        workload=LLMWorkload.BRAIN,
+                        reasoning=ReasoningMode.ENABLED,
+                        max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+                    ),
+                    schema_name="response_proposal",
+                    schema={"type": "object"},
+                )
+        finally:
+            await runtime.aclose()
+
+    with caplog.at_level(logging.DEBUG, logger="orchestrator.openai_llm_runtime"):
+        asyncio.run(run())
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("reasoning_chars=17" in message for message in messages)
+    assert all("private-reasoning" not in message for message in messages)

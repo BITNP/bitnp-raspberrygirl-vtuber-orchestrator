@@ -16,6 +16,8 @@ Raspberry Girl 是一个面向公开讲解、虚拟主播和现场产品介绍�
 
 开发和测试默认使用 `ORCHESTRATOR_LLM_PROVIDER=mock`，不需要凭据、GPU、外部服务、真实音频设备或 Godot。`.env.example` 展示的是现场语音链路的生产配置形状；普通开发不要直接采用其中的 `openai_compatible` provider 值。
 
+真实 LLM 部署必须通过 `ORCHESTRATOR_LLM_REASONING_DIALECT` 明确选择 `deepseek` 或 `openai` 请求方言。Gate 固定关闭思考，Brain 开启思考，记忆提取与上下文压缩关闭思考；三个工作负载可分别指定模型，未指定时使用 `ORCHESTRATOR_LLM_MODEL`。
+
 ```bash
 cd bitnp-raspberrygirl-vtuber-orchestrator
 uv sync --locked

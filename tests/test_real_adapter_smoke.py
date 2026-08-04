@@ -10,7 +10,13 @@ from typing import override
 import pytest
 from openai import APIError, OpenAI
 
-from orchestrator.llm import LLMPrompt, LLMRequest
+from orchestrator.llm import (
+    BRAIN_MAX_COMPLETION_TOKENS,
+    LLMPrompt,
+    LLMRequest,
+    LLMWorkload,
+    ReasoningMode,
+)
 
 LLM_ENDPOINT_ENV = "BITNP_REAL_LLM_ENDPOINT"
 
@@ -44,6 +50,9 @@ def test_openai_compatible_endpoint_smoke_when_explicitly_enabled() -> None:
     with _llm_endpoint_or_skip() as endpoint:
         request = LLMRequest(
             prompt=LLMPrompt(system="smoke", user="ping"),
+            workload=LLMWorkload.BRAIN,
+            reasoning=ReasoningMode.ENABLED,
+            max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
             timeout_seconds=1.0,
         )
 
@@ -71,7 +80,13 @@ def test_openai_compatible_malformed_endpoint_reports_readiness_error() -> None:
         match="OpenAI-compatible LLM readiness failed",
     ):
         _ = _post_chat_completion(
-            "http://127.0.0.1:1", LLMRequest(LLMPrompt("smoke", "ping"))
+            "http://127.0.0.1:1",
+            LLMRequest(
+                LLMPrompt("smoke", "ping"),
+                workload=LLMWorkload.BRAIN,
+                reasoning=ReasoningMode.ENABLED,
+                max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+            ),
         )
 
 

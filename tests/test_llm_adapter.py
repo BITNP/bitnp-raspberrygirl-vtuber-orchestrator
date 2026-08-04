@@ -4,7 +4,6 @@ import pytest
 from orchestrator.llm import (
     LLMChunk,
     LLMFinal,
-    LLMRequest,
     MockLLMAdapter,
     OpenAICompatibleAdapter,
     build_llm_request,
@@ -119,12 +118,7 @@ def test_openai_adapter_rejects_malformed_model_boundary_input() -> None:
 
     assert candidate is not None
 
-    request = LLMRequest(
-        prompt=build_llm_request(
-            candidate,
-            context_refs=(),
-        ).prompt,
-    )
+    request = build_llm_request(candidate, context_refs=())
 
     # When / Then: the adapter rejects blank model names before payload creation.
 

@@ -13,6 +13,7 @@ def test_real_provider_readiness_reports_missing_llm_key_without_crashing() -> N
     config = load_config_from_env(
         {
             "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
             "TRUSTED_LAN_TOKEN": "placeholder-token-123",
         },
     )
@@ -32,6 +33,7 @@ def test_real_provider_readiness_reports_invalid_token_without_crashing() -> Non
         {
             "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
             "ORCHESTRATOR_LLM_API_KEY": "placeholder-test-key",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
             "TRUSTED_LAN_TOKEN": "short",
         },
     )

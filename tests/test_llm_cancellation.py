@@ -1,5 +1,6 @@
 
 from orchestrator.llm import (
+    BRAIN_MAX_COMPLETION_TOKENS,
     CancellationToken,
     FallbackLLMAdapter,
     LLMChunk,
@@ -7,9 +8,20 @@ from orchestrator.llm import (
     LLMFinal,
     LLMPrompt,
     LLMRequest,
+    LLMWorkload,
     MockLLMAdapter,
+    ReasoningMode,
     TimeoutLLMAdapter,
 )
+
+
+def _request() -> LLMRequest:
+    return LLMRequest(
+        prompt=LLMPrompt(system="system", user="user"),
+        workload=LLMWorkload.BRAIN,
+        reasoning=ReasoningMode.ENABLED,
+        max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+    )
 
 
 def test_cancellation_token_stops_pending_stream_and_is_idempotent() -> None:
@@ -20,7 +32,7 @@ def test_cancellation_token_stops_pending_stream_and_is_idempotent() -> None:
 
     token = CancellationToken()
 
-    request = LLMRequest(prompt=LLMPrompt(system="system", user="user"))
+    request = _request()
 
     stream = adapter.stream(request, cancellation=token)
 
@@ -58,7 +70,7 @@ def test_timeout_adapter_returns_error_and_fallback_caption_deterministically() 
         fallback_text="I am having trouble answering right now.",
     )
 
-    request = LLMRequest(prompt=LLMPrompt(system="system", user="user"))
+    request = _request()
 
     # When: the fallback adapter handles the request.
 

@@ -1,6 +1,7 @@
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from enum import StrEnum, unique
 from typing import Final, Literal, Protocol, Self, TypedDict, override
 
 from orchestrator.media_adapters import OpenAICompatibleASRAdapter, VllmOmniTTSAdapter
@@ -20,6 +21,25 @@ __all__ = ["OpenAICompatibleASRAdapter", "VllmOmniTTSAdapter"]
 DEFAULT_TEMPERATURE: Final = 0.2
 
 DEFAULT_TIMEOUT_SECONDS: Final = 30.0
+
+BRAIN_MAX_COMPLETION_TOKENS: Final = 8_192
+
+MAINTENANCE_MAX_COMPLETION_TOKENS: Final = 4_096
+
+GATE_MAX_COMPLETION_TOKENS: Final = 32
+
+
+@unique
+class LLMWorkload(StrEnum):
+    GATE = "gate"
+    BRAIN = "brain"
+    MAINTENANCE = "maintenance"
+
+
+@unique
+class ReasoningMode(StrEnum):
+    ENABLED = "enabled"
+    DISABLED = "disabled"
 
 
 class OpenAIMessagePayload(TypedDict):
@@ -74,6 +94,12 @@ class LLMPrompt:
 class LLMRequest:
 
     prompt: LLMPrompt
+
+    workload: LLMWorkload
+
+    reasoning: ReasoningMode
+
+    max_completion_tokens: int
 
     temperature: float = DEFAULT_TEMPERATURE
 
@@ -277,7 +303,12 @@ def build_llm_request(
 
     fields = compose_prompt(candidate, retrieval, snapshot)
 
-    return LLMRequest(prompt=LLMPrompt(system=fields.system, user=fields.user))
+    return LLMRequest(
+        prompt=LLMPrompt(system=fields.system, user=fields.user),
+        workload=LLMWorkload.BRAIN,
+        reasoning=ReasoningMode.ENABLED,
+        max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+    )
 
 
 def _is_cancelled(cancellation: CancellationToken | None) -> bool:

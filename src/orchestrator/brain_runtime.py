@@ -22,7 +22,15 @@ from orchestrator.brain_contracts import (
 )
 from orchestrator.intent_router import ArgumentBuilder, IntentRouter, IntentSpec
 from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
-from orchestrator.llm import LLMPrompt, LLMRequest
+from orchestrator.llm import (
+    BRAIN_MAX_COMPLETION_TOKENS,
+    GATE_MAX_COMPLETION_TOKENS,
+    MAINTENANCE_MAX_COMPLETION_TOKENS,
+    LLMPrompt,
+    LLMRequest,
+    LLMWorkload,
+    ReasoningMode,
+)
 from orchestrator.mcp_allowlist import (
     AllowlistedMcpToolExecutor,
     McpRequester,
@@ -89,7 +97,6 @@ class JsonCompletion(Protocol):
         *,
         schema_name: str,
         schema: dict[str, object],
-        timeout_seconds: float,
     ) -> str: ...
 
 
@@ -100,7 +107,6 @@ class AsyncJsonCompletion(Protocol):
         *,
         schema_name: str,
         schema: dict[str, object],
-        timeout_seconds: float,
     ) -> str: ...
 
 
@@ -126,12 +132,14 @@ class JsonAgentGate:
         raw = self._completion.complete_json(
             LLMRequest(
                 LLMPrompt(_GATE_SYSTEM, _untrusted_json(payload)),
+                workload=LLMWorkload.GATE,
+                reasoning=ReasoningMode.DISABLED,
+                max_completion_tokens=GATE_MAX_COMPLETION_TOKENS,
                 temperature=0.0,
                 timeout_seconds=5.0,
             ),
             schema_name="audience_gate",
             schema=_GATE_SCHEMA,
-            timeout_seconds=5.0,
         )
         try:
             result = parse_json_value(raw)
@@ -169,12 +177,14 @@ class AsyncJsonAgentGate:
         raw = await self._completion.complete_json(
             LLMRequest(
                 LLMPrompt(_GATE_SYSTEM, _untrusted_json(payload)),
+                workload=LLMWorkload.GATE,
+                reasoning=ReasoningMode.DISABLED,
+                max_completion_tokens=GATE_MAX_COMPLETION_TOKENS,
                 temperature=0.0,
                 timeout_seconds=5.0,
             ),
             schema_name="audience_gate",
             schema=_GATE_SCHEMA,
-            timeout_seconds=5.0,
         )
         try:
             result = parse_json_value(raw)
@@ -235,11 +245,13 @@ class JsonResponseBrain:
                     _RESPONSE_SYSTEM,
                     _response_user(snapshot, allowed_intents, observations),
                 ),
-                temperature=0.0,
+                workload=LLMWorkload.BRAIN,
+                reasoning=ReasoningMode.ENABLED,
+                max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+                temperature=0.2,
             ),
             schema_name="response_proposal",
             schema=_RESPONSE_SCHEMA,
-            timeout_seconds=30.0,
         )
         return parse_response_proposal(raw, allowed_intents=allowed_intents)
 
@@ -262,11 +274,13 @@ class AsyncJsonResponseBrain:
                     _RESPONSE_SYSTEM,
                     _response_user(snapshot, allowed_intents, observations),
                 ),
-                temperature=0.0,
+                workload=LLMWorkload.BRAIN,
+                reasoning=ReasoningMode.ENABLED,
+                max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+                temperature=0.2,
             ),
             schema_name="response_proposal",
             schema=_RESPONSE_SCHEMA,
-            timeout_seconds=30.0,
         )
         return parse_response_proposal(raw, allowed_intents=allowed_intents)
 
@@ -287,11 +301,14 @@ class AsyncJsonMemoryCandidateExtractor:
                         {"user_text": user_text, "reply_text": reply_text}
                     ),
                 ),
+                workload=LLMWorkload.MAINTENANCE,
+                reasoning=ReasoningMode.DISABLED,
+                max_completion_tokens=MAINTENANCE_MAX_COMPLETION_TOKENS,
                 temperature=0.0,
+                timeout_seconds=10.0,
             ),
             schema_name="memory_candidate",
             schema=_MEMORY_CANDIDATE_SCHEMA,
-            timeout_seconds=10.0,
         )
 
 
@@ -319,11 +336,14 @@ class AsyncJsonContextCompactor:
                         }
                     ),
                 ),
+                workload=LLMWorkload.MAINTENANCE,
+                reasoning=ReasoningMode.DISABLED,
+                max_completion_tokens=MAINTENANCE_MAX_COMPLETION_TOKENS,
                 temperature=0.0,
+                timeout_seconds=10.0,
             ),
             schema_name="context_compaction",
             schema=_CONTEXT_COMPACTION_SCHEMA,
-            timeout_seconds=10.0,
         )
         try:
             parsed = parse_json_value(raw)

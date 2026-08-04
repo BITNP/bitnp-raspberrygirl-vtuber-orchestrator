@@ -19,6 +19,7 @@ def test_build_onsite_bridge_rejects_missing_llm_endpoint() -> None:
             "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
             "ORCHESTRATOR_LLM_MODEL": "onsite-model",
             "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
             "ORCHESTRATOR_ASR_PROVIDER": "openai_compatible",
             "ORCHESTRATOR_ASR_ENDPOINT": "https://asr.example.test/v1",
             "ORCHESTRATOR_ASR_MODEL": "asr-model",
@@ -53,6 +54,10 @@ def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
             "ORCHESTRATOR_LLM_ENDPOINT": "https://llm.example.test/v1",
             "ORCHESTRATOR_LLM_MODEL": "onsite-model",
             "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
+            "ORCHESTRATOR_LLM_GATE_MODEL": "gate-model",
+            "ORCHESTRATOR_LLM_BRAIN_MODEL": "brain-model",
+            "ORCHESTRATOR_LLM_MAINTENANCE_MODEL": "maintenance-model",
             "ORCHESTRATOR_TLS_CA_PATH": "/run/secrets/onsite-ca.pem",
             "ORCHESTRATOR_TTS_PROVIDER": "vllm_omni",
             "ORCHESTRATOR_TTS_ENDPOINT": "https://tts.example.test/v1",
@@ -73,6 +78,11 @@ def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
     assert bridge.asr.transcribe(
         audio=b"", filename="retired.wav", received_at_ms=0, segment_id="retired", seq=0
     ) is None
+    assert isinstance(bridge.llm, AsyncOpenAICompatibleLLMRuntime)
+    assert bridge.llm.reasoning_dialect == "deepseek"
+    assert bridge.llm.gate_model == "gate-model"
+    assert bridge.llm.brain_model == "brain-model"
+    assert bridge.llm.maintenance_model == "maintenance-model"
 
 
 def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(
@@ -88,6 +98,7 @@ def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(
             "ORCHESTRATOR_LLM_ENDPOINT": "https://llm.example.test/v1",
             "ORCHESTRATOR_LLM_MODEL": "onsite-model",
             "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
             "ORCHESTRATOR_TTS_PROVIDER": "vllm_omni",
             "ORCHESTRATOR_TTS_ENDPOINT": "https://tts.example.test/v1",
             "ORCHESTRATOR_TTS_MODEL": "tts-model",
@@ -100,16 +111,18 @@ def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(
         endpoint: str,
         model: str,
         api_key: str,
+        reasoning_dialect: str,
         *,
         ca_path: Path | None,
         **kwargs: object,
     ) -> AsyncOpenAICompatibleLLMRuntime:
-        _ = kwargs
+        _ = reasoning_dialect, kwargs
         llm_ca_paths.append(ca_path)
         return AsyncOpenAICompatibleLLMRuntime(
             endpoint,
             model,
             api_key,
+            "deepseek",
             ca_path=ca_path,
         )
 
@@ -138,6 +151,7 @@ def test_onsite_bridge_rejects_retired_direct_transcription() -> None:
                 "ORCHESTRATOR_LLM_ENDPOINT": "https://llm.example.test/v1",
                 "ORCHESTRATOR_LLM_MODEL": "onsite-model",
                 "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+                "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
                 "ORCHESTRATOR_TTS_PROVIDER": "vllm_omni",
                 "ORCHESTRATOR_TTS_ENDPOINT": "https://tts.example.test/v1",
                 "ORCHESTRATOR_TTS_MODEL": "tts-model",

@@ -11,12 +11,15 @@ import pytest
 
 from orchestrator import provider_streaming
 from orchestrator.llm import (
+    BRAIN_MAX_COMPLETION_TOKENS,
     CancellationToken,
     LLMChunk,
     LLMFinal,
     LLMPrompt,
     LLMRequest,
     LLMStreamEvent,
+    LLMWorkload,
+    ReasoningMode,
 )
 from orchestrator.media_adapters import (
     ASRPartialEvent,
@@ -35,6 +38,15 @@ from tests.openai_llm_test_helper import OpenAICompatibleLLMRuntimeAdapter
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
+
+
+def _llm_request() -> LLMRequest:
+    return LLMRequest(
+        prompt=LLMPrompt(system="system", user="question"),
+        workload=LLMWorkload.BRAIN,
+        reasoning=ReasoningMode.ENABLED,
+        max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+    )
 
 
 _StreamMode = Literal["asr", "llm", "malformed", "error", "block", "final_block"]
@@ -363,7 +375,7 @@ def test_streaming_llm_emits_sse_tokens_in_provider_order() -> None:
                 api_key="test-secret",
                 capability="streaming",
                 deadlines=_deadlines(),
-            ).stream(LLMRequest(prompt=LLMPrompt(system="system", user="question")))
+            ).stream(_llm_request())
         )
 
     # Then: delta ordering is preserved and the final event joins the provider text.
@@ -457,7 +469,7 @@ def test_streaming_providers_reject_non_success_or_malformed_events(
                 api_key="test-secret",
                 capability="streaming",
                 deadlines=_deadlines(),
-            ).stream(LLMRequest(prompt=LLMPrompt(system="system", user="question")))
+            ).stream(_llm_request())
         )
 
 
@@ -476,7 +488,7 @@ def test_streaming_llm_honors_read_deadline_without_time_based_test_sleep() -> N
                 api_key="test-secret",
                 capability="streaming",
                 deadlines=_deadlines(read_seconds=0.01),
-            ).stream(LLMRequest(prompt=LLMPrompt(system="system", user="question")))
+            ).stream(_llm_request())
         )
 
 
@@ -501,7 +513,7 @@ def test_streaming_llm_cancellation_closes_mid_read_without_stale_tokens() -> No
             capability="streaming",
             deadlines=_deadlines(),
         ).stream(
-            LLMRequest(prompt=LLMPrompt(system="system", user="question")),
+            _llm_request(),
             cancellation=cancellation,
         )
 

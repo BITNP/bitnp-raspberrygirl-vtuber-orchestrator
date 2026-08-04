@@ -996,6 +996,7 @@ def build_onsite_bridge(
         or config.llm_endpoint is None
         or config.llm_model is None
         or config.llm_api_key is None
+        or config.llm_reasoning_dialect is None
     ):
         raise OnsiteBridgeConfigError(field_name="llm_provider_or_llm_configuration")
 
@@ -1006,6 +1007,10 @@ def build_onsite_bridge(
         config.llm_endpoint,
         config.llm_model,
         config.llm_api_key,
+        config.llm_reasoning_dialect,
+        gate_model=config.llm_gate_model,
+        brain_model=config.llm_brain_model,
+        maintenance_model=config.llm_maintenance_model,
         timeout_seconds=120.0,
         deadlines=ProviderDeadlines(read_seconds=60.0, total_seconds=120.0),
         ca_path=config.tls_ca_path,

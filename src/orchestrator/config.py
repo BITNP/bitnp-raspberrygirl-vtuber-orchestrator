@@ -29,6 +29,14 @@ LLM_MODEL_KEY: Final = "ORCHESTRATOR_LLM_MODEL"
 
 LLM_API_KEY_KEY: Final = "ORCHESTRATOR_LLM_API_KEY"
 
+LLM_REASONING_DIALECT_KEY: Final = "ORCHESTRATOR_LLM_REASONING_DIALECT"
+
+LLM_GATE_MODEL_KEY: Final = "ORCHESTRATOR_LLM_GATE_MODEL"
+
+LLM_BRAIN_MODEL_KEY: Final = "ORCHESTRATOR_LLM_BRAIN_MODEL"
+
+LLM_MAINTENANCE_MODEL_KEY: Final = "ORCHESTRATOR_LLM_MAINTENANCE_MODEL"
+
 ASR_PROVIDER_KEY: Final = "ORCHESTRATOR_ASR_PROVIDER"
 
 ASR_ENDPOINT_KEY: Final = "ORCHESTRATOR_ASR_ENDPOINT"
@@ -60,6 +68,8 @@ SESSION_ID_PREFIX_KEY: Final = "ORCHESTRATOR_SESSION_ID_PREFIX"
 RESPONSE_EXECUTION_MODE_KEY: Final = "ORCHESTRATOR_RESPONSE_EXECUTION_MODE"
 
 LlmProvider = Literal["mock", "openai_compatible"]
+
+LlmReasoningDialect = Literal["deepseek", "openai"]
 
 AsrProvider = Literal["mock", "openai_compatible", "funasr"]
 
@@ -102,6 +112,14 @@ class OrchestratorConfigInput:
     llm_model: str | None = None
 
     llm_api_key: LlmApiKey | None = None
+
+    llm_reasoning_dialect: LlmReasoningDialect | None = None
+
+    llm_gate_model: str | None = None
+
+    llm_brain_model: str | None = None
+
+    llm_maintenance_model: str | None = None
 
     asr_provider: AsrProvider = DEFAULT_ASR_PROVIDER
 
@@ -147,6 +165,14 @@ class OrchestratorConfig:
 
     llm_api_key: LlmApiKey | None = None
 
+    llm_reasoning_dialect: LlmReasoningDialect | None = None
+
+    llm_gate_model: str | None = None
+
+    llm_brain_model: str | None = None
+
+    llm_maintenance_model: str | None = None
+
     asr_provider: AsrProvider = DEFAULT_ASR_PROVIDER
 
     asr_endpoint: str | None = None
@@ -181,6 +207,11 @@ class OrchestratorConfig:
             if raw_value.strip() == "":
                 raise ConfigParseError(field_name=field_name)
 
+        _require_reasoning_dialect(
+            config.llm_provider,
+            config.llm_reasoning_dialect,
+        )
+
         _require_provider_fields(
             config.asr_provider,
             config.asr_endpoint,
@@ -206,6 +237,10 @@ class OrchestratorConfig:
             llm_endpoint=_normalize_optional(config.llm_endpoint),
             llm_model=_normalize_optional(config.llm_model),
             llm_api_key=config.llm_api_key,
+            llm_reasoning_dialect=config.llm_reasoning_dialect,
+            llm_gate_model=_normalize_optional(config.llm_gate_model),
+            llm_brain_model=_normalize_optional(config.llm_brain_model),
+            llm_maintenance_model=_normalize_optional(config.llm_maintenance_model),
             asr_provider=config.asr_provider,
             asr_endpoint=_normalize_optional(config.asr_endpoint),
             asr_model=_normalize_optional(config.asr_model),
@@ -248,6 +283,12 @@ def load_config_from_env(env: Mapping[str, str] | None = None) -> OrchestratorCo
             llm_endpoint=source.get(LLM_ENDPOINT_KEY),
             llm_model=source.get(LLM_MODEL_KEY),
             llm_api_key=_parse_optional_secret(source.get(LLM_API_KEY_KEY)),
+            llm_reasoning_dialect=_parse_llm_reasoning_dialect(
+                source.get(LLM_REASONING_DIALECT_KEY)
+            ),
+            llm_gate_model=source.get(LLM_GATE_MODEL_KEY),
+            llm_brain_model=source.get(LLM_BRAIN_MODEL_KEY),
+            llm_maintenance_model=source.get(LLM_MAINTENANCE_MODEL_KEY),
             asr_provider=_parse_asr_provider(source.get(ASR_PROVIDER_KEY)),
             asr_endpoint=source.get(ASR_ENDPOINT_KEY),
             asr_model=source.get(ASR_MODEL_KEY),
@@ -282,6 +323,18 @@ def _parse_llm_provider(raw_provider: str | None) -> LlmProvider:
 
         case _:
             raise ConfigParseError(field_name=LLM_PROVIDER_KEY)
+
+
+def _parse_llm_reasoning_dialect(
+    raw_dialect: str | None,
+) -> LlmReasoningDialect | None:
+    if raw_dialect is None or raw_dialect.strip() == "":
+        return None
+    match raw_dialect.strip():
+        case "deepseek" | "openai" as dialect:
+            return dialect
+        case _:
+            raise ConfigParseError(field_name=LLM_REASONING_DIALECT_KEY)
 
 
 def _parse_asr_provider(raw_provider: str | None) -> AsrProvider:
@@ -339,6 +392,14 @@ def _require_provider_fields(
 
     if model is None or model.strip() == "":
         raise ConfigParseError(field_name=model_field)
+
+
+def _require_reasoning_dialect(
+    provider: LlmProvider,
+    dialect: LlmReasoningDialect | None,
+) -> None:
+    if provider == "openai_compatible" and dialect is None:
+        raise ConfigParseError(field_name=LLM_REASONING_DIALECT_KEY)
 
 
 def _normalize_optional(value: str | None) -> str | None:

@@ -7,11 +7,14 @@ import pytest
 
 from orchestrator.funasr_adapter import FunASRWebSocketAdapter
 from orchestrator.llm import (
+    BRAIN_MAX_COMPLETION_TOKENS,
     LLMFinal,
     LLMPrompt,
     LLMRequest,
     LLMStreamEvent,
+    LLMWorkload,
     OpenAICompatibleASRAdapter,
+    ReasoningMode,
     VllmOmniTTSAdapter,
 )
 from orchestrator.media_adapters import ASRStreamRequest
@@ -29,6 +32,15 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 type HttpProvider = Literal["llm", "asr", "tts"]
+
+
+def _llm_request() -> LLMRequest:
+    return LLMRequest(
+        prompt=LLMPrompt(system="system", user="question"),
+        workload=LLMWorkload.BRAIN,
+        reasoning=ReasoningMode.ENABLED,
+        max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
+    )
 
 
 @pytest.fixture
@@ -67,7 +79,7 @@ def test_openai_llm_https_accepts_configured_private_ca(private_ca: PrivateCA) -
                 model="local-llm",
                 api_key="test-key",
                 ca_path=private_ca.ca_path,
-            ).stream(LLMRequest(prompt=LLMPrompt(system="system", user="question")))
+            ).stream(_llm_request())
         )
 
     # Then: the provider payload is reached and parsed through the live HTTPS path.
@@ -199,7 +211,7 @@ def _request_http_provider(
                     model="local-llm",
                     api_key="test-key",
                     ca_path=ca_path,
-                ).stream(LLMRequest(prompt=LLMPrompt(system="system", user="question")))
+                ).stream(_llm_request())
             )
         case "asr":
             return OpenAICompatibleASRAdapter(

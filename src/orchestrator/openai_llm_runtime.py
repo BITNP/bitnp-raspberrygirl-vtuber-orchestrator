@@ -5,7 +5,7 @@ import logging
 import ssl
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import httpx
 from openai import (
@@ -31,16 +31,18 @@ from orchestrator.llm import (
     LLMFinal,
     LLMRequest,
     LLMStreamEvent,
+    LLMWorkload,
+    ReasoningMode,
 )
 from orchestrator.provider_streaming import ProviderDeadlines, ProviderResponseError
 
 _LOGGER = logging.getLogger(__name__)
 
-_JSON_NON_THINKING_BODY = {"thinking": {"type": "disabled"}}
+type ReasoningDialect = Literal["deepseek", "openai"]
 
-_GATE_MAX_TOKENS = 32
+_JSON_REQUEST_LOG = "llm_json_request workload=%s model=%s schema=%s dialect=%s reasoning=%s temperature=%s max_completion_tokens=%d system=%r user=%r"  # noqa: E501
 
-_BRAIN_MAX_TOKENS = 4_096
+_STREAM_REQUEST_LOG = "llm_request workload=%s model=%s dialect=%s reasoning=%s temperature=%s max_completion_tokens=%d system=%r user=%r"  # noqa: E501
 
 
 def _noop() -> None:
@@ -88,6 +90,10 @@ class AsyncOpenAICompatibleLLMRuntime:
     endpoint: str
     model: str
     api_key: str
+    reasoning_dialect: ReasoningDialect
+    gate_model: str | None = None
+    brain_model: str | None = None
+    maintenance_model: str | None = None
     timeout_seconds: float = 120.0
     deadlines: ProviderDeadlines = field(default_factory=ProviderDeadlines)
     ca_path: Path | None = None
@@ -101,6 +107,15 @@ class AsyncOpenAICompatibleLLMRuntime:
             raise AdapterConfigError(field_name="model")
         if self.api_key.strip() == "":
             raise AdapterConfigError(field_name="api_key")
+        if self.reasoning_dialect not in {"deepseek", "openai"}:
+            raise AdapterConfigError(field_name="reasoning_dialect")
+        for field_name, configured_model in (
+            ("gate_model", self.gate_model),
+            ("brain_model", self.brain_model),
+            ("maintenance_model", self.maintenance_model),
+        ):
+            if configured_model is not None and configured_model.strip() == "":
+                raise AdapterConfigError(field_name=field_name)
         timeout = self._request_timeout(self.timeout_seconds)
         client = self.http_client
         if client is None:
@@ -125,75 +140,55 @@ class AsyncOpenAICompatibleLLMRuntime:
     async def aclose(self) -> None:
         await self._client.close()
 
-    async def complete_gate(self, request: LLMRequest) -> str:
-        """Return the gate JSON response, failing closed at the caller."""
-        _LOGGER.debug(
-            "llm_gate_request model=%s system=%r user=%r",
-            self.model,
-            request.prompt.system,
-            request.prompt.user,
-        )
-        try:
-            response = await self._client.chat.completions.create(
-                model=self.model,
-                messages=chat_messages(request),
-                temperature=0.0,
-                stream=False,
-                response_format={"type": "json_object"},
-                extra_body=_JSON_NON_THINKING_BODY,
-                max_tokens=_GATE_MAX_TOKENS,
-                timeout=self._request_timeout(5.0),
-            )
-            if len(response.choices) != 1:
-                raise ProviderResponseError(stage="llm", reason="missing_final")
-            content = response.choices[0].message.content
-            if not isinstance(content, str) or content.strip() == "":
-                raise ProviderResponseError(stage="llm", reason="missing_final")
-            _LOGGER.debug("llm_gate_response text=%r", content)
-            return content  # noqa: TRY300
-        except (
-            APIConnectionError,
-            APITimeoutError,
-            APIStatusError,
-            APIError,
-            httpx.HTTPError,
-        ) as error:
-            raise provider_error(error) from error
-
     async def complete_json(
         self,
         request: LLMRequest,
         *,
         schema_name: str,
         schema: dict[str, object],
-        timeout_seconds: float = 30.0,
     ) -> str:
         """Request one non-streaming strict JSON proposal from the LLM Brain."""
         if schema_name.strip() == "":
             raise AdapterConfigError(field_name="schema_name")
-        # DeepSeek JSON Output supports json_object.  The caller still validates
-        # the returned proposal against this schema before it can cause effects.
+        # Compatible providers support json_object. The caller still validates
+        # the proposal against this schema before it can cause effects.
         _ = schema
+        model = self._model_for(request.workload)
         _LOGGER.debug(
-            "llm_json_request model=%s schema=%s %s max_tokens=%d system=%r user=%r",
-            self.model,
+            _JSON_REQUEST_LOG,
+            request.workload,
+            model,
             schema_name,
-            "json_mode=true thinking=disabled",
-            _json_max_tokens(schema_name),
+            self.reasoning_dialect,
+            request.reasoning,
+            request.temperature,
+            request.max_completion_tokens,
             request.prompt.system,
             request.prompt.user,
         )
         try:
-            response = await self._client.chat.completions.create(
-                model=self.model,
-                messages=chat_messages(request),
-                temperature=0.0,
-                stream=False,
-                response_format={"type": "json_object"},
-                extra_body=_JSON_NON_THINKING_BODY,
-                max_tokens=_json_max_tokens(schema_name),
-                timeout=self._request_timeout(timeout_seconds),
-            )
+            if self.reasoning_dialect == "deepseek":
+                response = await self._client.chat.completions.create(
+                    model=model,
+                    messages=chat_messages(request),
+                    temperature=request.temperature,
+                    stream=False,
+                    response_format={"type": "json_object"},
+                    extra_body=_deepseek_reasoning_body(request.reasoning),
+                    max_tokens=request.max_completion_tokens,
+                    timeout=self._request_timeout(request.timeout_seconds),
+                )
+            else:
+                response = await self._client.chat.completions.create(
+                    model=model,
+                    messages=chat_messages(request),
+                    temperature=request.temperature,
+                    stream=False,
+                    response_format={"type": "json_object"},
+                    reasoning_effort=_openai_reasoning_effort(request.reasoning),
+                    max_completion_tokens=request.max_completion_tokens,
+                    timeout=self._request_timeout(request.timeout_seconds),
+                )
             if len(response.choices) != 1:
                 details = (
                     f"schema={schema_name} reason=choice_count "
@@ -201,7 +196,7 @@ class AsyncOpenAICompatibleLLMRuntime:
                 )
                 _LOGGER.debug(
                     "llm_json_invalid_response model=%s %s",
-                    self.model,
+                    model,
                     details,
                 )
                 raise ProviderResponseError(stage="llm", reason="missing_final")
@@ -218,13 +213,13 @@ class AsyncOpenAICompatibleLLMRuntime:
                 )
                 _LOGGER.debug(
                     "llm_json_invalid_response model=%s %s",
-                    self.model,
+                    model,
                     details,
                 )
                 raise ProviderResponseError(stage="llm", reason="missing_final")
             _LOGGER.debug(
                 "llm_json_response model=%s schema=%s text=%r",
-                self.model,
+                model,
                 schema_name,
                 content,
             )
@@ -238,7 +233,7 @@ class AsyncOpenAICompatibleLLMRuntime:
         ) as error:
             raise provider_error(error) from error
 
-    async def stream(  # noqa: C901
+    async def stream(  # noqa: C901, PLR0912
         self,
         request: LLMRequest,
         *,
@@ -248,20 +243,39 @@ class AsyncOpenAICompatibleLLMRuntime:
             return
         stream = None
         release = _noop
+        model = self._model_for(request.workload)
         _LOGGER.debug(
-            "llm_request model=%s system=%r user=%r",
-            self.model,
+            _STREAM_REQUEST_LOG,
+            request.workload,
+            model,
+            self.reasoning_dialect,
+            request.reasoning,
+            request.temperature,
+            request.max_completion_tokens,
             request.prompt.system,
             request.prompt.user,
         )
         try:
-            stream = await self._client.chat.completions.create(
-                model=self.model,
-                messages=chat_messages(request),
-                temperature=request.temperature,
-                stream=True,
-                timeout=self._request_timeout(request.timeout_seconds),
-            )
+            if self.reasoning_dialect == "deepseek":
+                stream = await self._client.chat.completions.create(
+                    model=model,
+                    messages=chat_messages(request),
+                    temperature=request.temperature,
+                    stream=True,
+                    extra_body=_deepseek_reasoning_body(request.reasoning),
+                    max_tokens=request.max_completion_tokens,
+                    timeout=self._request_timeout(request.timeout_seconds),
+                )
+            else:
+                stream = await self._client.chat.completions.create(
+                    model=model,
+                    messages=chat_messages(request),
+                    temperature=request.temperature,
+                    stream=True,
+                    reasoning_effort=_openai_reasoning_effort(request.reasoning),
+                    max_completion_tokens=request.max_completion_tokens,
+                    timeout=self._request_timeout(request.timeout_seconds),
+                )
             if cancellation is not None:
                 loop = asyncio.get_running_loop()
 
@@ -312,6 +326,21 @@ class AsyncOpenAICompatibleLLMRuntime:
             write=total,
         )
 
+    def _model_for(self, workload: LLMWorkload) -> str:
+        match workload:
+            case LLMWorkload.GATE:
+                return self.gate_model or self.model
+            case LLMWorkload.BRAIN:
+                return self.brain_model or self.model
+            case LLMWorkload.MAINTENANCE:
+                return self.maintenance_model or self.model
 
-def _json_max_tokens(schema_name: str) -> int:
-    return _GATE_MAX_TOKENS if schema_name == "audience_gate" else _BRAIN_MAX_TOKENS
+
+def _deepseek_reasoning_body(mode: ReasoningMode) -> dict[str, object]:
+    return {"thinking": {"type": mode.value}}
+
+
+def _openai_reasoning_effort(
+    mode: ReasoningMode,
+) -> Literal["none", "medium"]:
+    return "medium" if mode is ReasoningMode.ENABLED else "none"
