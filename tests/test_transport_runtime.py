@@ -270,8 +270,8 @@ def test_hub_does_not_forward_valid_mic_rtp_without_an_onsite_bridge() -> None:
     assert transport.sent == []
 
 
-def test_hub_accepts_canonical_source_and_sink_ready_events() -> None:
-    # Given: registered Mic and Sound routes for a canonical media stream.
+def test_hub_rejects_mic_rtp_after_control_input_and_sink_readiness() -> None:
+    # Given: registered Mic control input and a Sound output route.
 
     transport = FakeDatagramTransport()
 
@@ -281,9 +281,7 @@ def test_hub_accepts_canonical_source_and_sink_ready_events() -> None:
 
     hub.register_control(_sink_registration(), SINK_PEER[0])
 
-    # When: both peers acknowledge their canonical RTP readiness events.
-
-    hub.register_control(_source_ready(), SOURCE_PEER[0])
+    # When: Sound acknowledges its output readiness.
 
     hub.register_control(_sink_ready(), SINK_PEER[0])
 
@@ -347,12 +345,10 @@ def test_hub_registers_authenticated_control_envelopes_and_rejects_duplicates() 
 
     hub.register_control(_sink_registration(), SINK_PEER[0])
 
-    # When: a second route claims either existing session-stream route.
+    # When: Sound repeats an existing output route.
 
-    with pytest.raises(DuplicateRouteError):
-        hub.register_control(_source_registration(), SOURCE_PEER[0])
-
-    # Then: the duplicate is refused rather than replacing the authenticated route.
+    # Then: output route duplication is refused, while Mic registration is idempotent.
+    hub.register_control(_source_registration(), SOURCE_PEER[0])
 
     with pytest.raises(DuplicateRouteError):
         hub.register_control(_sink_registration(), SINK_PEER[0])
@@ -808,14 +804,9 @@ def test_control_connection_skips_expired_presentation_mcp() -> None:
 def _source_registration() -> str:
 
     return _envelope(
-        "media.rtp.source.register",
+        "mic.input.register",
         "mic",
-        {
-            "stream_id": STREAM_ID,
-            "ssrc": SSRC,
-            "codec": _codec(),
-            "rtp_endpoint": _endpoint(5004),
-        },
+        {"stream_id": STREAM_ID},
     )
 
 
@@ -909,15 +900,6 @@ def _sink_registration() -> str:
         "media.rtp.sink.register",
         "sound",
         {"stream_id": STREAM_ID, "codec": _codec(), "rtp_endpoint": _endpoint(5006)},
-    )
-
-
-def _source_ready() -> str:
-
-    return _envelope(
-        "media.rtp.source.ready",
-        "mic",
-        {"stream_id": STREAM_ID, "ssrc": SSRC},
     )
 
 

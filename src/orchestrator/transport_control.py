@@ -31,7 +31,6 @@ MAX_ASR_TEXT_LENGTH = 4_000
 
 type ControlEvent = (
     MicInputRegistration
-    | SourceRegistration
     | SinkRegistration
     | StreamReady
     | StreamState
@@ -72,17 +71,6 @@ class EnvelopeCorrelation:
     session_id: str
 
     seq: int
-
-
-@dataclass(frozen=True, slots=True)
-class SourceRegistration:
-    session_id: str
-
-    stream_id: str
-
-    ssrc: int
-
-    correlation: EnvelopeCorrelation
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,7 +190,7 @@ def bearer_token_matches(
     return hmac.compare_digest(authorization.removeprefix(prefix), token)
 
 
-def parse_control_event(raw_message: str) -> ControlEvent:  # noqa: C901
+def parse_control_event(raw_message: str) -> ControlEvent:
     value = parse_json_value(raw_message)
 
     if not isinstance(value, dict):
@@ -227,9 +215,6 @@ def parse_control_event(raw_message: str) -> ControlEvent:  # noqa: C901
                 _text(value, "session_id"), _text(data, "stream_id"), correlation
             )
 
-        case "media.rtp.source.register":
-            raise ControlEnvelopeError(field_name="event_type")
-
         case "media.rtp.sink.register":
             _validate_sink_registration(data, _text(value, "source"))
 
@@ -243,12 +228,6 @@ def parse_control_event(raw_message: str) -> ControlEvent:  # noqa: C901
         case "media.rtp.sink.ready":
             _validate_sink_ready(data, _text(value, "source"))
 
-            parsed = StreamReady(
-                _text(value, "session_id"), _text(data, "stream_id"), correlation
-            )
-
-        case "media.rtp.source.ready":
-            _validate_source_ready(data, _text(value, "source"))
             parsed = StreamReady(
                 _text(value, "session_id"), _text(data, "stream_id"), correlation
             )
@@ -387,13 +366,6 @@ def _validate_sink_registration(data: dict[str, JsonValue], source: str) -> None
     _ = _text(data, "stream_id")
 
     _ = _endpoint_port(data)
-
-
-def _validate_source_ready(data: dict[str, JsonValue], source: str) -> None:
-    if source != "mic" or set(data) != {"stream_id", "ssrc"}:
-        raise ControlEnvelopeError(field_name="source")
-    _ = _text(data, "stream_id")
-    _ = _ssrc(data)
 
 
 def _validate_sink_ready(data: dict[str, JsonValue], source: str) -> None:
@@ -576,10 +548,6 @@ def _number(value: JsonValue | None) -> float:
     if not isinstance(value, (float, int)) or isinstance(value, bool):
         raise ControlEnvelopeError(field_name="number")
     return float(value)
-
-
-def _ssrc(data: dict[str, JsonValue]) -> int:
-    return _ssrc_field(data, "ssrc")
 
 
 def _ssrc_field(data: dict[str, JsonValue], field_name: str) -> int:

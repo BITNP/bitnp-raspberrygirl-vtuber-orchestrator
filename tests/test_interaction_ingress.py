@@ -57,7 +57,7 @@ def test_control_envelope_routes_comments_but_leaves_media_for_transport() -> No
         '"session_id":"session-1","seq":1,"data":{"text":"解释量化"}}'
     )
 
-    media = '{"event_type":"media.rtp.source.ready","source":"mic","data":{}}'
+    media = '{"event_type":"media.rtp.sink.ready","source":"sound","data":{}}'
 
     # Then: only the typed comments proposal opens a reducer-controlled turn.
 

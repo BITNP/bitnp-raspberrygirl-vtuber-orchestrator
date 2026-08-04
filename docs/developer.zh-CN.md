@@ -41,7 +41,7 @@ Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口
 ## 模块契约
 
 - Orchestrator：唯一 session state writer、协议权威、Gate/Brain 与 LLM/TTS provider 边界，以及唯一跨服务 reducer 和命令校验者。
-- Mic：唯一 VAD/endpoint/ASR provider 边界；只向 Orchestrator 注册 RTP source，收到 matching `media.rtp.source.ready` 后才发送 UDP RTP，并在认证 control connection 上提交结构化 ASR 结果。
+- Mic：唯一 VAD/endpoint/ASR provider 边界；只在认证 Orchestrator control connection 上注册 `mic.input.register`，并提交 `asr.partial`、`asr.final` 与可选 `voice.evidence`。Mic 不创建 RTP route，也不发送 UDP RTP。
 - Sound：只向 Orchestrator 注册 RTP sink，只播放匹配 `media.stream.command` 的流，并报告 queued、playing、finished、cancelled、flush ack 等状态；只有精确关联的 `finished` 才能释放输出 lease。
 - Comments：只向 Orchestrator 发送观众输入，不拥有平台生产接入的全功能边界。
 - Frontend：只连接 Orchestrator，执行有限动作、表情、场景和演示控制映射。

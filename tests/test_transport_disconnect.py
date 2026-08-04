@@ -116,13 +116,13 @@ async def _disconnect_route_proof() -> None:
     await runtime.start()
 
     source = _LiveControlConnection(
-        _source_registration("stream-001", 0x12345678), "127.0.0.1"
+        _source_registration("stream-001"), "127.0.0.1"
     )
 
     sink = _LiveControlConnection(_sink_registration("stream-001", 5006), "127.0.0.1")
 
     retained_source = _LiveControlConnection(
-        _source_registration("stream-002", 0x12345679), "127.0.0.1"
+        _source_registration("stream-002"), "127.0.0.1"
     )
 
     retained_sink = _LiveControlConnection(
@@ -182,17 +182,12 @@ async def _disconnect_route_proof() -> None:
     await runtime.close()
 
 
-def _source_registration(stream_id: str, ssrc: int) -> str:
+def _source_registration(stream_id: str) -> str:
 
     return _envelope(
-        "media.rtp.source.register",
+        "mic.input.register",
         "mic",
-        {
-            "stream_id": stream_id,
-            "ssrc": ssrc,
-            "codec": _codec(),
-            "rtp_endpoint": {"host": "127.0.0.1", "port": 5004},
-        },
+        {"stream_id": stream_id},
     )
 
 

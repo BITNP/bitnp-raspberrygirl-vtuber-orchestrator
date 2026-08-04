@@ -268,14 +268,9 @@ async def _blank_asr_proof() -> None:
 def _source_registration() -> str:
 
     return _envelope(
-        "media.rtp.source.register",
+        "mic.input.register",
         "mic",
-        {
-            "stream_id": STREAM_ID,
-            "ssrc": MIC_SSRC,
-            "codec": _codec(),
-            "rtp_endpoint": _endpoint(5004),
-        },
+        {"stream_id": STREAM_ID},
     )
 
 

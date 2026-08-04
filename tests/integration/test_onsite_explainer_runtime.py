@@ -269,7 +269,8 @@ async def _scheduler_barge_in_proof() -> None:
     hub.set_output_fence(fence)
 
     hub.register_control(
-        _registration("media.rtp.source.register", "mic", _source()), MIC_PEER[0]
+        _registration("mic.input.register", "mic", {"stream_id": STREAM_ID}),
+        MIC_PEER[0],
     )
 
     hub.register_control(
@@ -352,7 +353,8 @@ async def _stale_epoch_gate_proof() -> None:
     transport = _Datagrams()
     hub = RtpHub(transport)
     hub.register_control(
-        _registration("media.rtp.source.register", "mic", _source()), MIC_PEER[0]
+        _registration("mic.input.register", "mic", {"stream_id": STREAM_ID}),
+        MIC_PEER[0],
     )
     hub.register_control(
         _registration("media.rtp.sink.register", "sound", _sink()), SOUND_PEER[0]
@@ -423,7 +425,8 @@ async def _blank_asr_proof() -> None:
     hub = RtpHub(transport, onsite_bridge=_bridge(""))
 
     hub.register_control(
-        _registration("media.rtp.source.register", "mic", _source()), MIC_PEER[0]
+        _registration("mic.input.register", "mic", {"stream_id": STREAM_ID}),
+        MIC_PEER[0],
     )
 
     hub.register_control(
@@ -522,16 +525,6 @@ def _bridge(text: str, expected_audio_bytes: int = 1_280) -> OnsiteExplainerBrid
         ref_text="reference",
         frames_per_utterance=2,
     )
-
-
-def _source() -> dict[str, JsonValue]:
-
-    return {
-        "stream_id": STREAM_ID,
-        "ssrc": MIC_SSRC,
-        "codec": _codec(),
-        "rtp_endpoint": {"host": "declared", "port": 5004},
-    }
 
 
 def _sink() -> dict[str, JsonValue]:

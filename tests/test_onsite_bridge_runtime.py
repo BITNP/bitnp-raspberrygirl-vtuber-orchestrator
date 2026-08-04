@@ -403,14 +403,9 @@ async def _source_disconnect_finalizes_proof() -> None:
 def _source_registration() -> str:
 
     return _registration(
-        "media.rtp.source.register",
+        "mic.input.register",
         "mic",
-        {
-            "stream_id": "stream-onsite-runtime",
-            "ssrc": 0x10203040,
-            "codec": _codec(),
-            "rtp_endpoint": {"host": "127.0.0.1", "port": 5004},
-        },
+        {"stream_id": "stream-onsite-runtime"},
     )
 
 

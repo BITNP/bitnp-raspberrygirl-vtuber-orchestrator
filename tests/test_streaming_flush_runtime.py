@@ -241,7 +241,7 @@ async def _matching_ack_proof() -> None:
 
     assert _event_types(sink.sent).count("media.stream.flush") == 1
 
-    assert _event_types(source.sent).count("media.stream.flush") == 1
+    assert _event_types(source.sent).count("media.stream.flush") == 0
 
     assert admitted is True
 
@@ -503,14 +503,9 @@ def _source_registration() -> str:
 
     return _envelope(
         _EnvelopeFields(
-            event_type="media.rtp.source.register",
+            event_type="mic.input.register",
             source="mic",
-            data={
-                "stream_id": "stream-001",
-                "ssrc": 0x1234_5678,
-                "codec": _codec(),
-                "rtp_endpoint": {"host": "192.0.2.10", "port": 5004},
-            },
+            data={"stream_id": "stream-001"},
             trace_id="trace-source-001",
             seq=29,
         )

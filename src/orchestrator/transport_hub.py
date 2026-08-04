@@ -19,7 +19,6 @@ from orchestrator.transport_control import (
     EnvelopeCorrelation,
     MicInputRegistration,
     SinkRegistration,
-    SourceRegistration,
     StreamReady,
     StreamState,
     VoiceEvidence,
@@ -96,28 +95,6 @@ class OnsiteBridge(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class RouteKey:
-    session_id: str
-
-    stream_id: str
-
-    ssrc: int
-
-    peer_ip: str
-
-    udp_port: int
-
-
-@dataclass(frozen=True, slots=True)
-class PendingSource:
-    stream: StreamKey
-
-    ssrc: int
-
-    peer_ip: str
-
-
-@dataclass(frozen=True, slots=True)
 class DuplicateRouteError(Exception):
     stream: StreamKey
 
@@ -144,15 +121,9 @@ class RtpHub:
 
         self._correlations: dict[StreamKey, EnvelopeCorrelation] = {}
 
-        self._pending_sources: dict[StreamKey, PendingSource] = {}
-
         self._mic_inputs: set[StreamKey] = set()
 
-        self._pinned_sources: dict[RouteKey, StreamKey] = {}
-
         self._sinks: dict[StreamKey, PeerAddress] = {}
-
-        self._source_owners: dict[StreamKey, ConnectionId] = {}
 
         self._sink_owners: dict[StreamKey, ConnectionId] = {}
 
@@ -466,11 +437,7 @@ class RtpHub:
 
     @property
     def route_ready(self) -> bool:
-        source_streams = {*self._pending_sources.values()}
-
-        return any(source.stream in self._sinks for source in source_streams) or any(
-            stream in self._sinks for stream in self._pinned_sources.values()
-        )
+        return any(stream in self._sinks for stream in self._mic_inputs)
 
     def register_control(
         self,
@@ -489,18 +456,7 @@ class RtpHub:
                 stream = StreamKey(session_id, stream_id)
                 self._mic_inputs.add(stream)
                 self._correlations[stream] = parsed_event.correlation
-
-            case SourceRegistration(
-                session_id=session_id, stream_id=stream_id, ssrc=ssrc
-            ):
-                stream = StreamKey(session_id, stream_id)
-
-                self._register_source(stream, ssrc, peer_ip, owner)
-
-                self._correlations[stream] = parsed_event.correlation
-
                 observability = self._observability
-
                 if observability is not None:
                     observability.bind_correlation(stream, parsed_event.correlation)
 
@@ -589,10 +545,6 @@ class RtpHub:
             await bridge.wait_quiescent()
 
     def remove_connection(self, owner: ConnectionId) -> None:
-        for stream, route_owner in tuple(self._source_owners.items()):
-            if route_owner == owner:
-                self._remove_source(stream)
-
         for stream, route_owner in tuple(self._sink_owners.items()):
             if route_owner == owner:
                 self._remove_sink(stream)
@@ -604,19 +556,13 @@ class RtpHub:
             for stream in actors.streams:
                 self._invalidate_stream(stream)
 
-        self._pending_sources.clear()
-
         self._mic_inputs.clear()
 
         self._correlations.clear()
 
         self._last_asr_sequences.clear()
 
-        self._pinned_sources.clear()
-
         self._sinks.clear()
-
-        self._source_owners.clear()
 
         self._sink_owners.clear()
 
@@ -624,50 +570,10 @@ class RtpHub:
         self._remove_stream(StreamKey(session_id, stream_id))
 
     def output_ssrc(self, stream: StreamKey, cancellation_epoch: int = 0) -> int:
-        if self._onsite_bridge is None:
-            source = next(
-                (
-                    pending.ssrc
-                    for pending in self._pending_sources.values()
-                    if pending.stream == stream
-                ),
-                None,
-            )
-
-            if source is not None:
-                return source
-
-            for route, route_stream in self._pinned_sources.items():
-                if route_stream == stream:
-                    return route.ssrc
-
-            return 0
-
         return generated_ssrc(stream, CancellationEpoch(cancellation_epoch))
 
     def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None:
         return self._correlations.get(stream)
-
-    def _register_source(
-        self,
-        stream: StreamKey,
-        ssrc: int,
-        peer_ip: str,
-        owner: ConnectionId | None,
-    ) -> None:
-        if stream in self._pending_sources or stream in self._pinned_sources.values():
-            raise DuplicateRouteError(stream)
-
-        if any(
-            source.ssrc == ssrc and source.peer_ip == peer_ip
-            for source in self._pending_sources.values()
-        ):
-            raise DuplicateRouteError(stream)
-
-        self._pending_sources[stream] = PendingSource(stream, ssrc, peer_ip)
-
-        if owner is not None:
-            self._source_owners[stream] = owner
 
     def _register_sink(
         self,
@@ -684,23 +590,7 @@ class RtpHub:
             self._sink_owners[stream] = owner
 
     def _remove_stream(self, stream: StreamKey) -> None:
-        self._remove_source(stream)
-
         self._remove_sink(stream)
-
-    def _remove_source(self, stream: StreamKey) -> None:
-        if self._onsite_bridge is not None:
-            self._onsite_bridge.disconnect_stream(stream)
-
-        _ = self._pending_sources.pop(stream, None)
-
-        _ = self._correlations.pop(stream, None)
-
-        _ = self._source_owners.pop(stream, None)
-
-        for route, route_stream in tuple(self._pinned_sources.items()):
-            if route_stream == stream:
-                del self._pinned_sources[route]
 
     def _remove_sink(self, stream: StreamKey) -> None:
         self._invalidate_stream(stream)

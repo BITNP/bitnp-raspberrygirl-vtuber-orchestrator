@@ -28,7 +28,6 @@ from orchestrator.transport_control import (
     EnvelopeCorrelation,
     MicInputRegistration,
     SinkRegistration,
-    SourceRegistration,
     StreamReady,
     StreamState,
     parse_control_event,
@@ -78,13 +77,6 @@ class OutputFence(Protocol):
     ) -> bool: ...
 
 @dataclass(frozen=True, slots=True)
-class _SourcePeer:
-    connection: ControlPeer
-
-    ssrc: int
-
-
-@dataclass(frozen=True, slots=True)
 class _SinkPeer:
     connection: ControlPeer
 
@@ -106,15 +98,11 @@ class TransportControlDispatch:
 
         self._observability = observability
 
-        self._sources: dict[StreamKey, _SourcePeer] = {}
-
         self._sinks: dict[StreamKey, _SinkPeer] = {}
 
         self._dispatched: set[StreamKey] = set()
 
         self._ready_sinks: set[StreamKey] = set()
-
-        self._released_sources: set[StreamKey] = set()
 
         self._flush_outbox: list[StreamFlush] = []
 
@@ -125,7 +113,7 @@ class TransportControlDispatch:
 
         self._output_fence: OutputFence | None = None
 
-    async def register(  # noqa: C901, PLR0911, PLR0912
+    async def register(  # noqa: C901, PLR0911
         self, raw_message: str, peer_ip: str, connection: ControlPeer
     ) -> None:
         event = parse_control_event(raw_message)
@@ -143,13 +131,6 @@ class TransportControlDispatch:
             case MicInputRegistration(session_id=session_id, stream_id=stream_id):
                 await self._dispatch_start(StreamKey(session_id, stream_id))
                 return
-
-            case SourceRegistration(
-                session_id=session_id, stream_id=stream_id, ssrc=ssrc
-            ):
-                self._sources[StreamKey(session_id, stream_id)] = _SourcePeer(
-                    connection, ssrc
-                )
 
             case SinkRegistration(
                 session_id=session_id, stream_id=stream_id, udp_port=port
@@ -243,11 +224,9 @@ class TransportControlDispatch:
         if not self._flush_admission.admitted(flush):
             return False
 
-        source = self._sources.get(flush.stream)
-
         sink = self._sinks.get(flush.stream)
 
-        if source is None or sink is None:
+        if sink is None:
             return False
 
         await sink.connection.send(
@@ -335,15 +314,11 @@ class TransportControlDispatch:
             )
 
     def clear(self) -> None:
-        self._sources.clear()
-
         self._sinks.clear()
 
         self._dispatched.clear()
 
         self._ready_sinks.clear()
-
-        self._released_sources.clear()
 
         self._flush_outbox.clear()
 
@@ -356,16 +331,6 @@ class TransportControlDispatch:
     def remove_connection(self, connection: ControlPeer) -> None:
         self._hub.remove_connection(_connection_id(connection))
 
-        for stream, source in tuple(self._sources.items()):
-            if source.connection is connection:
-                del self._sources[stream]
-
-                self._dispatched.discard(stream)
-
-                self._ready_sinks.discard(stream)
-
-                self._released_sources.discard(stream)
-
         for stream, sink in tuple(self._sinks.items()):
             if sink.connection is connection:
                 del self._sinks[stream]
@@ -373,8 +338,6 @@ class TransportControlDispatch:
                 self._dispatched.discard(stream)
 
                 self._ready_sinks.discard(stream)
-
-                self._released_sources.discard(stream)
 
     async def _dispatch_start(self, stream: StreamKey) -> None:
         sink = self._sinks.get(stream)
@@ -399,8 +362,6 @@ class TransportControlDispatch:
         while self._flush_outbox:
             flush = self._flush_outbox.pop(0)
 
-            source = self._sources.get(flush.stream)
-
             sink = self._sinks.get(flush.stream)
 
             correlation = self._hub.correlation(flush.stream)
@@ -408,22 +369,15 @@ class TransportControlDispatch:
             if correlation is not None:
                 envelope = _flush_envelope(flush, correlation)
 
-                if source is not None:
-                    await source.connection.send(envelope)
-
                 if sink is not None:
                     await sink.connection.send(envelope)
 
     def _discard(self, stream: StreamKey) -> None:
-        _ = self._sources.pop(stream, None)
-
         _ = self._sinks.pop(stream, None)
 
         self._dispatched.discard(stream)
 
         self._ready_sinks.discard(stream)
-
-        self._released_sources.discard(stream)
 
     def _record_playback(self, event: StreamState) -> None:
         observability = self._observability
