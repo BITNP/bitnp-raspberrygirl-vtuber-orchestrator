@@ -427,6 +427,46 @@ def test_async_tool_turn_records_initial_tool_and_final_provider_tasks() -> None
     assert runtime.response_turn_state.phase is TurnPhase.SYNTHESIZING
 
 
+def test_new_response_marks_replacement_while_prior_playback_is_active() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        async_agent_pipeline=cast(
+            "AsyncAgentPipeline", cast("object", _AsyncAcceptPipeline())
+        ),
+        async_response_coordinator=AsyncResponseCoordinator(
+            _AsyncResponseBrain(), IntentRouter(()), _AsyncNoTools()
+        ),
+    )
+
+    async def exercise() -> None:
+        first = await runtime.receive_comment_async(
+            CommentProposal("第一句", _correlation("replacement-1", 1))
+        )
+        assert first.turn_id is not None
+
+        async def synthesize(
+            _text: str, output_started: Callable[[], bool]
+        ) -> bool:
+            return output_started()
+
+        assert await runtime.run_agent_tts_for_turn(
+            first.turn_id, synthesize, _correlation("replacement-1", 1)
+        )
+        assert runtime.response_turn_state.phase is TurnPhase.PLAYING
+
+        second = await runtime.receive_comment_async(
+            CommentProposal("第二句", _correlation("replacement-2", 2))
+        )
+        assert second.accepted
+        assert runtime.response_turn_state.turn_id == "turn-0002"
+        assert runtime.response_turn_state.pending_interrupt
+        assert runtime.response_turn_state.phase is TurnPhase.SYNTHESIZING
+
+    asyncio.run(exercise())
+
+
 def test_async_tool_task_uses_its_trusted_intent_deadline() -> None:
     runtime = SessionRuntime.create(
         session_id=SessionId("session-1"),

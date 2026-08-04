@@ -951,7 +951,7 @@ class SessionRuntime:
                 {"breathe", "dance", "explain_point", "speak", "wave", "nod"}
             ),
             allowed_expressions=frozenset(),
-            replacement=False,
+            replacement=self.turn_coordinator.state.pending_interrupt,
         )
         response_task_id = TaskId(f"response-llm-initial-{turn_id}")
         scheduled = self.schedule_task(
