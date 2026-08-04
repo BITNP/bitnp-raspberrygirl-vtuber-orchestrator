@@ -234,6 +234,8 @@ def _register(registry: TaskRegistry, request: TaskRequest) -> None:
     match registry.register(request):
         case TaskRegistrationAccepted(record=record):
             assert record == registry.task(request.task_id)
+            assert registry.enqueue(request.task_id) is not None
+            assert registry.claim(request.task_id) is not None
         case _:
             pytest.fail("task fixture was not admitted")
 
