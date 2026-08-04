@@ -23,7 +23,6 @@ from orchestrator.agent_pipeline import (
     AudienceSource as BrainAudienceSource,
 )
 from orchestrator.asr_semantic_gate import AsrGateDecision, AsrSemanticGate
-from orchestrator.brain_runtime import build_mock_agent_pipeline
 from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.context_compactor import AsyncContextCompactor
 from orchestrator.control_ingress import (
@@ -395,11 +394,11 @@ class SessionRuntime:
             ),
             mode_policy=AdaptiveAgentPolicy(),
             clock=clock,
-            agent_pipeline=(
-                build_mock_agent_pipeline(interaction_ingress.data.retrieval)
-                if agent_pipeline is None
-                else agent_pipeline
-            ),
+            # The minimal response coordinator is the only default execution
+            # path.  Legacy AgentPlan execution is opt-in for migration tests
+            # and controlled rollback sessions; it must never be synthesized
+            # as an implicit fallback when production wiring is incomplete.
+            agent_pipeline=agent_pipeline,
             async_agent_pipeline=async_agent_pipeline,
             async_agent_gate=async_agent_gate,
             async_response_coordinator=async_response_coordinator,
@@ -561,7 +560,7 @@ class SessionRuntime:
         ):
             return self._reject(proposal.correlation, "shadow_coordinator_missing")
         if pipeline is None and not (coordinator is not None and gate is not None):
-            return self.receive_comment(proposal)
+            return self._reject(proposal.correlation, "response_coordinator_missing")
         correlation = proposal.correlation
         if self._ended:
             return self._reject(correlation, "session_ended")

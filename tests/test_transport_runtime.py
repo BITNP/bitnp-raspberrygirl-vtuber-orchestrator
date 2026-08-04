@@ -15,6 +15,7 @@ from orchestrator.ids import TurnId as AgentTurnId
 from orchestrator.json_boundary import parse_json_value
 from orchestrator.mcp_adapters import DeckJournalKind
 from orchestrator.pipeline_contracts import ASRAudienceEvent
+from orchestrator.response_execution_mode import ResponseExecutionMode
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
@@ -528,6 +529,7 @@ def test_control_connection_routes_comments_through_scheduler_runtime() -> None:
         session_id=SessionId(SESSION_ID),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
+        response_execution_mode=ResponseExecutionMode.LEGACY_EXECUTE,
     )
 
     runtime.set_session_runtime(session_runtime)
@@ -576,6 +578,7 @@ def test_control_connection_dispatches_brain_frontend_effect_to_registered_clien
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
         agent_pipeline=AgentPipeline(_AcceptGate(), _CaptionBrain(), _NoTools()),
+        response_execution_mode=ResponseExecutionMode.LEGACY_EXECUTE,
     )
     runtime.set_session_runtime(session_runtime)
     async def run() -> _HeldControlConnection:
@@ -715,6 +718,7 @@ def test_control_connection_routes_authenticated_profile_action_and_presentation
         session_id=SessionId(SESSION_ID),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset(TaskKind), 1),
+        response_execution_mode=ResponseExecutionMode.LEGACY_EXECUTE,
     )
 
     runtime.set_session_runtime(session_runtime)

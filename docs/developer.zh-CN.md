@@ -78,6 +78,8 @@ Orchestrator 的调度器把工作分为 reflex、interactive、deliberative 和
 最小 proposal 解析和 cue 编译，并记录脱敏诊断；它绝不执行 MCP、TTS、Frontend、
 context 或 memory 写入。若影子模式缺少新协调器，运行时 fail-closed 拒绝输入，不能回落
 到 legacy 副作用路径。
+`new_execute` 若缺少 Gate 或 ResponseCoordinator 也同样 fail-closed；不会隐式构造
+mock AgentPlan pipeline 或回退到 legacy 执行。`legacy_execute` 仅允许显式迁移/回滚配置。
 
 Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 保持回放和健康检查能力。Frontend 不参与 onsite audio loop；字幕 cue 在协议层准备就绪，但不要把同步字幕渲染描述为已完成能力。
 
