@@ -83,15 +83,7 @@ class FakeOnsiteExplainerBridge:
     ) -> None:
         _ = callback
 
-    def set_agent_plan_output_allocator(
-        self,
-        callback: Callable[
-            [StreamKey, CancellationEpoch, str], CancellationEpoch | None
-        ],
-    ) -> None:
-        _ = callback
-
-    def set_agent_plan_output_preparer(
+    def set_response_output_preparer(
         self,
         callback: Callable[
             [StreamKey, CancellationEpoch, str], Awaitable[CancellationEpoch | None]

@@ -81,7 +81,7 @@ type OnsiteOutputFinished = Callable[[StreamKey, CancellationEpoch], Awaitable[N
 
 type OnsiteOutputAuthorization = Callable[[StreamKey, CancellationEpoch], bool]
 
-type OnsiteAgentPlanOutputPreparation = Callable[
+type OnsiteResponseOutputPreparation = Callable[
     [StreamKey, CancellationEpoch, str], Awaitable[CancellationEpoch | None]
 ]
 
@@ -91,7 +91,7 @@ type OnsiteReplacement = Callable[
 
 type OnsiteAsrFinal = Callable[[StreamKey, ASRAudienceEvent], Awaitable[bool]]
 
-type AgentPlanOutputStarted = Callable[[], bool]
+type ResponseOutputStarted = Callable[[], bool]
 
 
 async def _discard_output(
@@ -214,7 +214,7 @@ class OnsiteExplainerBridge:
 
     authorize_output: OnsiteOutputAuthorization = field(default=_allow_output)
 
-    prepare_agent_plan_output: OnsiteAgentPlanOutputPreparation = field(
+    prepare_response_output: OnsiteResponseOutputPreparation = field(
         default=_prepare_reuse_requested_output_epoch
     )
 
@@ -232,11 +232,11 @@ class OnsiteExplainerBridge:
         """Install the transport's scheduler-owned output admission callback."""
         self.authorize_output = callback
 
-    def set_agent_plan_output_preparer(
-        self, callback: OnsiteAgentPlanOutputPreparation
+    def set_response_output_preparer(
+        self, callback: OnsiteResponseOutputPreparation
     ) -> None:
         """Install the async first-frame/cutover admission callback."""
-        self.prepare_agent_plan_output = callback
+        self.prepare_response_output = callback
 
     def set_replacement_callback(self, callback: OnsiteReplacement) -> None:
         self.begin_replacement = callback
@@ -692,13 +692,13 @@ class OnsiteExplainerBridge:
             return chunks
         return None
 
-    async def speak_agent_plan(
+    async def speak_response(
         self,
         stream: StreamKey,
         text: str,
         epoch: CancellationEpoch,
         turn_id: str,
-        output_started: AgentPlanOutputStarted,
+        output_started: ResponseOutputStarted,
     ) -> bool:
         """Synthesize one accepted Brain reply and deliver paced RTP to Sound.
 
@@ -712,7 +712,7 @@ class OnsiteExplainerBridge:
                 self.stream_synthesize, text, cancellation
             )
             if stream_synthesis is not None:
-                return await self._speak_streaming_agent_plan(
+                return await self._speak_streaming_response(
                     stream,
                     epoch,
                     turn_id,
@@ -721,7 +721,7 @@ class OnsiteExplainerBridge:
                     output_started,
                 )
             chunks = await asyncio.to_thread(self.synthesize, text, cancellation)
-            output_epoch = await self.prepare_agent_plan_output(stream, epoch, turn_id)
+            output_epoch = await self.prepare_response_output(stream, epoch, turn_id)
             if not chunks or output_epoch is None:
                 return False
             packetizer = TtsPcmRtpPacketizer(
@@ -745,19 +745,19 @@ class OnsiteExplainerBridge:
                     await asyncio.sleep(delay)
             await self.output_finished(stream, output_epoch)
         except asyncio.CancelledError:
-            _ = cancellation.cancel(reason="agent_plan_tts_cancelled")
+            _ = cancellation.cancel(reason="response_tts_cancelled")
             raise
         else:
             return True
 
-    async def _speak_streaming_agent_plan(  # noqa: C901, PLR0911, PLR0912, PLR0913
+    async def _speak_streaming_response(  # noqa: C901, PLR0911, PLR0912, PLR0913
         self,
         stream: StreamKey,
         epoch: CancellationEpoch,
         turn_id: str,
         synthesis: Iterator[Pcm16leChunk],
         cancellation: CancellationToken,
-        output_started: AgentPlanOutputStarted,
+        output_started: ResponseOutputStarted,
     ) -> bool:
         """Start RTP playback as soon as SSE has produced one valid frame."""
         packetizer: TtsPcmRtpPacketizer | None = None
@@ -794,7 +794,7 @@ class OnsiteExplainerBridge:
                 if len(buffered) < L16_FRAME_BYTES:
                     continue
                 if packetizer is None:
-                    output_epoch = await self.prepare_agent_plan_output(
+                    output_epoch = await self.prepare_response_output(
                         stream, epoch, turn_id
                     )
                     if output_epoch is None:
@@ -809,7 +809,7 @@ class OnsiteExplainerBridge:
             if packetizer is None:
                 if not buffered:
                     return False
-                output_epoch = await self.prepare_agent_plan_output(
+                output_epoch = await self.prepare_response_output(
                     stream, epoch, turn_id
                 )
                 if output_epoch is None:

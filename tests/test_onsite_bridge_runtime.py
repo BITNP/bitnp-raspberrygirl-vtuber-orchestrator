@@ -259,17 +259,17 @@ def test_mic_source_disconnect_does_not_turn_rtp_into_an_asr_utterance() -> None
     asyncio.run(_source_disconnect_finalizes_proof())
 
 
-def test_agent_plan_tts_replaces_only_after_sound_flush_ack() -> None:
+def test_response_tts_replaces_only_after_sound_flush_ack() -> None:
 
-    asyncio.run(_agent_plan_output_epoch_proof())
-
-
-def test_agent_plan_tts_streams_first_rtp_frame_before_sse_completes() -> None:
-
-    asyncio.run(_agent_plan_streaming_proof())
+    asyncio.run(_response_output_epoch_proof())
 
 
-async def _agent_plan_streaming_proof() -> None:
+def test_response_tts_streams_first_rtp_frame_before_sse_completes() -> None:
+
+    asyncio.run(_response_streaming_proof())
+
+
+async def _response_streaming_proof() -> None:
     # Given: an SSE provider that deliberately holds its second audio chunk.
 
     bridge = _bridge(_DelayedAsr())
@@ -293,7 +293,7 @@ async def _agent_plan_streaming_proof() -> None:
 
     bridge.set_output_callback(output)
     task = asyncio.create_task(
-        bridge.speak_agent_plan(
+        bridge.speak_response(
             StreamKey("session-streaming", "stream-streaming"),
             "agent reply",
             CancellationEpoch(0),
@@ -321,7 +321,7 @@ async def _agent_plan_streaming_proof() -> None:
     assert await task is True
 
 
-async def _agent_plan_output_epoch_proof() -> None:
+async def _response_output_epoch_proof() -> None:
     # Given: a completed output lease at generation zero while Mic input remains
     # at epoch zero for the next ASR final.
 
@@ -330,7 +330,7 @@ async def _agent_plan_output_epoch_proof() -> None:
     hub = RtpHub(transport, onsite_bridge=bridge)
     scheduler = SessionScheduler(
         session_id=SessionId("session-onsite-runtime"),
-        turn_id_prefix="turn-agent-plan-output",
+        turn_id_prefix="turn-response-output",
     )
     fence = SchedulerOutputFence(scheduler)
     hub.set_output_fence(fence)
@@ -360,7 +360,7 @@ async def _agent_plan_output_epoch_proof() -> None:
     # When: a new accepted Brain reply is synthesized from the unchanged Mic
     # input epoch.
 
-    emitted = await bridge.speak_agent_plan(
+    emitted = await bridge.speak_response(
         stream, "agent reply", CancellationEpoch(0), turn_id, lambda: True
     )
     await asyncio.sleep(0)

@@ -69,7 +69,7 @@ class OnsiteBridge(Protocol):
         callback: Callable[[StreamKey, CancellationEpoch], bool],
     ) -> None: ...
 
-    def set_agent_plan_output_preparer(
+    def set_response_output_preparer(
         self,
         callback: Callable[
             [StreamKey, CancellationEpoch, str], Awaitable[CancellationEpoch | None]
@@ -369,8 +369,8 @@ class RtpHub:
 
         if bridge is not None:
             bridge.set_output_authorizer(self.authorize_onsite_output)
-            bridge.set_agent_plan_output_preparer(
-                self.prepare_onsite_agent_plan_output
+            bridge.set_response_output_preparer(
+                self.prepare_onsite_response_output
             )
 
     def authorize_onsite_output(
@@ -403,7 +403,7 @@ class RtpHub:
 
         return lease.cancellation_epoch == epoch
 
-    def allocate_onsite_agent_plan_output(
+    def allocate_onsite_response_output(
         self, stream: StreamKey, input_epoch: CancellationEpoch, turn_id: str
     ) -> CancellationEpoch | None:
         """Allocate the output lease epoch for a finalized Brain reply.
@@ -420,7 +420,7 @@ class RtpHub:
         lease = output_fence.activate_for_turn(
             stream=stream,
             segment_id=SegmentId(
-                f"onsite-agent-plan-{stream.stream_id}-{int(input_epoch)}"
+                f"onsite-response-{stream.stream_id}-{int(input_epoch)}"
             ),
             turn_id=turn_id,
         )
@@ -435,7 +435,7 @@ class RtpHub:
             task.add_done_callback(self._output_command_tasks.discard)
         return lease.cancellation_epoch
 
-    async def prepare_onsite_agent_plan_output(
+    async def prepare_onsite_response_output(
         self, stream: StreamKey, input_epoch: CancellationEpoch, turn_id: str
     ) -> CancellationEpoch | None:
         """Admit a prepared first frame without interrupting current playback.
@@ -448,7 +448,7 @@ class RtpHub:
         if output_fence is None:
             return input_epoch
         if not output_fence.has_active_lease(stream):
-            return self.allocate_onsite_agent_plan_output(stream, input_epoch, turn_id)
+            return self.allocate_onsite_response_output(stream, input_epoch, turn_id)
         correlation = self._correlations.get(stream)
         if (
             correlation is None
