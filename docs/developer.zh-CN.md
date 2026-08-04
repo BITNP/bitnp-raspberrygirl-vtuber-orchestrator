@@ -73,6 +73,12 @@ Orchestrator 的调度器把工作分为 reflex、interactive、deliberative 和
 任务。替换播放必须先获首帧和匹配的 Sound flush ACK；成功时先取消旧字幕 timeline，
 失败则旧音频与旧 timeline 都保持。
 
+迁移期间通过 `ORCHESTRATOR_RESPONSE_EXECUTION_MODE` 按 session 选择
+`legacy_execute`、`new_shadow` 或 `new_execute`（默认）。`new_shadow` 运行新模型、
+最小 proposal 解析和 cue 编译，并记录脱敏诊断；它绝不执行 MCP、TTS、Frontend、
+context 或 memory 写入。若影子模式缺少新协调器，运行时 fail-closed 拒绝输入，不能回落
+到 legacy 副作用路径。
+
 Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 保持回放和健康检查能力。Frontend 不参与 onsite audio loop；字幕 cue 在协议层准备就绪，但不要把同步字幕渲染描述为已完成能力。
 
 ## 关键技术细节
