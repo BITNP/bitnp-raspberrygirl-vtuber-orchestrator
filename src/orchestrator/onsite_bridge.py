@@ -702,9 +702,9 @@ class OnsiteExplainerBridge:
     ) -> bool:
         """Synthesize one accepted Brain reply and deliver paced RTP to Sound.
 
-        ``output_started`` commits the scheduler task after an output lease has
-        been granted and before paced playback begins.  Later user input can
-        supersede playback without leaving the task pending forever.
+        ``output_started`` commits the scheduler task only after the first
+        valid RTP frame has crossed the output adapter.  This keeps context and
+        caption effects behind the same first-frame boundary as playback.
         """
         cancellation = CancellationToken()
         try:
@@ -731,12 +731,14 @@ class OnsiteExplainerBridge:
                 packet for chunk in chunks for packet in packetizer.push(chunk)
             )
             packets += packetizer.finish()
-            if not packets or not output_started():
+            if not packets:
                 return False
             loop = asyncio.get_running_loop()
             deadline = loop.time()
-            for packet in packets:
+            for index, packet in enumerate(packets):
                 await self.output(stream, output_epoch, packet)
+                if index == 0 and not output_started():
+                    return False
                 deadline += 0.02
                 delay = deadline - loop.time()
                 if delay > 0:
@@ -770,12 +772,12 @@ class OnsiteExplainerBridge:
                 return True
             if output_epoch is None:
                 return False
-            if not committed:
-                committed = output_started()
-                if not committed:
-                    return False
-            for packet in packets:
+            for _index, packet in enumerate(packets):
                 await self.output(stream, output_epoch, packet)
+                if not committed:
+                    committed = output_started()
+                    if not committed:
+                        return False
                 deadline += 0.02
                 delay = deadline - loop.time()
                 if delay > 0:

@@ -276,15 +276,18 @@ async def _agent_plan_streaming_proof() -> None:
     tts = _StreamingTts()
     bridge.tts = tts
     packets: list[bytes] = []
+    timeline: list[str] = []
     started = False
 
     async def output(
         _stream: StreamKey, _epoch: CancellationEpoch, packet: bytes
     ) -> None:
         packets.append(packet)
+        timeline.append("output")
 
     def output_started() -> bool:
         nonlocal started
+        timeline.append("started")
         started = True
         return True
 
@@ -305,10 +308,12 @@ async def _agent_plan_streaming_proof() -> None:
     _ = await asyncio.to_thread(tts.first_chunk_ready.wait)
     await asyncio.sleep(0)
 
-    # Then: TTS is already committed and its first RTP frame has been emitted.
+    # Then: TTS commits only after the first RTP frame reaches the output
+    # adapter, so a timeline/context callback cannot precede actual audio.
 
     assert started is True
     assert len(packets) == 1
+    assert timeline == ["output", "started"]
     assert task.done() is False
 
     tts.release_second_chunk.set()
