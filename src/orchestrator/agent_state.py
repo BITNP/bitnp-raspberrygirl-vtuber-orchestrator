@@ -138,6 +138,14 @@ class TurnCoordinator:
             StateEffect.FINISH_AUDIO,
         )
 
+    def complete_without_output(
+        self, *, turn_id: str, epoch: int
+    ) -> StateTransition:
+        """Close an intentionally effect-free shadow evaluation."""
+        return self._advance(
+            turn_id, epoch, {TurnPhase.REASONING}, TurnPhase.COMPLETED
+        )
+
     def cancel(self, *, turn_id: str, epoch: int) -> StateTransition:
         return self._advance(
             turn_id,

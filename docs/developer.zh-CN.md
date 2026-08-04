@@ -82,7 +82,8 @@ lease 校验的 `finished` 事件触发；TTS provider 完成或重复/过期 fi
 迁移期间通过 `ORCHESTRATOR_RESPONSE_EXECUTION_MODE` 按 session 选择
 `legacy_execute`、`new_shadow` 或 `new_execute`（默认）。`new_shadow` 运行新模型、
 最小 proposal 解析和 cue 编译，并记录脱敏诊断；它绝不执行 MCP、TTS、Frontend、
-context 或 memory 写入。若影子模式缺少新协调器，运行时 fail-closed 拒绝输入，不能回落
+context 或 memory 写入。每个影子 turn 会审计文本回退、intent、cue 拒绝和无效果完成状态，
+用于 replay 准入；若影子模式缺少新协调器，运行时 fail-closed 拒绝输入，不能回落
 到 legacy 副作用路径。
 `new_execute` 若缺少 Gate 或 ResponseCoordinator 也同样 fail-closed；不会隐式构造
 mock AgentPlan pipeline 或回退到 legacy 执行。`legacy_execute` 仅允许显式迁移/回滚配置。

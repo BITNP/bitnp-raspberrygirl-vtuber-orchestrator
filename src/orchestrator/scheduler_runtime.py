@@ -1044,9 +1044,10 @@ class SessionRuntime:
                 allowed_expressions=envelope.allowed_expressions,
             )
             outcome = (
-                f"intent={initial.intent};cues={len(compiled.cues)};"
+                f"intent={initial.intent};fallback={initial.used_text_fallback};"
+                f"cues={len(compiled.cues)};"
                 f"rejected_cues={compiled.rejected_cues};"
-                f"empty={not compiled.spoken_text.strip()}"
+                f"empty={not compiled.spoken_text.strip()};phase=completed"
             )
             self.operational_journal.append(
                 OperationalRecord(
@@ -1058,6 +1059,9 @@ class SessionRuntime:
                     task_id=str(response_task_id),
                     outcome=outcome,
                 )
+            )
+            _ = self.turn_coordinator.complete_without_output(
+                turn_id=str(turn_id), epoch=envelope.cancellation_epoch
             )
             return
 

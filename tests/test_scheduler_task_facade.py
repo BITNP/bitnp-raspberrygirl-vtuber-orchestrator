@@ -700,10 +700,16 @@ def test_new_shadow_never_executes_selected_tool_or_creates_effect_tasks() -> No
         TaskId("response-llm-initial-turn-0001"),
     ]
     assert runtime.interaction_ingress.data.context.snapshot.entries == ()
-    assert any(
-        record.stage == "response_shadow"
+    shadow_record = next(
+        record
         for record in runtime.operational_journal.records
+        if record.stage == "response_shadow"
     )
+    assert shadow_record.outcome == (
+        "intent=knowledge;fallback=False;cues=0;rejected_cues=0;"
+        "empty=True;phase=completed"
+    )
+    assert runtime.response_turn_state.phase is TurnPhase.COMPLETED
 
 
 def test_memory_extraction_runs_only_after_tts_output_is_accepted() -> None:
