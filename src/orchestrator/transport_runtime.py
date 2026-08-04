@@ -20,11 +20,7 @@ from orchestrator.comment_ingress import (
     CommentTokenValue,
 )
 from orchestrator.control_ingress import SessionEndControl, parse_session_control
-from orchestrator.frontend_effects import (
-    FrontendEffectDispatcher,
-    send_caption_timeline,
-    send_frontend_operation,
-)
+from orchestrator.frontend_effects import send_caption_timeline
 from orchestrator.ids import (
     SegmentId as SchedulerSegmentId,
 )
@@ -60,7 +56,6 @@ _LOGGER = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from websockets.http11 import Request, Response
 
-    from orchestrator.agent_pipeline import FrontendOperation
     from orchestrator.ids import TurnId
     from orchestrator.observability import OnsiteObservability
     from orchestrator.runtime_contracts import RuntimeOutcome
@@ -207,10 +202,6 @@ class TransportRuntime:
         bridge = self._onsite_bridge
         if isinstance(bridge, OnsiteExplainerBridge):
             bridge.set_asr_final_handler(self.receive_onsite_asr_final)
-
-        session_runtime.agent_effect_dispatcher = FrontendEffectDispatcher(
-            self._send_frontend_operation
-        )
 
     def set_session_runtime_factory(self, factory: SessionRuntimeFactory) -> None:
         self._session_runtime_factory = factory
@@ -659,20 +650,6 @@ class TransportRuntime:
         runtime = factory(SessionId(session_id))
         self.set_session_runtime(runtime)
         return runtime
-
-    async def _send_frontend_operation(
-        self,
-        event_type: str,
-        operation: FrontendOperation,
-        session_id: SessionId,
-        turn_id: TurnId,
-    ) -> None:
-        connection = self._frontend_connections.get(str(session_id))
-        if connection is None:
-            return
-        await send_frontend_operation(
-            connection.send, event_type, operation, session_id, turn_id
-        )
 
     async def _send_caption_timeline(
         self,
