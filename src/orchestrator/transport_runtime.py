@@ -171,6 +171,8 @@ class TransportRuntime:
 
         self._agent_tts_tasks: set[asyncio.Task[None]] = set()
 
+        self._preoutput_agent_tts: dict[tuple[str, str], asyncio.Task[None]] = {}
+
         self._session_runtime: SessionRuntime | None = None
 
         self._session_runtimes: dict[str, SessionRuntime] = {}
@@ -190,6 +192,12 @@ class TransportRuntime:
         )
 
         self.set_output_fence(session_runtime.output_fence)
+
+        session_runtime.set_preoutput_tts_cancellation(
+            lambda turn_id: self._cancel_preoutput_agent_tts(
+                str(session_runtime.scheduler.snapshot.session_id), str(turn_id)
+            )
+        )
 
         self._hub.set_voice_evidence_callback(session_runtime.receive_voice_evidence)
 
@@ -246,6 +254,27 @@ class TransportRuntime:
         )
         self._agent_tts_tasks.add(task)
         task.add_done_callback(self._agent_tts_tasks.discard)
+        turn_id = outcome.turn_id
+        if turn_id is None:
+            return
+        key = (str(session_runtime.scheduler.snapshot.session_id), str(turn_id))
+        self._preoutput_agent_tts[key] = task
+        task.add_done_callback(
+            lambda completed, task_key=key: self._release_preoutput_agent_tts(
+                task_key, completed
+            )
+        )
+
+    def _cancel_preoutput_agent_tts(self, session_id: str, turn_id: str) -> None:
+        task = self._preoutput_agent_tts.get((session_id, turn_id))
+        if task is not None and not task.done():
+            _ = task.cancel()
+
+    def _release_preoutput_agent_tts(
+        self, key: tuple[str, str], task: asyncio.Task[None]
+    ) -> None:
+        if self._preoutput_agent_tts.get(key) is task:
+            del self._preoutput_agent_tts[key]
 
     async def _run_agent_tts(
         self,

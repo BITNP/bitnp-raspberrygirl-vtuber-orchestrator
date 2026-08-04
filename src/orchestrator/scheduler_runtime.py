@@ -258,6 +258,10 @@ class SessionRuntime:
 
     agent_effect_dispatcher: AgentEffectDispatcher | None = None
 
+    # Transport owns raw provider coroutines; the scheduler tells it only when
+    # a TTS task is still pre-output and therefore safe to stop.
+    preoutput_tts_cancellation: Callable[[TurnId], None] | None = None
+
     clock: Callable[[], int] = _monotonic_ms
 
     cancellation_epoch: CancellationEpoch = field(
@@ -409,7 +413,26 @@ class SessionRuntime:
     def _advance_turn_epoch(self) -> None:
         """Fence and cancel unfinished work before a newer turn can run."""
         self.cancellation_epoch = CancellationEpoch(int(self.cancellation_epoch) + 1)
-        _ = self.task_registry.cancel_pending(reason="superseded_turn")
+        cancelled = self.task_registry.cancel_pending(reason="superseded_turn")
+        self._cancel_preoutput_tts(cancelled)
+
+    def set_preoutput_tts_cancellation(
+        self, callback: Callable[[TurnId], None] | None
+    ) -> None:
+        """Bind the transport's provider-cancellation handle to this session."""
+        self.preoutput_tts_cancellation = callback
+
+    def _cancel_preoutput_tts(self, cancelled: tuple[TaskRecord, ...]) -> None:
+        callback = self.preoutput_tts_cancellation
+        if callback is None:
+            return
+        for record in cancelled:
+            task_id = record.request.task_id
+            if (
+                task_id in self._agent_tts_text
+                and task_id in self._pending_response_commits
+            ):
+                callback(record.request.turn_id)
 
     def receive_comment(self, proposal: CommentProposal) -> RuntimeOutcome:
         correlation = proposal.correlation
@@ -1892,7 +1915,8 @@ class SessionRuntime:
         """Cancel session work and erase session-owned durable and transient state."""
         if self._ended:
             return self._reject(correlation, "session_ended")
-        _ = self.task_registry.cancel_pending(reason="session_ended")
+        cancelled = self.task_registry.cancel_pending(reason="session_ended")
+        self._cancel_preoutput_tts(cancelled)
         for command_id in tuple(self._active_deck_tasks.values()):
             _ = self.deck_dispatcher.cancel(command_id)
         self._deck_intents.clear()
