@@ -492,7 +492,7 @@ class OnsiteStreamActor:
                         chunk,
                         item.correlation,
                         packetizer,
-                        chunks.answer_text[:240],
+                        chunks.answer_text,
                         item.state_epoch,
                     )
                 )
@@ -505,7 +505,7 @@ class OnsiteStreamActor:
                     None,
                     item.correlation,
                     packetizer,
-                    chunks.answer_text[:240],
+                    chunks.answer_text,
                     item.state_epoch,
                 )
             )
@@ -618,7 +618,7 @@ class OnsiteStreamActor:
                                 buffered_chunk,
                                 item.correlation,
                                 packetizer,
-                                answer.answer_text[:240],
+                                answer.answer_text,
                                 item.state_epoch,
                             )
                         ):
@@ -631,7 +631,7 @@ class OnsiteStreamActor:
                         chunk,
                         item.correlation,
                         packetizer,
-                        answer.answer_text[:240],
+                        answer.answer_text,
                         item.state_epoch,
                     )
                 ):
@@ -684,7 +684,7 @@ class OnsiteStreamActor:
                         buffered_chunk,
                         item.correlation,
                         packetizer,
-                        answer.answer_text[:240],
+                        answer.answer_text,
                         item.state_epoch,
                     )
                 ):
@@ -695,7 +695,7 @@ class OnsiteStreamActor:
                 None,
                 item.correlation,
                 packetizer,
-                answer.answer_text[:240],
+                answer.answer_text,
                 item.state_epoch,
             )
         ):
@@ -772,7 +772,6 @@ class OnsiteStreamActor:
                 if finisher is not None:
                     await finisher(self.stream, item.epoch)
                 _ = self._state.audio_finished(item.state_epoch)
-                self._active_answer_excerpt = ""
                 self._is_playing = False
                 if self._output_epoch == item.epoch:
                     self._output_epoch = None

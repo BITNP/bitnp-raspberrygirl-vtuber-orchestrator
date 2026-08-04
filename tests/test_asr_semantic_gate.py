@@ -57,6 +57,39 @@ def test_gate_only_allows_interrupt_while_audio_is_playing() -> None:
     assert gate.evaluate("请停一下", is_playing=True) is AsrGateDecision.INTERRUPT
 
 
+def test_gate_discards_a_possible_echo_before_calling_the_provider() -> None:
+    calls = 0
+
+    def provider(request: object) -> str:
+        nonlocal calls
+        _ = request
+        calls += 1
+        return '{"decision":"accept"}'
+
+    gate = AsrSemanticGate(provider)
+
+    assert (
+        gate.evaluate(
+            "BitNet 可以在低比特下高效推理",
+            active_answer_excerpt="欢迎使用。BitNet可以在低比特下高效推理。",
+        )
+        is AsrGateDecision.DISCARD
+    )
+    assert calls == 0
+
+
+def test_gate_discards_a_longer_utterance_with_a_previous_answer_fragment() -> None:
+    gate = AsrSemanticGate(lambda request: '{"decision":"accept"}')
+
+    assert (
+        gate.evaluate(
+            "我听到你说BitNet可以在低比特下高效推理、请继续介绍",
+            active_answer_excerpt="BitNet可以在低比特下高效推理、同时减少内存占用。",
+        )
+        is AsrGateDecision.DISCARD
+    )
+
+
 def test_async_gate_fails_closed_for_non_json_timeout_and_parameter_rejection() -> None:
     async def run() -> tuple[AsrGateDecision, ...]:
         async def response(value: str | BaseException) -> str:
