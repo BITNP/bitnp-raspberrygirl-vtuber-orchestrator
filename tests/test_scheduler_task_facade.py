@@ -700,6 +700,14 @@ def test_memory_extraction_runs_only_after_tts_output_is_accepted() -> None:
     memory_task = runtime.task_registry.task(TaskId("memory-extract-turn-0001"))
     assert memory_task is not None
     assert memory_task.state is TaskState.COMPLETED
+    compiled = next(
+        record
+        for record in runtime.operational_journal.records
+        if record.stage == "response_compiled"
+    )
+    assert compiled.outcome == (
+        "intent=answer;fallback=False;cues=0;rejected_cues=0;empty=False;tool=False"
+    )
 
 
 def test_context_compaction_is_a_maintenance_task_after_audio_start() -> None:

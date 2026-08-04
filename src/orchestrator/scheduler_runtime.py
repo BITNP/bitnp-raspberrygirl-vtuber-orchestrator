@@ -1186,6 +1186,24 @@ class SessionRuntime:
             allowed_actions=envelope.allowed_actions,
             allowed_expressions=envelope.allowed_expressions,
         )
+        self.operational_journal.append(
+            OperationalRecord(
+                stage="response_compiled",
+                trace_id=str(correlation.trace_id),
+                session_id=str(correlation.session_id),
+                turn_id=str(envelope.turn_id),
+                segment_id=str(envelope.segment_id),
+                task_id=str(parent_task_id),
+                outcome=(
+                    f"intent={response.proposal.intent};"
+                    f"fallback={response.proposal.used_text_fallback};"
+                    f"cues={len(parsed.cues)};"
+                    f"rejected_cues={parsed.rejected_cues};"
+                    f"empty={not parsed.spoken_text.strip()};"
+                    f"tool={response.tool_request is not None}"
+                ),
+            )
+        )
         if not parsed.spoken_text.strip():
             _LOGGER.debug("response_rejected_empty turn=%s", envelope.turn_id)
             return
