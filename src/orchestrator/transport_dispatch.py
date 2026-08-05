@@ -201,6 +201,17 @@ class TransportControlDispatch:
                 waiter = self._ready_waiters.pop(stream, None)
                 if waiter is not None and not waiter.done():
                     waiter.set_result(None)
+                    _LOGGER.debug(
+                        "control_ready_admitted session=%s stream=%s",
+                        session_id,
+                        stream_id,
+                    )
+                else:
+                    _LOGGER.debug(
+                        "control_ready_unmatched session=%s stream=%s",
+                        session_id,
+                        stream_id,
+                    )
                 return
 
             case StreamState(

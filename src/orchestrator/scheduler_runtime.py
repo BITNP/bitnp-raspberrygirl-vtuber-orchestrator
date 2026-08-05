@@ -1487,6 +1487,19 @@ class SessionRuntime:
             source_id=ContextSourceId(audience_input.trace_id),
         )
         task_id = TaskId(f"response-tts-{envelope.turn_id}")
+        self._pending_response_commits[task_id] = _PendingResponseCommit(
+            provenance,
+            audience_input.text,
+            parsed.spoken_text,
+            parsed.marked_text,
+            response.observation if response.tool_request is not None else None,
+        )
+        # Accepted audience input and the validated Brain reply belong in
+        # transient context even when synthesis later fails.  Commit them
+        # before capturing the TTS task's data snapshot; doing this after task
+        # admission makes the task stale against its own context write and
+        # rejects output immediately after the first RTP frame.
+        pending_commit = self._commit_response_context(task_id)
         outcome = self.schedule_task(
             TaskRequest(
                 task_id=task_id,
@@ -1503,26 +1516,21 @@ class SessionRuntime:
         )
         if outcome.accepted and self.executor.claim(task_id) is not None:
             self._agent_tts_text[task_id] = parsed.spoken_text
-            self._pending_response_commits[task_id] = _PendingResponseCommit(
-                provenance,
-                audience_input.text,
-                parsed.spoken_text,
-                parsed.marked_text,
-                response.observation if response.tool_request is not None else None,
-            )
-            self._commit_response_after_output_started(task_id, correlation)
+            if pending_commit is not None:
+                self._schedule_memory_extraction(pending_commit, task_id, correlation)
+                self._schedule_context_compaction(pending_commit, task_id, correlation)
         else:
             _ = self.cancel_task(task_id, correlation)
             _ = self.turn_coordinator.fail(
                 turn_id=str(envelope.turn_id), epoch=envelope.cancellation_epoch
             )
 
-    def _commit_response_after_output_started(
-        self, task_id: TaskId, correlation: EventCorrelation
-    ) -> None:
+    def _commit_response_context(
+        self, task_id: TaskId
+    ) -> _PendingResponseCommit | None:
         pending = self._pending_response_commits.pop(task_id, None)
         if pending is None:
-            return
+            return None
         self.interaction_ingress.data.consider_context(
             FinalizedInput(pending.provenance, pending.input_text)
         )
@@ -1548,8 +1556,7 @@ class SessionRuntime:
             pending.marked_text,
             pending.provenance.segment_id,
         )
-        self._schedule_memory_extraction(pending, task_id, correlation)
-        self._schedule_context_compaction(pending, task_id, correlation)
+        return pending
 
     def _schedule_context_compaction(
         self,
@@ -1985,7 +1992,6 @@ class SessionRuntime:
                 correlation,
             ).accepted
             if committed:
-                self._commit_response_after_output_started(task_id, correlation)
                 _ = self.turn_coordinator.playback_started(
                     turn_id=str(record.request.turn_id),
                     epoch=record.request.cancellation_epoch,

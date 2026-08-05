@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import logging
 from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Literal, Protocol, cast, final, override
@@ -25,6 +27,8 @@ from orchestrator.transport_control import (
     parse_control_event,
 )
 from orchestrator.tts_rtp import generated_ssrc
+
+_LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -174,6 +178,8 @@ class RtpHub:
         ] = {}
 
         self._last_asr_sequences: dict[StreamKey, int] = {}
+
+        self._rtp_egress_counts: dict[tuple[StreamKey, CancellationEpoch], int] = {}
 
         if onsite_bridge is not None:
             onsite_bridge.set_output_callback(self.deliver_generated_rtp)
@@ -568,12 +574,15 @@ class RtpHub:
         if output_fence is None and epoch != CancellationEpoch(
             self._route_generations.get(stream, 0)
         ):
+            self._log_rtp_rejection("route_epoch", stream, epoch, packet)
             return
 
         if output_fence is not None and not output_fence.can_emit(stream, epoch):
+            self._log_rtp_rejection("output_fence", stream, epoch, packet)
             return
 
         if not _is_canonical_rtp(packet):
+            self._log_rtp_rejection("invalid_packet", stream, epoch, packet)
             return
 
         sink = self._sinks.get(stream)
@@ -581,11 +590,51 @@ class RtpHub:
         transport = self._transport
 
         if sink is None or transport is None:
+            self._log_rtp_rejection(
+                "missing_sink" if sink is None else "missing_transport",
+                stream,
+                epoch,
+                packet,
+            )
             return
 
         transport.sendto(packet, sink)
 
+        key = (stream, epoch)
+        count = self._rtp_egress_counts.get(key, 0) + 1
+        self._rtp_egress_counts[key] = count
+        if count == 1:
+            _LOGGER.debug(
+                "rtp_egress_started session=%s stream=%s epoch=%d sink=%s:%d %s",
+                stream.session_id,
+                stream.stream_id,
+                int(epoch),
+                sink[0],
+                sink[1],
+                _rtp_packet_summary(packet),
+            )
+
         self._record_rtp("rtp_egress", stream)
+
+    def _log_rtp_rejection(
+        self,
+        reason: str,
+        stream: StreamKey,
+        epoch: CancellationEpoch,
+        packet: bytes,
+    ) -> None:
+        key = (stream, epoch)
+        if self._rtp_egress_counts.get(key, 0) != 0:
+            return
+        self._rtp_egress_counts[key] = -1
+        _LOGGER.debug(
+            "rtp_egress_rejected session=%s stream=%s epoch=%d reason=%s %s",
+            stream.session_id,
+            stream.stream_id,
+            int(epoch),
+            reason,
+            _rtp_packet_summary(packet),
+        )
 
     def _record_rtp(self, stage: OnsiteStage, stream: StreamKey) -> None:
         observability = self._observability
@@ -710,3 +759,11 @@ def _is_canonical_rtp(data: bytes) -> bool:
         and data[0] == RTP_V2_HEADER
         and data[1] & 0x7F == RTP_PAYLOAD_TYPE
     )
+
+
+def _rtp_packet_summary(packet: bytes) -> str:
+    has_header = len(packet) >= RTP_HEADER_BYTES
+    sequence = int.from_bytes(packet[2:4], "big") if has_header else -1
+    ssrc = int.from_bytes(packet[8:12], "big") if has_header else -1
+    digest = hashlib.sha256(packet).hexdigest()[:16]
+    return f"bytes={len(packet)} sequence={sequence} ssrc={ssrc} sha256={digest}"

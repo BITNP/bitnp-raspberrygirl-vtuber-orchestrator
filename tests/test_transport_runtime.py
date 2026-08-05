@@ -7,10 +7,13 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 
+from orchestrator.brain_contracts import AudienceInput, AudienceSource
 from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.config import TrustedLanToken
 from orchestrator.control_ingress import PresentationResultControl
+from orchestrator.execution_envelope import ExecutionEnvelope
 from orchestrator.ids import ConnectionId, SessionId, TraceId
+from orchestrator.ids import SegmentId as AgentSegmentId
 from orchestrator.ids import TurnId as AgentTurnId
 from orchestrator.interactions import (
     CommandId,
@@ -22,8 +25,16 @@ from orchestrator.json_boundary import parse_json_value
 from orchestrator.mcp_adapters import DeckDispatchIntent, DeckEffectResultKind
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.provider_streaming import ProviderCancellationHandle
+from orchestrator.response_contracts import ResponseProposal
+from orchestrator.response_coordinator import CoordinatedResponse
 from orchestrator.scheduler_runtime import SessionRuntime
-from orchestrator.sessions import EventCorrelation, EventSequence
+from orchestrator.sessions import (
+    EventCorrelation,
+    EventSequence,
+    SchedulerEvent,
+    StartTurn,
+    TransitionAccepted,
+)
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
     FlushAcknowledgement,
@@ -31,7 +42,14 @@ from orchestrator.streaming_contracts import (
     StreamKey,
     TurnId,
 )
-from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
+from orchestrator.task_registry import (
+    IdempotencyKey,
+    SchedulerTaskConfig,
+    TaskDeadlineMs,
+    TaskId,
+    TaskKind,
+    TaskRequest,
+)
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import (
     AuthenticatedControl,
@@ -49,7 +67,7 @@ from orchestrator.transport_runtime import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
     from http import HTTPStatus
 
     from websockets.http11 import Response
@@ -660,6 +678,73 @@ def test_onsite_asr_final_is_routed_to_matching_session_runtime() -> None:
 
     assert not asyncio.run(run())
     assert session_runtime.observables.dispatches == ()
+
+
+def test_response_context_commit_does_not_stale_its_own_tts_task() -> None:
+    async def verify() -> None:
+        session_runtime = SessionRuntime.create(
+            session_id=SessionId(SESSION_ID),
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 2),
+        )
+        correlation = EventCorrelation(
+            TraceId("trace-response-tts"), SessionId(SESSION_ID), EventSequence(1)
+        )
+        started = session_runtime.scheduler.apply(
+            StartTurn(
+                expected_revision=session_runtime.scheduler.snapshot.revision,
+                event=SchedulerEvent("audience.input", correlation),
+            )
+        )
+        assert isinstance(started, TransitionAccepted)
+        turn_id = started.accepted_event.turn_id
+        parent_task_id = TaskId("response-llm-test")
+        parent = session_runtime.schedule_task(
+            TaskRequest(
+                task_id=parent_task_id,
+                session_id=SessionId(SESSION_ID),
+                turn_id=turn_id,
+                parent_task_id=None,
+                deadline_ms=TaskDeadlineMs(session_runtime.clock() + 30_000),
+                snapshot_revision=session_runtime.scheduler.snapshot.revision,
+                idempotency_key=IdempotencyKey(str(parent_task_id)),
+                kind=TaskKind.INTERACTIVE,
+                segment_id=AgentSegmentId("segment-response-tts"),
+            ),
+            correlation,
+        )
+        assert parent.accepted
+        assert session_runtime.executor.claim(parent_task_id) is not None
+        audience_input = AudienceInput(
+            SESSION_ID, "trace-response-tts", 1, AudienceSource.ASR, 1, "你好"
+        )
+        envelope = ExecutionEnvelope(
+            session_id=SessionId(SESSION_ID),
+            turn_id=turn_id,
+            segment_id=AgentSegmentId("segment-response-tts"),
+            revision=session_runtime.scheduler.snapshot.revision,
+            cancellation_epoch=int(session_runtime.cancellation_epoch),
+            deadline_ms=session_runtime.clock() + 30_000,
+            allowed_actions=frozenset(),
+            allowed_expressions=frozenset(),
+        )
+        session_runtime._apply_coordinated_response(  # pyright: ignore[reportPrivateUsage]
+            CoordinatedResponse(ResponseProposal("你好!", "answer")),
+            audience_input,
+            envelope,
+            correlation,
+            parent_task_id,
+        )
+
+        async def synthesize(text: str, output_started: Callable[[], bool]) -> bool:
+            assert text == "你好!"
+            return output_started()
+
+        assert await session_runtime.run_agent_tts_for_turn(
+            turn_id, synthesize, correlation
+        )
+
+    asyncio.run(verify())
 
 
 def test_onsite_asr_final_cannot_create_an_unregistered_session_runtime() -> None:
