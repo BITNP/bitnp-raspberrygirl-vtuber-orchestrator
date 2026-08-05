@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from http import HTTPStatus
 from time import monotonic_ns
 from typing import TYPE_CHECKING, Literal, Protocol, final, override
+from uuid import uuid4
 
 from websockets.asyncio.server import serve
 
@@ -19,7 +22,11 @@ from orchestrator.comment_ingress import (
     CommentIngressConfig,
     CommentTokenValue,
 )
-from orchestrator.control_ingress import SessionEndControl, parse_session_control
+from orchestrator.control_ingress import (
+    PresentationResultControl,
+    SessionEndControl,
+    parse_session_control,
+)
 from orchestrator.control_roles import (
     MAX_CONTROL_FRAME_BYTES,
     ROLE_SOURCES,
@@ -28,6 +35,7 @@ from orchestrator.control_roles import (
     role_allows,
     valid_session_id,
 )
+from orchestrator.frontend_deck import FrontendDeckEffectExecutor
 from orchestrator.frontend_effects import send_caption_timeline
 from orchestrator.ids import (
     ConnectionId,
@@ -65,7 +73,9 @@ if TYPE_CHECKING:
     from websockets.http11 import Request, Response
 
     from orchestrator.ids import TurnId
+    from orchestrator.mcp_adapters import DeckDispatchIntent
     from orchestrator.observability import OnsiteObservability
+    from orchestrator.provider_streaming import ProviderCancellationHandle
     from orchestrator.runtime_contracts import RuntimeOutcome
     from orchestrator.scheduler_reflex import OutputLease, SchedulerOutputFence
     from orchestrator.scheduler_runtime import SessionRuntime
@@ -135,6 +145,12 @@ class _ControlPeerState:
 class _SessionLease:
     last_activity_ms: int
     owners: set[int]
+
+
+@dataclass(slots=True)
+class _PendingPresentation:
+    owner: FrontendConnection
+    future: asyncio.Future[bool]
 
 
 @final
@@ -212,6 +228,10 @@ class TransportRuntime:
 
         self._frontend_connections: dict[str, FrontendConnection] = {}
 
+        self._pending_presentations: dict[
+            tuple[str, str], _PendingPresentation
+        ] = {}
+
         self._active_timelines: dict[str, tuple[CaptionTimelineCommand, TurnId]] = {}
 
         self._control_peers: dict[int, _ControlPeerState] = {}
@@ -235,6 +255,11 @@ class TransportRuntime:
         )
 
         self._hub.set_voice_evidence_callback(session_runtime.receive_voice_evidence)
+
+        session_runtime.deck_dispatcher.executor = FrontendDeckEffectExecutor(
+            session_runtime.scheduler.snapshot.session_id,
+            self._dispatch_presentation,
+        )
 
         bridge = self._onsite_bridge
         if isinstance(bridge, OnsiteExplainerBridge):
@@ -638,6 +663,13 @@ class TransportRuntime:
 
                         continue
 
+                    presentation_result = parse_session_control(message)
+                    if isinstance(presentation_result, PresentationResultControl):
+                        _ = self.accept_presentation_result(
+                            presentation_result, connection
+                        )
+                        continue
+
                     if session_runtime is not None and session_runtime.receive_control(
                         message
                     ):
@@ -748,6 +780,11 @@ class TransportRuntime:
                     del self._frontend_connections[session_id]
 
             self._control_dispatch.remove_connection(connection)
+            for key, pending in tuple(self._pending_presentations.items()):
+                if pending.owner is connection:
+                    if not pending.future.done():
+                        pending.future.set_result(False)
+                    _ = self._pending_presentations.pop(key, None)
             if state.session_id is not None:
                 lease = self._session_leases.get(state.session_id)
                 if lease is not None:
@@ -814,6 +851,11 @@ class TransportRuntime:
         _ = self._active_timelines.pop(session_id, None)
         self._hub.remove_session(session_id)
         self._control_dispatch.remove_session(session_id)
+        for key, pending in tuple(self._pending_presentations.items()):
+            if key[0] == session_id:
+                if not pending.future.done():
+                    pending.future.set_result(False)
+                _ = self._pending_presentations.pop(key, None)
         for key, task in tuple(self._preoutput_agent_tts.items()):
             if key[0] == session_id:
                 _ = task.cancel()
@@ -829,6 +871,62 @@ class TransportRuntime:
         )
         _ = runtime.end_session(correlation)
         _LOGGER.debug("session_torn_down session=%s reason=%s", session_id, reason)
+
+    async def _dispatch_presentation(
+        self,
+        session_id: SessionId,
+        intent: DeckDispatchIntent,
+        cancellation: ProviderCancellationHandle,
+    ) -> bool:
+        session = str(session_id)
+        connection = self._frontend_connections.get(session)
+        if connection is None or cancellation.cancelled:
+            return False
+        command_id = str(intent.command.command_id)
+        key = (session, command_id)
+        if key in self._pending_presentations:
+            return False
+        remaining_seconds = min(
+            5.0, max(0.0, (intent.deadline_ms - _monotonic_ms()) / 1_000)
+        )
+        if remaining_seconds == 0:
+            return False
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[bool] = loop.create_future()
+        self._pending_presentations[key] = _PendingPresentation(connection, future)
+
+        def cancel_pending() -> None:
+            _ = loop.call_soon_threadsafe(_cancel_future, future)
+
+        release = cancellation.bind(cancel_pending)
+        try:
+            await connection.send(_presentation_envelope(session, intent))
+            async with asyncio.timeout(remaining_seconds):
+                return await future
+        except (OSError, TimeoutError, asyncio.CancelledError):
+            return False
+        finally:
+            release()
+            _ = self._pending_presentations.pop(key, None)
+
+    def accept_presentation_result(
+        self,
+        control: PresentationResultControl,
+        connection: ControlConnection,
+    ) -> bool:
+        session_id = str(control.correlation.session_id)
+        key = (session_id, str(control.result.command_id))
+        pending = self._pending_presentations.get(key)
+        if (
+            pending is None
+            or pending.owner is not connection
+            or control.correlation.session_id
+            != SessionId(session_id)
+            or pending.future.done()
+        ):
+            return False
+        pending.future.set_result(control.result.succeeded)
+        return True
 
     async def _send_caption_timeline(
         self,
@@ -1046,6 +1144,35 @@ def _event_correlation(correlation: EnvelopeIdentity) -> EventCorrelation:
         SessionId(correlation.session_id),
         EventSequence(correlation.seq),
     )
+
+
+def _presentation_envelope(session_id: str, intent: DeckDispatchIntent) -> str:
+    command = intent.command
+    return json.dumps(
+        {
+            "schema_version": "1.0.0",
+            "event_type": f"presentation.{command.kind.value}.command",
+            "event_id": str(uuid4()),
+            "source": "orchestrator",
+            "time": datetime.now(UTC).isoformat(),
+            "trace_id": f"presentation-{command.command_id}",
+            "session_id": session_id,
+            "seq": 0,
+            "data": {
+                "command_id": str(command.command_id),
+                "deck_id": command.deck_id,
+                "deck_version": command.deck_version,
+                "page": command.page,
+            },
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _cancel_future(future: asyncio.Future[bool]) -> None:
+    if not future.done():
+        _ = future.cancel()
 
 
 def _monotonic_ms() -> int:

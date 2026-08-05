@@ -9,11 +9,21 @@ import pytest
 
 from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.config import TrustedLanToken
-from orchestrator.ids import ConnectionId, SessionId
+from orchestrator.control_ingress import PresentationResultControl
+from orchestrator.ids import ConnectionId, SessionId, TraceId
 from orchestrator.ids import TurnId as AgentTurnId
+from orchestrator.interactions import (
+    CommandId,
+    PresentationCommand,
+    PresentationCommandKind,
+    PresentationResult,
+)
 from orchestrator.json_boundary import parse_json_value
+from orchestrator.mcp_adapters import DeckDispatchIntent, DeckEffectResultKind
 from orchestrator.pipeline_contracts import ASRAudienceEvent
+from orchestrator.provider_streaming import ProviderCancellationHandle
 from orchestrator.scheduler_runtime import SessionRuntime
+from orchestrator.sessions import EventCorrelation, EventSequence
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
     FlushAcknowledgement,
@@ -457,6 +467,50 @@ def test_finished_playback_notifies_turn_reducer_only_after_fence_accepts() -> N
     assert finished_streams == [
         StreamKey(session_id=SESSION_ID, stream_id=STREAM_ID)
     ]
+
+
+def test_presentation_dispatch_waits_for_owning_frontend_result() -> None:
+    async def verify() -> None:
+        runtime = TransportRuntime(_loopback_config())
+        session_runtime = SessionRuntime.create(
+            session_id=SessionId(SESSION_ID),
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        )
+        runtime.set_session_runtime(session_runtime)
+        frontend = _ControlConnection(())
+        wrong_frontend = _ControlConnection(())
+        runtime.register_frontend_connection(SessionId(SESSION_ID), frontend)
+        command = PresentationCommand(
+            PresentationCommandKind.LOAD,
+            "deck-1",
+            1,
+            CommandId("presentation-1"),
+        )
+        task = asyncio.create_task(
+            session_runtime.deck_dispatcher.executor.dispatch_async(
+                DeckDispatchIntent(command, 10**15),
+                ProviderCancellationHandle(),
+            )
+        )
+        await asyncio.sleep(0)
+        assert len(frontend.sent) == 1
+        envelope = parse_json_value(frontend.sent[0])
+        assert isinstance(envelope, dict)
+        assert envelope["event_type"] == "presentation.load.command"
+        result = PresentationResultControl(
+            PresentationResult(command.command_id, succeeded=True),
+            EventCorrelation(
+                TraceId("frontend-result"),
+                SessionId(SESSION_ID),
+                EventSequence(1),
+            ),
+        )
+        assert not runtime.accept_presentation_result(result, wrong_frontend)
+        assert runtime.accept_presentation_result(result, frontend)
+        assert (await task).kind is DeckEffectResultKind.SUCCEEDED
+
+    asyncio.run(verify())
 
 
 def test_runtime_reports_ready_after_listeners_start_and_closes_them() -> None:

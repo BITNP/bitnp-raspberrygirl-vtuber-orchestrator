@@ -47,7 +47,7 @@ from orchestrator.mcp_adapters import (
     DeckDispatchIntent,
     DeckDispatchOutcome,
     DeckEffectDispatcher,
-    LocalDeckEffectExecutor,
+    TestLocalDeckEffectExecutor,
 )
 from orchestrator.memory import (
     MemoryCategory,
@@ -352,7 +352,7 @@ class SessionRuntime:
             output_fence=SchedulerOutputFence(scheduler),
             interaction_ingress=interaction_ingress,
             deck_dispatcher=DeckEffectDispatcher(
-                interaction_ingress.reducer, LocalDeckEffectExecutor()
+                interaction_ingress.reducer, TestLocalDeckEffectExecutor()
             ),
             mode_policy=AdaptiveAgentPolicy(),
             clock=clock,

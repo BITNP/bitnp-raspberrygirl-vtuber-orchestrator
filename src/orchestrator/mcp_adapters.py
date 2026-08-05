@@ -67,7 +67,7 @@ class DeckEffectExecutor(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class LocalDeckEffectExecutor:
+class TestLocalDeckEffectExecutor:
     """Local bounded deck executor used by the runtime composition root."""
 
     def dispatch(self, intent: DeckDispatchIntent) -> DeckEffectResult:
