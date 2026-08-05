@@ -10,10 +10,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from http import HTTPStatus
 from time import monotonic_ns
-from typing import TYPE_CHECKING, Literal, Protocol, final, override
+from typing import TYPE_CHECKING, Literal, Protocol, final, override, runtime_checkable
 from uuid import uuid4
 
 from websockets.asyncio.server import serve
+from websockets.protocol import State
 
 from orchestrator.caption_timeline import CaptionTimelineCancel, CaptionTimelineCommand
 from orchestrator.comment_ingress import (
@@ -107,6 +108,12 @@ class ControlConnection(Protocol):
     def respond(self, status: HTTPStatus, text: str) -> Response: ...
 
     async def send(self, message: str) -> None: ...
+
+
+@runtime_checkable
+class _StatefulControlConnection(Protocol):
+    @property
+    def state(self) -> State: ...
 
 
 class FrontendConnection(Protocol):
@@ -668,7 +675,7 @@ class TransportRuntime:
                             "control_received kind=audience.input peer=%s", peer_ip
                         )
                         await self._receive_comment(
-                            connection, session_runtime, message
+                            connection, state, session_runtime, message
                         )
 
                         continue
@@ -731,7 +738,18 @@ class TransportRuntime:
                             EventSequence(control_event.correlation.seq),
                         )
                         outcome = await runtime.receive_asr_final_async(
-                            event, correlation
+                            event,
+                            correlation,
+                            admission_valid=self._mic_admission_guard(
+                                connection,
+                                state,
+                                runtime,
+                                StreamKey(
+                                    control_event.session_id,
+                                    control_event.stream_id,
+                                ),
+                                int(control_event.cancellation_epoch),
+                            ),
                         )
                         self._schedule_agent_tts(
                             runtime,
@@ -1053,6 +1071,7 @@ class TransportRuntime:
     async def _receive_comment(
         self,
         connection: ControlConnection,
+        state: _ControlPeerState,
         session_runtime: SessionRuntime,
         message: str,
     ) -> None:
@@ -1074,7 +1093,65 @@ class TransportRuntime:
             return
 
         while (proposal := ingress.take_next()) is not None:
-            _ = await session_runtime.receive_comment_async(proposal)
+            _ = await session_runtime.receive_comment_async(
+                proposal,
+                admission_valid=self._comment_admission_guard(
+                    connection, state, session_runtime, proposal.correlation.session_id
+                ),
+            )
+
+    def _audience_owner_valid(
+        self,
+        connection: ControlConnection,
+        state: _ControlPeerState,
+        session_id: str,
+        runtime: SessionRuntime,
+    ) -> bool:
+        current = self._control_peers.get(id(connection))
+        registered_runtime = self._runtime_for_session(
+            session_id, fallback=self._session_runtime
+        )
+        return bool(
+            current is state
+            and state.session_id == session_id
+            and _connection_is_open(connection)
+            and registered_runtime is runtime
+        )
+
+    def _mic_admission_guard(
+        self,
+        connection: ControlConnection,
+        state: _ControlPeerState,
+        runtime: SessionRuntime,
+        stream: StreamKey,
+        input_epoch: int,
+    ) -> Callable[[], bool]:
+        owner = ConnectionId(str(id(connection)))
+
+        def valid() -> bool:
+            return bool(
+                self._audience_owner_valid(
+                    connection, state, stream.session_id, runtime
+                )
+                and self._hub.owns_mic_input(stream, owner)
+                and self._hub.input_epoch(stream) == input_epoch
+            )
+
+        return valid
+
+    def _comment_admission_guard(
+        self,
+        connection: ControlConnection,
+        state: _ControlPeerState,
+        runtime: SessionRuntime,
+        session_id: SessionId,
+    ) -> Callable[[], bool]:
+        def valid() -> bool:
+            return self._audience_owner_valid(
+                connection, state, str(session_id), runtime
+            )
+
+        return valid
 
     def route_datagram(self, data: bytes, peer: tuple[str, int]) -> bool:
         routed = self._hub.route_datagram(data, peer)
@@ -1229,6 +1306,13 @@ def _connection_authorization(connection: ControlConnection) -> str | None:
     value = candidate("Authorization") if callable(candidate) else None
 
     return value if isinstance(value, str) else None
+
+
+def _connection_is_open(connection: ControlConnection) -> bool:
+    """Read live websocket state without trusting stale ownership maps."""
+    if isinstance(connection, _StatefulControlConnection):
+        return connection.state is State.OPEN
+    return True
 
 
 def _control_envelope(raw_message: str) -> dict[str, JsonValue] | None:

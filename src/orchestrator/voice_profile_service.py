@@ -125,13 +125,41 @@ class VoiceProfileService:
         return tuple(
             profile_id
             for profile_id, record in self._records.items()
-            if record.lifecycle is ProfileLifecycle.ACTIVE and record.confirmed
+            if record.lifecycle is ProfileLifecycle.ACTIVE
+            and record.confirmed
+            and not record.re_enrollment_required
         )
 
     def encrypted_template(
         self, profile_id: VoiceProfileId
     ) -> EncryptedVoiceTemplate | None:
         return self._vault.load_encrypted(profile_id)
+
+    @property
+    def re_enrollment_required_ids(self) -> frozenset[VoiceProfileId]:
+        return frozenset(
+            profile_id
+            for profile_id, record in self._records.items()
+            if record.re_enrollment_required
+        )
+
+    def mark_re_enrollment_required(self, profile_id: VoiceProfileId) -> None:
+        record = self._records.get(profile_id)
+        if record is None or record.re_enrollment_required:
+            return
+        profile_revision = ProfileRevision(self._profile_revision + 1)
+        updated = replace(
+            record,
+            re_enrollment_required=True,
+            revision=profile_revision,
+            audit=(
+                *record.audit,
+                ProfileAuditEntry("re_enrollment_required", profile_revision),
+            ),
+        )
+        records = dict(self._records)
+        records[profile_id] = updated
+        self._publish(records, profile_revision, self._consent_revision)
 
     def correct(self, correction: ProfileCorrection) -> ProfileRecognitionResult:
         record = self._records.get(correction.profile_id)

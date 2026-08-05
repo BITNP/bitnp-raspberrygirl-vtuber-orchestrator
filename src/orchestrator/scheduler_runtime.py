@@ -234,6 +234,7 @@ class _PendingAudienceAdmission:
     correlation: EventCorrelation
     run: Callable[[], Coroutine[None, None, RuntimeOutcome]]
     result: asyncio.Future[RuntimeOutcome]
+    admission_valid: Callable[[], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,7 +486,10 @@ class SessionRuntime:
 
     @property
     def re_enrollment_required(self) -> frozenset[VoiceProfileId]:
-        return frozenset(self._re_enrollment_required)
+        return frozenset(
+            self._re_enrollment_required
+            | set(self.interaction_ingress.data.profiles.re_enrollment_required_ids)
+        )
 
     def _recognize_voice(
         self, event: ASRAudienceEvent, correlation: EventCorrelation
@@ -530,6 +534,14 @@ class SessionRuntime:
                 )
             except (InvalidTag, VoiceTemplateError, ValueError):
                 self._re_enrollment_required.add(profile_id)
+                try:
+                    profiles.mark_re_enrollment_required(profile_id)
+                except OSError:
+                    _LOGGER.exception(
+                        "voice_profile_status_write_failed session=%s profile=%s",
+                        correlation.session_id,
+                        profile_id,
+                    )
         matched = match_voice(
             evidence.embedding_model_revision,
             evidence.embedding,
@@ -780,7 +792,10 @@ class SessionRuntime:
         return self._reject(proposal.correlation, "async_response_required")
 
     async def receive_comment_async(
-        self, proposal: CommentProposal
+        self,
+        proposal: CommentProposal,
+        *,
+        admission_valid: Callable[[], bool] = lambda: True,
     ) -> RuntimeOutcome:
         coordinator = self.async_response_coordinator
         gate = self.async_agent_gate
@@ -807,6 +822,7 @@ class SessionRuntime:
             lambda: self._admit_comment(
                 coordinator, proposal, audience_input, correlation
             ),
+            admission_valid=admission_valid,
         )
 
     async def _admit_comment(
@@ -843,6 +859,8 @@ class SessionRuntime:
         audience_input: BrainAudienceInput,
         correlation: EventCorrelation,
         admission: Callable[[], Coroutine[None, None, RuntimeOutcome]],
+        *,
+        admission_valid: Callable[[], bool] = lambda: True,
     ) -> RuntimeOutcome:
         if self._ended:
             return self._reject(correlation, "session_ended")
@@ -852,6 +870,7 @@ class SessionRuntime:
         ):
             return self._reject(correlation, "duplicate_correlation")
         self._pending_correlations.add(correlation)
+        expected_revision = self.scheduler.snapshot.revision
         try:
             decision = await gate.evaluate(
                 audience_input,
@@ -878,13 +897,19 @@ class SessionRuntime:
             self._ended
             or str(correlation.session_id) != str(self.scheduler.snapshot.session_id)
             or correlation in self._correlations
+            or self.scheduler.snapshot.revision != expected_revision
+            or not admission_valid()
         ):
             self._pending_correlations.discard(correlation)
             return self._reject(correlation, "audience_admission_stale")
 
         result = asyncio.get_running_loop().create_future()
         pending = _PendingAudienceAdmission(
-            audience_input.source, correlation, admission, result
+            audience_input.source,
+            correlation,
+            admission,
+            result,
+            admission_valid,
         )
         async with self._admission_lock:
             queued = len(self._voice_admissions) + len(self._comment_admissions)
@@ -925,7 +950,12 @@ class SessionRuntime:
                     self._admission_worker = None
                     return
             try:
-                outcome = await pending.run()
+                if self._ended or not pending.admission_valid():
+                    outcome = self._reject(
+                        pending.correlation, "audience_admission_stale"
+                    )
+                else:
+                    outcome = await pending.run()
             except Exception:
                 _LOGGER.exception(
                     "admission_failed trace=%s session=%s seq=%s source=%s rejected",
@@ -2097,6 +2127,8 @@ class SessionRuntime:
         self,
         event: ASRAudienceEvent,
         correlation: EventCorrelation,
+        *,
+        admission_valid: Callable[[], bool] = lambda: True,
     ) -> RuntimeOutcome:
         """Run finalized ASR through the same async Gate and Brain as comments."""
         coordinator = self.async_response_coordinator
@@ -2123,6 +2155,7 @@ class SessionRuntime:
             lambda: self._admit_asr_final(
                 coordinator, event, audience_input, correlation
             ),
+            admission_valid=admission_valid,
         )
 
     async def _admit_asr_final(

@@ -51,6 +51,8 @@ class VoiceProfileRecord:
 
     audit: tuple[ProfileAuditEntry, ...]
 
+    re_enrollment_required: bool = False
+
 
 @dataclass(frozen=True, slots=True)
 class VoiceProfileSnapshot:
@@ -112,6 +114,7 @@ class JsonVoiceProfileStore:
                         {"action": entry.action, "revision": int(entry.revision)}
                         for entry in record.audit
                     ],
+                    "re_enrollment_required": record.re_enrollment_required,
                 }
                 for record in snapshot.records
             ],
@@ -210,6 +213,9 @@ def _record(value: JsonValue, index: int) -> VoiceProfileRecord:
         lifecycle=lifecycle,
         revision=ProfileRevision(_integer(document, "revision")),
         audit=audit,
+        re_enrollment_required=_optional_boolean(
+            document, "re_enrollment_required", default=False
+        ),
     )
 
 
@@ -266,6 +272,14 @@ def _boolean(document: dict[str, JsonValue], field_name: str) -> bool:
         raise ProfileStoreBoundaryError(field_name)
 
     return value
+
+
+def _optional_boolean(
+    document: dict[str, JsonValue], field_name: str, *, default: bool
+) -> bool:
+    if field_name not in document:
+        return default
+    return _boolean(document, field_name)
 
 
 def _fsync_directory(directory: Path) -> None:

@@ -4,7 +4,12 @@ from orchestrator.brain_contracts import AudienceInput, AudienceSource, GateDeci
 from orchestrator.ids import SessionId, TraceId
 from orchestrator.runtime_contracts import RuntimeOutcome
 from orchestrator.scheduler_runtime import SessionRuntime
-from orchestrator.sessions import EventCorrelation, EventSequence
+from orchestrator.sessions import (
+    EventCorrelation,
+    EventSequence,
+    SchedulerEvent,
+    StartTurn,
+)
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 
 
@@ -36,6 +41,24 @@ class _FailOnceGate:
         if not self.failed:
             self.failed = True
             raise RuntimeError
+        return GateDecision.ACCEPT
+
+
+class _BlockedGate:
+    def __init__(self) -> None:
+        self.started: asyncio.Event = asyncio.Event()
+        self.release: asyncio.Event = asyncio.Event()
+
+    async def evaluate(
+        self,
+        audience_input: AudienceInput,
+        *,
+        active_summary: str,
+        recent_turn_context: tuple[str, ...] = (),
+    ) -> GateDecision:
+        _ = audience_input, active_summary, recent_turn_context
+        _ = self.started.set()
+        _ = await self.release.wait()
         return GateDecision.ACCEPT
 
 
@@ -151,5 +174,91 @@ def test_gate_exception_fails_closed_and_later_input_survives() -> None:
 
         assert failed.accepted is False
         assert accepted.accepted is True
+
+    asyncio.run(scenario())
+
+
+def test_gate_result_revalidates_owner_and_scheduler_revision() -> None:
+    async def scenario() -> None:
+        runtime = _runtime()
+        gate = _BlockedGate()
+        owner_valid = True
+        task = asyncio.create_task(
+            runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+                gate,
+                _input(1, AudienceSource.COMMENT),
+                _correlation(1),
+                lambda: asyncio.sleep(
+                    0,
+                    result=RuntimeOutcome(
+                        accepted=True, correlation=_correlation(1)
+                    ),
+                ),
+                admission_valid=lambda: owner_valid,
+            )
+        )
+        _ = await gate.started.wait()
+        owner_valid = False
+        _ = gate.release.set()
+        assert (await task).accepted is False
+
+        second_gate = _BlockedGate()
+        second = asyncio.create_task(
+            runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+                second_gate,
+                _input(2, AudienceSource.COMMENT),
+                _correlation(2),
+                lambda: asyncio.sleep(
+                    0,
+                    result=RuntimeOutcome(
+                        accepted=True, correlation=_correlation(2)
+                    ),
+                ),
+            )
+        )
+        _ = await second_gate.started.wait()
+        snapshot = runtime.scheduler.snapshot
+        _ = runtime.scheduler.apply(
+            StartTurn(
+                expected_revision=snapshot.revision,
+                event=SchedulerEvent("test", _correlation(99)),
+            )
+        )
+        _ = second_gate.release.set()
+        assert (await second).accepted is False
+
+    asyncio.run(scenario())
+
+
+def test_duplicate_gate_race_is_rejected_atomically() -> None:
+    async def scenario() -> None:
+        runtime = _runtime()
+        gate = _BlockedGate()
+        first = asyncio.create_task(
+            runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+                gate,
+                _input(1, AudienceSource.ASR),
+                _correlation(1),
+                lambda: asyncio.sleep(
+                    0,
+                    result=RuntimeOutcome(
+                        accepted=True, correlation=_correlation(1)
+                    ),
+                ),
+            )
+        )
+        _ = await gate.started.wait()
+        duplicate = await runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+            _AcceptGate(),
+            _input(1, AudienceSource.ASR),
+            _correlation(1),
+            lambda: asyncio.sleep(
+                0,
+                result=RuntimeOutcome(accepted=True, correlation=_correlation(1)),
+            ),
+        )
+        _ = gate.release.set()
+        assert duplicate.accepted is False
+        assert (await first).accepted is True
 
     asyncio.run(scenario())

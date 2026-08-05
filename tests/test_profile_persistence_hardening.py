@@ -50,6 +50,21 @@ def test_sessions_keep_profile_metadata_and_templates_isolated(tmp_path: Path) -
     assert second_result == ProfileRecognitionUnknown()
 
 
+def test_re_enrollment_status_survives_restart_and_blocks_matching(
+    tmp_path: Path,
+) -> None:
+    state = _state(tmp_path, SessionId("one"))
+    profile_id = VoiceProfileId("legacy")
+    _ = state.enroll_profile(_enrollment(profile_id, None))
+    _ = state.confirm_profile(profile_id)
+
+    state.profiles.mark_re_enrollment_required(profile_id)
+
+    restarted = _state(tmp_path, SessionId("one"))
+    assert restarted.profiles.re_enrollment_required_ids == frozenset({profile_id})
+    assert restarted.profiles.matchable_profile_ids(now_ms=0) == ()
+
+
 def test_session_storage_key_cannot_escape_state_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
