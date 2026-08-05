@@ -143,6 +143,10 @@ class VoiceProfileService:
             if record.re_enrollment_required
         )
 
+    @property
+    def profile_ids(self) -> tuple[VoiceProfileId, ...]:
+        return tuple(self._records)
+
     def mark_re_enrollment_required(self, profile_id: VoiceProfileId) -> None:
         record = self._records.get(profile_id)
         if record is None or record.re_enrollment_required:

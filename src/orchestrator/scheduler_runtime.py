@@ -483,6 +483,34 @@ class SessionRuntime:
         self._voice_evidence_ttl_ms = evidence_ttl_seconds * 1_000
         self._voice_match_threshold = match_threshold
         self._voice_ambiguity_margin = ambiguity_margin
+        if self._voice_template_protector is not None:
+            self._mark_unreadable_voice_templates(self._voice_template_protector)
+
+    def _mark_unreadable_voice_templates(
+        self, protector: VoiceTemplateProtector
+    ) -> None:
+        profiles = self.interaction_ingress.data.profiles
+        session_id = str(self.scheduler.snapshot.session_id)
+        for profile_id in profiles.profile_ids:
+            encrypted = profiles.encrypted_template(profile_id)
+            if encrypted is None:
+                continue
+            try:
+                _ = protector.decrypt(
+                    session_id=session_id,
+                    profile_id=profile_id,
+                    template=encrypted,
+                )
+            except (InvalidTag, VoiceTemplateError, ValueError):
+                self._re_enrollment_required.add(profile_id)
+                try:
+                    profiles.mark_re_enrollment_required(profile_id)
+                except OSError:
+                    _LOGGER.exception(
+                        "voice_profile_status_write_failed session=%s profile=%s",
+                        session_id,
+                        profile_id,
+                    )
 
     @property
     def re_enrollment_required(self) -> frozenset[VoiceProfileId]:
