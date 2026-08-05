@@ -4,6 +4,7 @@ import asyncio
 import logging
 import wave
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import TYPE_CHECKING, Protocol, cast, override
@@ -750,7 +751,7 @@ class OnsiteExplainerBridge:
         else:
             return True
 
-    async def _speak_streaming_response(  # noqa: C901, PLR0911, PLR0912, PLR0913
+    async def _speak_streaming_response(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         self,
         stream: StreamKey,
         epoch: CancellationEpoch,
@@ -785,9 +786,14 @@ class OnsiteExplainerBridge:
             return True
 
         buffered = bytearray()
+        pending_next: asyncio.Task[Pcm16leChunk | None] | None = None
         try:
             while not cancellation.cancelled:
-                chunk = await asyncio.to_thread(next, synthesis, None)
+                pending_next = asyncio.create_task(
+                    asyncio.to_thread(next, synthesis, None)
+                )
+                chunk = await asyncio.shield(pending_next)
+                pending_next = None
                 if chunk is None:
                     break
                 buffered.extend(chunk.data)
@@ -820,6 +826,12 @@ class OnsiteExplainerBridge:
             )
             if not await emit(packets):
                 return False
+        except asyncio.CancelledError:
+            _ = cancellation.cancel(reason="response_tts_cancelled")
+            if pending_next is not None and not pending_next.done():
+                with suppress(asyncio.CancelledError, OSError, ValueError):
+                    _ = await asyncio.shield(pending_next)
+            raise
         finally:
             close = cast(
                 "Callable[[], object] | None", getattr(synthesis, "close", None)

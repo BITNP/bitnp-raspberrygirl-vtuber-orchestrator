@@ -421,7 +421,7 @@ class RtpHub:
 
         return lease.cancellation_epoch == epoch
 
-    def allocate_onsite_response_output(
+    async def allocate_onsite_response_output(
         self, stream: StreamKey, input_epoch: CancellationEpoch, turn_id: str
     ) -> CancellationEpoch | None:
         """Allocate the output lease epoch for a finalized Brain reply.
@@ -446,11 +446,7 @@ class RtpHub:
             return None
         callback = self._output_command_callback
         if callback is not None:
-            task = asyncio.ensure_future(
-                callback(stream, int(lease.cancellation_epoch))
-            )
-            self._output_command_tasks.add(task)
-            task.add_done_callback(self._output_command_tasks.discard)
+            await callback(stream, int(lease.cancellation_epoch))
         return lease.cancellation_epoch
 
     async def prepare_onsite_response_output(
@@ -466,7 +462,9 @@ class RtpHub:
         if output_fence is None:
             return input_epoch
         if not output_fence.has_active_lease(stream):
-            return self.allocate_onsite_response_output(stream, input_epoch, turn_id)
+            return await self.allocate_onsite_response_output(
+                stream, input_epoch, turn_id
+            )
         correlation = self._correlations.get(stream)
         if (
             correlation is None

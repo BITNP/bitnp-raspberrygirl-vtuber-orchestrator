@@ -167,6 +167,49 @@ class _StreamingTts:
         raise AssertionError(message)
 
 
+@dataclass(slots=True)
+class _CancellableStreamingTts:
+    next_started: threading.Event = field(default_factory=threading.Event)
+    release_next: threading.Event = field(default_factory=threading.Event)
+
+    capability: str = "streaming_sse"
+
+    def stream_pcm16le(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> Iterator[Pcm16leChunk]:
+        _ = (text, voice, ref_audio, ref_text)
+        release = (
+            (lambda: None)
+            if cancellation is None
+            else cancellation.bind(self.release_next.set)
+        )
+        try:
+            self.next_started.set()
+            _ = self.release_next.wait(timeout=1.0)
+            if cancellation is None or not cancellation.cancelled:
+                yield Pcm16leChunk(b"\x10\x20" * 320)
+        finally:
+            release()
+
+    def synthesize(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> SynthesizedAudio:
+        _ = (text, voice, ref_audio, ref_text, cancellation)
+        raise AssertionError
+
+
 def test_runtime_rejects_mic_rtp_without_starting_a_provider() -> None:
 
     asyncio.run(_cancellation_proof())
@@ -269,6 +312,34 @@ def test_response_tts_streams_first_rtp_frame_before_sse_completes() -> None:
     asyncio.run(_response_streaming_proof())
 
 
+def test_response_tts_cancellation_waits_for_active_generator_next() -> None:
+    asyncio.run(_streaming_cancellation_proof())
+
+
+async def _streaming_cancellation_proof() -> None:
+    bridge = _bridge(_DelayedAsr())
+    tts = _CancellableStreamingTts()
+    bridge.tts = tts
+    task = asyncio.create_task(
+        bridge.speak_response(
+            StreamKey("session-cancel", "stream-cancel"),
+            "agent reply",
+            CancellationEpoch(0),
+            "turn-cancel",
+            lambda: True,
+        )
+    )
+
+    _ = await asyncio.to_thread(tts.next_started.wait)
+    _ = task.cancel()
+    try:
+        _ = await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError
+
+
 async def _response_streaming_proof() -> None:
     # Given: an SSE provider that deliberately holds its second audio chunk.
 
@@ -278,12 +349,14 @@ async def _response_streaming_proof() -> None:
     packets: list[bytes] = []
     timeline: list[str] = []
     started = False
+    output_ready = asyncio.Event()
 
     async def output(
         _stream: StreamKey, _epoch: CancellationEpoch, packet: bytes
     ) -> None:
         packets.append(packet)
         timeline.append("output")
+        output_ready.set()
 
     def output_started() -> bool:
         nonlocal started
@@ -306,7 +379,8 @@ async def _response_streaming_proof() -> None:
     # still blocked before its second chunk.
 
     _ = await asyncio.to_thread(tts.first_chunk_ready.wait)
-    await asyncio.sleep(0)
+    async with asyncio.timeout(1.0):
+        _ = await output_ready.wait()
 
     # Then: TTS commits only after the first RTP frame reaches the output
     # adapter, so a timeline/context callback cannot precede actual audio.

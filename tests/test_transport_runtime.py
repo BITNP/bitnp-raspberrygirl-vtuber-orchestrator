@@ -402,6 +402,30 @@ def test_dispatch_never_releases_retired_mic_rtp_source() -> None:
     asyncio.run(verify_startup_gate())
 
 
+def test_output_announcement_waits_for_sound_ready_before_admitting_rtp() -> None:
+    async def verify_ready_gate() -> None:
+        hub = RtpHub()
+        dispatcher = TransportControlDispatch(hub)
+        source = RecordingControlPeer()
+        sink = RecordingControlPeer()
+
+        await dispatcher.register(_sink_registration(), SINK_PEER[0], sink)
+        await dispatcher.register(_source_registration(), SOURCE_PEER[0], source)
+
+        announcement = asyncio.create_task(
+            dispatcher.announce_output(StreamKey(SESSION_ID, STREAM_ID), 0)
+        )
+        await asyncio.sleep(0)
+
+        assert len(sink.messages) == 1
+        assert announcement.done() is False
+
+        await dispatcher.register(_sink_ready(), SINK_PEER[0], sink)
+        await announcement
+
+    asyncio.run(verify_ready_gate())
+
+
 def test_finished_playback_never_requires_mic_epoch_advance() -> None:
     route = _RouteWithoutEpochAdvance()
     dispatcher = TransportControlDispatch(route)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -114,6 +115,8 @@ class TransportControlDispatch:
 
         self._ready_sinks: set[StreamKey] = set()
 
+        self._ready_waiters: dict[StreamKey, asyncio.Future[None]] = {}
+
         self._leases: dict[StreamKey, tuple[str, int]] = {}
 
         self._flush_outbox: list[StreamFlush] = []
@@ -195,6 +198,9 @@ class TransportControlDispatch:
                     return
 
                 self._ready_sinks.add(stream)
+                waiter = self._ready_waiters.pop(stream, None)
+                if waiter is not None and not waiter.done():
+                    waiter.set_result(None)
                 return
 
             case StreamState(
@@ -303,6 +309,7 @@ class TransportControlDispatch:
         if sink is None:
             return False
 
+        waiter = self._replace_ready_waiter(flush.stream)
         await sink.connection.send(
             _stream_command_envelope(
                 flush.stream,
@@ -322,6 +329,8 @@ class TransportControlDispatch:
             flush.stream.stream_id,
             int(flush.cancellation_epoch),
         )
+
+        await waiter
 
         return True
 
@@ -350,7 +359,8 @@ class TransportControlDispatch:
         sink = self._sinks.get(stream)
         correlation = self._hub.correlation(stream)
         if sink is None or correlation is None:
-            return
+            raise OSError
+        waiter = self._replace_ready_waiter(stream)
         await sink.connection.send(
             _stream_command_envelope(
                 stream,
@@ -367,6 +377,7 @@ class TransportControlDispatch:
             stream.stream_id,
             epoch,
         )
+        await waiter
 
     @property
     def flush_failures(self) -> tuple[FlushFailure, ...]:
@@ -403,6 +414,11 @@ class TransportControlDispatch:
 
         self._ready_sinks.clear()
 
+        for waiter in self._ready_waiters.values():
+            if not waiter.done():
+                _ = waiter.cancel()
+        self._ready_waiters.clear()
+
         self._leases.clear()
 
         self._flush_outbox.clear()
@@ -432,7 +448,20 @@ class TransportControlDispatch:
 
                 self._ready_sinks.discard(stream)
 
+                waiter = self._ready_waiters.pop(stream, None)
+                if waiter is not None and not waiter.done():
+                    _ = waiter.cancel()
+
                 _ = self._leases.pop(stream, None)
+
+    def _replace_ready_waiter(self, stream: StreamKey) -> asyncio.Future[None]:
+        self._ready_sinks.discard(stream)
+        previous = self._ready_waiters.pop(stream, None)
+        if previous is not None and not previous.done():
+            _ = previous.cancel()
+        waiter = asyncio.get_running_loop().create_future()
+        self._ready_waiters[stream] = waiter
+        return waiter
 
     def remove_session(self, session_id: str) -> None:
         _ = self._output_fences.pop(session_id, None)
@@ -488,6 +517,10 @@ class TransportControlDispatch:
         self._dispatched.discard(stream)
 
         self._ready_sinks.discard(stream)
+
+        waiter = self._ready_waiters.pop(stream, None)
+        if waiter is not None and not waiter.done():
+            _ = waiter.cancel()
 
         _ = self._leases.pop(stream, None)
 
