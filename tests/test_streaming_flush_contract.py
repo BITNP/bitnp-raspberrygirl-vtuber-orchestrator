@@ -165,6 +165,7 @@ def test_voice_evidence_is_bounded_and_keeps_rtp_correlation() -> None:
 
     assert evidence == VoiceEvidence(
         session_id="session-001",
+        evidence_id="voice-1",
         stream_id="stream-001",
         input_epoch=1,
         rtp_start_timestamp=1_000,

@@ -167,7 +167,9 @@ class RtpHub:
             Callable[[StreamKey, TaskId, str], None] | None
         ) = None
 
-        self._voice_evidence_callback: Callable[[VoiceEvidence], bool] | None = None
+        self._voice_evidence_callbacks: dict[
+            str, Callable[[VoiceEvidence], bool]
+        ] = {}
 
         self._last_asr_sequences: dict[StreamKey, int] = {}
 
@@ -216,9 +218,9 @@ class RtpHub:
         self._replacement_task_fail = fail
 
     def set_voice_evidence_callback(
-        self, callback: Callable[[VoiceEvidence], bool]
+        self, session_id: str, callback: Callable[[VoiceEvidence], bool]
     ) -> None:
-        self._voice_evidence_callback = callback
+        self._voice_evidence_callbacks[session_id] = callback
 
     def accept_asr_final(
         self, event: AsrFinal, owner: ConnectionId | None = None
@@ -523,7 +525,9 @@ class RtpHub:
                 self._remove_stream(StreamKey(session_id, stream_id))
 
             case VoiceEvidence():
-                callback = self._voice_evidence_callback
+                callback = self._voice_evidence_callbacks.get(
+                    parsed_event.session_id
+                )
                 if callback is not None:
                     _ = callback(parsed_event)
 
@@ -620,10 +624,13 @@ class RtpHub:
 
         self._sink_owners.clear()
 
+        self._voice_evidence_callbacks.clear()
+
     def remove_stream(self, session_id: str, stream_id: str) -> None:
         self._remove_stream(StreamKey(session_id, stream_id))
 
     def remove_session(self, session_id: str) -> None:
+        _ = self._voice_evidence_callbacks.pop(session_id, None)
         streams = {
             *(stream for stream in self._mic_inputs if stream.session_id == session_id),
             *(stream for stream in self._sinks if stream.session_id == session_id),

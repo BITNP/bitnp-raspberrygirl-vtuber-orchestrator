@@ -1,4 +1,6 @@
 
+from base64 import b64decode
+from binascii import Error as Base64Error
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +37,10 @@ OPERATOR_TOKEN_KEY: Final = "ORCHESTRATOR_OPERATOR_CONTROL_TOKEN"  # noqa: S105
 MAX_SESSIONS_KEY: Final = "ORCHESTRATOR_MAX_SESSIONS"
 SESSION_IDLE_TTL_SECONDS_KEY: Final = "ORCHESTRATOR_SESSION_IDLE_TTL_SECONDS"
 SESSION_SWEEP_SECONDS_KEY: Final = "ORCHESTRATOR_SESSION_SWEEP_SECONDS"
+VOICE_TEMPLATE_KEY: Final = "ORCHESTRATOR_VOICE_TEMPLATE_KEY"
+VOICE_MATCH_THRESHOLD_KEY: Final = "ORCHESTRATOR_VOICE_MATCH_THRESHOLD"
+VOICE_AMBIGUITY_MARGIN_KEY: Final = "ORCHESTRATOR_VOICE_AMBIGUITY_MARGIN"
+VOICE_EVIDENCE_TTL_SECONDS_KEY: Final = "ORCHESTRATOR_VOICE_EVIDENCE_TTL_SECONDS"
 
 DEFAULT_CONTROL_BIND_HOST: Final = "127.0.0.1"
 
@@ -51,6 +57,7 @@ DEFAULT_ADVERTISED_RTP_PORT: Final = "5004"
 LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "::1", "localhost"})
 
 MAX_UDP_PORT: Final = 65_535
+AES_256_KEY_BYTES: Final = 32
 
 ControlScheme = Literal["ws", "wss"]
 
@@ -87,6 +94,14 @@ class TransportConfig:
     session_idle_ttl_seconds: int = 1800
 
     session_sweep_seconds: int = 30
+
+    voice_template_key: bytes | None = None
+
+    voice_match_threshold: float = 0.90
+
+    voice_ambiguity_margin: float = 0.05
+
+    voice_evidence_ttl_seconds: int = 120
 
 
 def load_transport_config_from_env(env: Mapping[str, str]) -> TransportConfig:
@@ -148,7 +163,43 @@ def load_transport_config_from_env(env: Mapping[str, str]) -> TransportConfig:
         session_sweep_seconds=_parse_positive_int(
             env.get(SESSION_SWEEP_SECONDS_KEY), SESSION_SWEEP_SECONDS_KEY, 30
         ),
+        voice_template_key=_parse_voice_key(env.get(VOICE_TEMPLATE_KEY)),
+        voice_match_threshold=_parse_probability(
+            env.get(VOICE_MATCH_THRESHOLD_KEY), VOICE_MATCH_THRESHOLD_KEY, 0.90
+        ),
+        voice_ambiguity_margin=_parse_probability(
+            env.get(VOICE_AMBIGUITY_MARGIN_KEY),
+            VOICE_AMBIGUITY_MARGIN_KEY,
+            0.05,
+        ),
+        voice_evidence_ttl_seconds=_parse_positive_int(
+            env.get(VOICE_EVIDENCE_TTL_SECONDS_KEY),
+            VOICE_EVIDENCE_TTL_SECONDS_KEY,
+            120,
+        ),
     )
+
+
+def _parse_voice_key(value: str | None) -> bytes | None:
+    if value is None or value.strip() == "":
+        return None
+    try:
+        key = b64decode(value.strip(), validate=True)
+    except (Base64Error, ValueError) as error:
+        raise ConfigParseError(field_name=VOICE_TEMPLATE_KEY) from error
+    if len(key) != AES_256_KEY_BYTES:
+        raise ConfigParseError(field_name=VOICE_TEMPLATE_KEY)
+    return key
+
+
+def _parse_probability(value: str | None, field_name: str, default: float) -> float:
+    try:
+        parsed = default if value is None else float(value)
+    except ValueError as error:
+        raise ConfigParseError(field_name=field_name) from error
+    if not 0 <= parsed <= 1:
+        raise ConfigParseError(field_name=field_name)
+    return parsed
 
 
 def _parse_loopback_ws(value: str | None) -> bool:

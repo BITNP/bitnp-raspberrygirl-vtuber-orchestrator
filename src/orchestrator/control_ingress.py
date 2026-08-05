@@ -2,11 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.identity import (
-    EncryptedVoiceTemplate,
-    ProfileEnrollment,
-    VoiceProfileId,
-)
+from orchestrator.identity import VoiceProfileId
 from orchestrator.ids import SessionId, TraceId
 from orchestrator.interactions import (
     ActionProposal,
@@ -22,7 +18,13 @@ from orchestrator.sessions import EventCorrelation, EventSequence
 
 @dataclass(frozen=True, slots=True)
 class ProfileEnrollmentControl:
-    enrollment: ProfileEnrollment
+    profile_id: VoiceProfileId
+
+    preferred_name: str
+
+    evidence_id: str
+
+    consented: bool
 
     correlation: EventCorrelation
 
@@ -181,26 +183,25 @@ def _profile_enrollment(
 
     preferred_name = _text(data, "preferred_name")
 
-    encrypted_template = _text(data, "encrypted_template")
+    evidence_id = _text(data, "evidence_id")
 
     consented = data.get("consented")
 
     if (
         profile_id is None
         or preferred_name is None
-        or encrypted_template is None
+        or evidence_id is None
         or consented is not True
+        or set(data) != {"profile_id", "preferred_name", "evidence_id", "consented"}
     ):
         return None
 
     return ProfileEnrollmentControl(
-        ProfileEnrollment(
-            VoiceProfileId(profile_id),
-            preferred_name,
-            EncryptedVoiceTemplate(encrypted_template.encode()),
-            consented=True,
-        ),
-        correlation,
+        profile_id=VoiceProfileId(profile_id),
+        preferred_name=preferred_name,
+        evidence_id=evidence_id,
+        consented=True,
+        correlation=correlation,
     )
 
 

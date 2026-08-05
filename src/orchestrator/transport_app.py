@@ -58,6 +58,12 @@ async def run_transport() -> None:
                 ResponseExecutionMode.NEW_EXECUTE,
             ),
         )
+        session_runtime.configure_voice_identity(
+            getattr(transport_config, "voice_template_key", None),
+            evidence_ttl_seconds=getattr(
+                transport_config, "voice_evidence_ttl_seconds", 120
+            ),
+        )
         if brain_completion is not None:
             session_runtime.async_agent_gate = build_async_agent_gate(
                 cast("AsyncJsonCompletion", brain_completion)

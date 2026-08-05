@@ -131,7 +131,11 @@ class JsonVoiceProfileStore:
 
             os.fsync(file.fileno())
 
+        _ = temporary.chmod(0o600)
+
         _ = temporary.replace(self._path)
+
+        _ = self._path.chmod(0o600)
 
         try:
             _fsync_directory(self._path.parent)

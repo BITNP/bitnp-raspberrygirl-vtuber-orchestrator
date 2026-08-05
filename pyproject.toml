@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Central Orchestrator shell for the distributed AI VTuber system."
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=50.0.0",
     "jsonschema==4.26.0",
     "llama-index-core>=0.14.23,<0.15",
     "openai>=2,<3",

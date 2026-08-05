@@ -552,9 +552,10 @@ def test_hub_routes_voice_evidence_only_to_the_matching_session_runtime() -> Non
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 1),
     )
     hub = RtpHub()
-    hub.set_voice_evidence_callback(runtime.receive_voice_evidence)
+    hub.set_voice_evidence_callback(SESSION_ID, runtime.receive_voice_evidence)
     evidence = VoiceEvidence(
         session_id=SESSION_ID,
+        evidence_id="voice-evidence-1",
         stream_id=STREAM_ID,
         input_epoch=1,
         rtp_start_timestamp=10,
@@ -820,7 +821,7 @@ def _profile_enrollment(session_id: str, trace_id: str, sequence: int) -> str:
         {
             "profile_id": "profile-transport",
             "preferred_name": "private-name",
-            "encrypted_template": "template-sensitive",
+            "evidence_id": "voice-evidence-1",
             "consented": True,
         },
         session_id=session_id,

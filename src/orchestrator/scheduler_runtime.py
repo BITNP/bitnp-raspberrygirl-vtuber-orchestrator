@@ -130,6 +130,7 @@ from orchestrator.transient_context import (
     ToolObservation,
 )
 from orchestrator.transport_control import VoiceEvidence
+from orchestrator.voice_templates import VoiceTemplateProtector
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -169,6 +170,10 @@ _BRAIN_CONTEXT_POLICY = StaticContextBudgetPolicy(
     model_id=_BRAIN_CONTEXT_MODEL,
     budget=ModelContextBudget(input_tokens=TokenBudget(512)),
 )
+
+_VOICE_EVIDENCE_CAPACITY = 128
+_VOICE_EVIDENCE_MINIMUM_QUALITY = 0.5
+_VOICE_EVIDENCE_MINIMUM_SPEECH_MS = 500
 
 _DEFAULT_AGENT_CAPABILITIES = frozenset(
     {
@@ -290,6 +295,14 @@ class SessionRuntime:
 
     _voice_evidence_ranges: list[tuple[str, int, int]] = field(default_factory=list)
 
+    _voice_evidence_cache: dict[str, tuple[VoiceEvidence, int]] = field(
+        default_factory=dict
+    )
+
+    _voice_template_protector: VoiceTemplateProtector | None = None
+
+    _voice_evidence_ttl_ms: int = 120_000
+
     _frontend_caption: str = ""
 
     _frontend_animation: str | None = None
@@ -380,6 +393,17 @@ class SessionRuntime:
     def receive_voice_evidence(self, evidence: VoiceEvidence) -> bool:
         if evidence.session_id != str(self.scheduler.snapshot.session_id):
             return False
+        now_ms = self.clock()
+        self._expire_voice_evidence(now_ms)
+        if evidence.evidence_id in self._voice_evidence_cache:
+            return False
+        if len(self._voice_evidence_cache) >= _VOICE_EVIDENCE_CAPACITY:
+            oldest = min(
+                self._voice_evidence_cache,
+                key=lambda evidence_id: self._voice_evidence_cache[evidence_id][1],
+            )
+            _ = self._voice_evidence_cache.pop(oldest, None)
+        self._voice_evidence_cache[evidence.evidence_id] = (evidence, now_ms)
         self._voice_evidence_ranges.append(
             (
                 evidence.stream_id,
@@ -388,6 +412,52 @@ class SessionRuntime:
             )
         )
         return True
+
+    def configure_voice_identity(
+        self, key: bytes | None, *, evidence_ttl_seconds: int = 120
+    ) -> None:
+        self._voice_template_protector = (
+            None if key is None else VoiceTemplateProtector(key)
+        )
+        self._voice_evidence_ttl_ms = evidence_ttl_seconds * 1_000
+
+    def enroll_profile_from_evidence(
+        self, control: ProfileEnrollmentControl
+    ) -> RuntimeOutcome:
+        correlation = control.correlation
+        self._expire_voice_evidence(self.clock())
+        cached = self._voice_evidence_cache.pop(control.evidence_id, None)
+        protector = self._voice_template_protector
+        if cached is None or protector is None or not control.consented:
+            return self._reject(correlation, "voice_evidence_unavailable")
+        evidence = cached[0]
+        if (
+            evidence.quality_score < _VOICE_EVIDENCE_MINIMUM_QUALITY
+            or evidence.speech_ms < _VOICE_EVIDENCE_MINIMUM_SPEECH_MS
+        ):
+            return self._reject(correlation, "voice_evidence_quality")
+        encrypted = protector.encrypt(
+            session_id=evidence.session_id,
+            profile_id=control.profile_id,
+            model_revision=evidence.embedding_model_revision,
+            embedding=evidence.embedding,
+        )
+        return self.enroll_profile(
+            ProfileEnrollment(
+                profile_id=control.profile_id,
+                preferred_name=control.preferred_name,
+                encrypted_template=encrypted,
+                consented=True,
+            ),
+            correlation,
+        )
+
+    def _expire_voice_evidence(self, now_ms: int) -> None:
+        for evidence_id, (_, created_ms) in tuple(
+            self._voice_evidence_cache.items()
+        ):
+            if now_ms - created_ms >= self._voice_evidence_ttl_ms:
+                _ = self._voice_evidence_cache.pop(evidence_id, None)
 
     @property
     def observables(self) -> RuntimeObservables:
@@ -1660,9 +1730,10 @@ class SessionRuntime:
     ) -> RuntimeOutcome:
         match control:
             case ProfileEnrollmentControl(
-                enrollment=enrollment, correlation=correlation
+                correlation=correlation
             ):
-                return self.enroll_profile(enrollment, correlation)
+                _ = correlation
+                return self.enroll_profile_from_evidence(control)
 
             case ProfileRevocationControl(
                 profile_id=profile_id, correlation=correlation
@@ -1831,6 +1902,7 @@ class SessionRuntime:
             _ = task.cancel()
         self._maintenance_tasks.clear()
         self._voice_evidence_ranges.clear()
+        self._voice_evidence_cache.clear()
         self.interaction_ingress.data.clear_session()
         self.interaction_ingress.clear_session_data()
         _ = self.task_registry.clear_terminal_tombstones()

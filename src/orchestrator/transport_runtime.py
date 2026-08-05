@@ -254,7 +254,10 @@ class TransportRuntime:
             )
         )
 
-        self._hub.set_voice_evidence_callback(session_runtime.receive_voice_evidence)
+        self._hub.set_voice_evidence_callback(
+            str(session_runtime.scheduler.snapshot.session_id),
+            session_runtime.receive_voice_evidence,
+        )
 
         session_runtime.deck_dispatcher.executor = FrontendDeckEffectExecutor(
             session_runtime.scheduler.snapshot.session_id,

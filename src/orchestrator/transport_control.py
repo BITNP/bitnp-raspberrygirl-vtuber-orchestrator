@@ -129,6 +129,7 @@ class VoiceEvidence:
     """Ephemeral CAM++ evidence; callers must not persist raw embeddings."""
 
     session_id: str
+    evidence_id: str
     stream_id: str
     input_epoch: int
     rtp_start_timestamp: int
@@ -292,6 +293,7 @@ def parse_control_event(raw_message: str) -> ControlEvent:
             quality = _mapping(data, "quality")
             parsed = VoiceEvidence(
                 session_id=_text(value, "session_id"),
+                evidence_id=_text(value, "event_id"),
                 stream_id=_text(data, "stream_id"),
                 input_epoch=_nonnegative_int(data, "input_epoch"),
                 rtp_start_timestamp=_nonnegative_int(data, "rtp_start_timestamp"),
