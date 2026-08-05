@@ -7,6 +7,8 @@ from dataclasses import dataclass, field, replace
 from time import monotonic_ns
 from typing import Protocol
 
+from cryptography.exceptions import InvalidTag
+
 from orchestrator.agent_state import AgentState, TurnCoordinator, TurnPhase
 from orchestrator.brain_contracts import (
     AudienceInput as BrainAudienceInput,
@@ -526,7 +528,7 @@ class SessionRuntime:
                     profile_id=profile_id,
                     template=encrypted,
                 )
-            except (VoiceTemplateError, ValueError):
+            except (InvalidTag, VoiceTemplateError, ValueError):
                 self._re_enrollment_required.add(profile_id)
         matched = match_voice(
             evidence.embedding_model_revision,

@@ -124,7 +124,7 @@ bash scripts/verify_workspace.sh --sibling-root ..
 
 ## 部署
 
-`orchestrator-transport` 是中心进程，监听认证 WSS 控制连接和 UDP RTP。生产环境使用 `/control` WSS endpoint、`TRUSTED_LAN_TOKEN`、仓库外预配的 TLS 证书、一个只读 PEM CA bundle 及私有 LAN 网络规则。Orchestrator、Mic、Sound 和 Comments 都设置 `ORCHESTRATOR_TLS_CA_PATH` 指向该 bundle；它可包含内部根证书和中间证书。Orchestrator 用它校验自托管 LLM、TTS 的 HTTPS endpoint，Mic、Sound、Comments 用它校验 Orchestrator WSS 证书。Mic 的 ASR endpoint/model/credentials 只在 Mic 的环境中配置。Mic 与 Sound 使用同一个 session ID 和 stream ID，且只连接 Orchestrator。具体挂载和环境文件见 [部署资产](../deploy/README.md)。
+`orchestrator-transport` 是中心进程，监听认证 WSS 控制连接和 UDP RTP。生产环境使用 `/control` WSS endpoint，并分别配置 `ORCHESTRATOR_MIC_CONTROL_TOKEN`、`ORCHESTRATOR_SOUND_CONTROL_TOKEN`、`ORCHESTRATOR_COMMENTS_CONTROL_TOKEN`、`ORCHESTRATOR_FRONTEND_CONTROL_TOKEN` 和 `ORCHESTRATOR_OPERATOR_CONTROL_TOKEN`；各 peer 仍从自己的 `TRUSTED_LAN_TOKEN` 发送对应角色的值。五个值必须互不相同。部署还需在仓库外预配 TLS 证书、只读 PEM CA bundle、32 字节 AES voice-template key 及私有 LAN 网络规则。Orchestrator、Mic、Sound 和 Comments 都设置 `ORCHESTRATOR_TLS_CA_PATH` 指向该 bundle；它可包含内部根证书和中间证书。Orchestrator 用它校验自托管 LLM、TTS 的 HTTPS endpoint，Mic、Sound、Comments 用它校验 Orchestrator WSS 证书。Mic 的 ASR endpoint/model/credentials 只在 Mic 的环境中配置。Mic 与 Sound 使用同一个 session ID 和 stream ID，且只连接 Orchestrator。具体挂载和环境文件见 [部署资产](../deploy/README.md)。
 
 现场音频链路的启动顺序固定为：
 

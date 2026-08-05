@@ -54,7 +54,7 @@ SOUND_SESSION_ID=session-onsite-001
 SOUND_RTP_STREAM_ID=onsite-primary
 ```
 
-回环 Orchestrator 不使用 bearer token，并会拒绝携带 `Authorization` header 的连接。因此 Mic 和 Sound 的 `TRUSTED_LAN_TOKEN` 必须为空；令牌相同也不能用于这个模式。回到 WSS/LAN 配置时，关闭两个 `*_ALLOW_LOOPBACK_WS` 开关，并恢复同一个非空令牌、CA 与 TLS 配置。
+回环 Orchestrator 不使用 bearer token，并会拒绝携带 `Authorization` header 的连接。因此 Mic 和 Sound 的 `TRUSTED_LAN_TOKEN` 必须为空；令牌相同也不能用于这个模式。回到 WSS/LAN 配置时，关闭两个 `*_ALLOW_LOOPBACK_WS` 开关，恢复 CA 与 TLS 配置，并让 Mic、Sound 分别使用与 Orchestrator 对应角色配置匹配、彼此不同的非空令牌。
 
 ## 启动与验证
 
