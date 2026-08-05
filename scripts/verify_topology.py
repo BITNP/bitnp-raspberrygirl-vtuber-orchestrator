@@ -282,14 +282,6 @@ def _environment_errors(environments: dict[str, dict[str, str]]) -> list[str]:
         if values.get("ORCHESTRATOR_TLS_CA_PATH", "") == ""
     )
 
-    if (
-        mic.get("ORCHESTRATOR_RTP_HOST") != host
-        or mic.get("ORCHESTRATOR_RTP_PORT") != rtp_port
-    ):
-        found.append(
-            "mic: RTP endpoint must be the advertised Orchestrator RTP endpoint"
-        )
-
     mic_session_id = mic.get("BITNP_SESSION_ID", "")
 
     sound_session_id = sound.get("SOUND_SESSION_ID", "")
@@ -297,7 +289,7 @@ def _environment_errors(environments: dict[str, dict[str, str]]) -> list[str]:
     if mic_session_id == "" or mic_session_id != sound_session_id:
         found.append("Mic and Sound session IDs differ")
 
-    mic_stream_id = mic.get("BITNP_MIC_RTP_STREAM_ID", "")
+    mic_stream_id = mic.get("BITNP_MIC_STREAM_ID", "")
 
     sound_stream_id = sound.get("SOUND_RTP_STREAM_ID", "")
 

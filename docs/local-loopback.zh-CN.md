@@ -33,12 +33,10 @@ Mic `.env`：
 
 ```dotenv
 ORCHESTRATOR_WS_URL=ws://localhost:8443/control
-ORCHESTRATOR_RTP_HOST=127.0.0.1
-ORCHESTRATOR_RTP_PORT=5004
 MIC_ALLOW_LOOPBACK_WS=true
 TRUSTED_LAN_TOKEN=
 BITNP_SESSION_ID=session-onsite-001
-BITNP_MIC_RTP_STREAM_ID=onsite-primary
+BITNP_MIC_STREAM_ID=onsite-primary
 MIC_ASR_ENDPOINT=http://127.0.0.1:8090/v1/audio/transcriptions
 MIC_ASR_MODEL=<openai-compatible-asr-model>
 ```
@@ -74,7 +72,7 @@ uv run --env-file .env sound-receive
 uv run --env-file .env mic-stream
 ```
 
-先让 Sound 完成 sink 注册，再启动 Mic。Mic 完成 source register/ready handshake 后才会发送 RTP。若进程在启动前失败，按下表检查配置：
+先让 Sound 完成 sink 注册，再启动 Mic。Mic 收到 `mic.input.ready` 后才开始采集并发送 ASR/evidence control 事件；Mic 不发送 RTP。若进程在启动前失败，按下表检查配置：
 
 正常的静音或无有效语音片段不会由 Mic 发送 `asr.final`，因此不会发起 Gate、LLM 或 TTS。
 
