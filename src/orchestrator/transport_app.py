@@ -63,6 +63,12 @@ async def run_transport() -> None:
             evidence_ttl_seconds=getattr(
                 transport_config, "voice_evidence_ttl_seconds", 120
             ),
+            match_threshold=getattr(
+                transport_config, "voice_match_threshold", 0.90
+            ),
+            ambiguity_margin=getattr(
+                transport_config, "voice_ambiguity_margin", 0.05
+            ),
         )
         if brain_completion is not None:
             session_runtime.async_agent_gate = build_async_agent_gate(

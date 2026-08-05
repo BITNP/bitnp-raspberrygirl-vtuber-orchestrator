@@ -713,6 +713,10 @@ class TransportRuntime:
                             received_at_ms=control_event.received_at_ms,
                             segment_id=control_event.segment_id,
                             seq=control_event.correlation.seq,
+                            stream_id=control_event.stream_id,
+                            input_epoch=int(control_event.cancellation_epoch),
+                            rtp_start_timestamp=control_event.rtp_start_timestamp,
+                            rtp_end_timestamp=control_event.rtp_end_timestamp,
                         )
                         correlation = EventCorrelation(
                             TraceId(control_event.correlation.trace_id),

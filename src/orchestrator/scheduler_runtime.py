@@ -33,7 +33,13 @@ from orchestrator.control_ingress import (
     SessionEndControl,
 )
 from orchestrator.execution_envelope import ExecutionEnvelope
-from orchestrator.identity import ProfileEnrollment, VoiceProfileId
+from orchestrator.identity import (
+    ProfileEnrollment,
+    ProfileRecognition,
+    ProfileRecognitionKnown,
+    RecognitionConfidence,
+    VoiceProfileId,
+)
 from orchestrator.ids import SegmentId, SessionId, TurnId
 from orchestrator.interaction_ingress import SessionInteractionIngress
 from orchestrator.interactions import (
@@ -131,7 +137,13 @@ from orchestrator.transient_context import (
     ToolObservation,
 )
 from orchestrator.transport_control import VoiceEvidence
-from orchestrator.voice_templates import VoiceTemplateProtector
+from orchestrator.voice_templates import (
+    DecryptedVoiceTemplate,
+    VoiceTemplateError,
+    VoiceTemplateProtector,
+    match_voice,
+    modular_intervals_overlap,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -220,6 +232,13 @@ class _PendingAudienceAdmission:
     correlation: EventCorrelation
     run: Callable[[], Coroutine[None, None, RuntimeOutcome]]
     result: asyncio.Future[RuntimeOutcome]
+
+
+@dataclass(frozen=True, slots=True)
+class _SpeakerIdentity:
+    profile_id: VoiceProfileId
+    preferred_name: str
+    confidence: float
 
 
 @dataclass(slots=True)
@@ -326,6 +345,16 @@ class SessionRuntime:
     _voice_template_protector: VoiceTemplateProtector | None = None
 
     _voice_evidence_ttl_ms: int = 120_000
+
+    _voice_match_threshold: float = 0.90
+
+    _voice_ambiguity_margin: float = 0.05
+
+    _speaker_identities: dict[EventCorrelation, _SpeakerIdentity] = field(
+        default_factory=dict
+    )
+
+    _re_enrollment_required: set[VoiceProfileId] = field(default_factory=set)
 
     _frontend_caption: str = ""
 
@@ -438,12 +467,87 @@ class SessionRuntime:
         return True
 
     def configure_voice_identity(
-        self, key: bytes | None, *, evidence_ttl_seconds: int = 120
+        self,
+        key: bytes | None,
+        *,
+        evidence_ttl_seconds: int = 120,
+        match_threshold: float = 0.90,
+        ambiguity_margin: float = 0.05,
     ) -> None:
         self._voice_template_protector = (
             None if key is None else VoiceTemplateProtector(key)
         )
         self._voice_evidence_ttl_ms = evidence_ttl_seconds * 1_000
+        self._voice_match_threshold = match_threshold
+        self._voice_ambiguity_margin = ambiguity_margin
+
+    @property
+    def re_enrollment_required(self) -> frozenset[VoiceProfileId]:
+        return frozenset(self._re_enrollment_required)
+
+    def _recognize_voice(
+        self, event: ASRAudienceEvent, correlation: EventCorrelation
+    ) -> None:
+        protector = self._voice_template_protector
+        if (
+            protector is None
+            or event.stream_id is None
+            or event.input_epoch is None
+            or event.rtp_start_timestamp is None
+            or event.rtp_end_timestamp is None
+        ):
+            return
+        now_ms = self.clock()
+        self._expire_voice_evidence(now_ms)
+        candidates = tuple(
+            (evidence, created_ms)
+            for evidence, created_ms in self._voice_evidence_cache.values()
+            if evidence.stream_id == event.stream_id
+            and evidence.input_epoch == event.input_epoch
+            and modular_intervals_overlap(
+                evidence.rtp_start_timestamp,
+                evidence.rtp_end_timestamp,
+                event.rtp_start_timestamp,
+                event.rtp_end_timestamp,
+            )
+        )
+        if not candidates:
+            return
+        evidence = max(candidates, key=lambda item: item[1])[0]
+        profiles = self.interaction_ingress.data.profiles
+        templates: dict[VoiceProfileId, DecryptedVoiceTemplate] = {}
+        for profile_id in profiles.matchable_profile_ids(now_ms=now_ms):
+            encrypted = profiles.encrypted_template(profile_id)
+            if encrypted is None:
+                continue
+            try:
+                templates[profile_id] = protector.decrypt(
+                    session_id=str(correlation.session_id),
+                    profile_id=profile_id,
+                    template=encrypted,
+                )
+            except (VoiceTemplateError, ValueError):
+                self._re_enrollment_required.add(profile_id)
+        matched = match_voice(
+            evidence.embedding_model_revision,
+            evidence.embedding,
+            templates,
+            threshold=self._voice_match_threshold,
+            ambiguity_margin=self._voice_ambiguity_margin,
+        )
+        recognized = profiles.recognize(
+            ProfileRecognition(
+                matched.profile_id,
+                RecognitionConfidence(round(matched.confidence * 100)),
+            ),
+            now_ms=now_ms,
+        )
+        if isinstance(recognized, ProfileRecognitionKnown):
+            self._speaker_identities[correlation] = _SpeakerIdentity(
+                recognized.profile_id,
+                recognized.preferred_name,
+                matched.confidence,
+            )
 
     def enroll_profile_from_evidence(
         self, control: ProfileEnrollmentControl
@@ -831,6 +935,7 @@ class SessionRuntime:
         )
         corpus_version = f"{retrieval.corpus_id}@{retrieval.corpus_revision}"
         index_version = f"{retrieval.index_id}@{retrieval.index_revision}"
+        identity = self._speaker_identities.pop(correlation, None)
         snapshot = BrainStateSnapshot(
             session_id=str(self.scheduler.snapshot.session_id),
             turn_id=str(turn_id),
@@ -867,6 +972,13 @@ class SessionRuntime:
                 f"本地知识库: corpus={corpus_version}, index={index_version}",
             ),
             mcp_allowlist=self.agent_mcp_allowlist,
+            speaker_profile_id=(
+                None if identity is None else str(identity.profile_id)
+            ),
+            speaker_preferred_name=(
+                None if identity is None else identity.preferred_name
+            ),
+            speaker_confidence=(None if identity is None else identity.confidence),
         )
         envelope = ExecutionEnvelope(
             session_id=self.scheduler.snapshot.session_id,
@@ -1976,15 +2088,19 @@ class SessionRuntime:
             gate,
             audience_input,
             correlation,
-            lambda: self._admit_asr_final(coordinator, audience_input, correlation),
+            lambda: self._admit_asr_final(
+                coordinator, event, audience_input, correlation
+            ),
         )
 
     async def _admit_asr_final(
         self,
         coordinator: AsyncResponseCoordinator,
+        event: ASRAudienceEvent,
         audience_input: BrainAudienceInput,
         correlation: EventCorrelation,
     ) -> RuntimeOutcome:
+        self._recognize_voice(event, correlation)
         transition = self.scheduler.apply(
             StartTurn(
                 expected_revision=self.scheduler.snapshot.revision,
@@ -2052,6 +2168,8 @@ class SessionRuntime:
         self._maintenance_tasks.clear()
         self._voice_evidence_ranges.clear()
         self._voice_evidence_cache.clear()
+        self._speaker_identities.clear()
+        self._re_enrollment_required.clear()
         self.interaction_ingress.data.clear_session()
         self.interaction_ingress.clear_session_data()
         _ = self.task_registry.clear_terminal_tombstones()

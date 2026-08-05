@@ -3,6 +3,7 @@ from dataclasses import replace
 from typing import final
 
 from orchestrator.identity import (
+    EncryptedVoiceTemplate,
     ProfileCorrection,
     ProfileEnrollment,
     ProfileRecognition,
@@ -118,6 +119,19 @@ class VoiceProfileService:
             return ProfileRecognitionUnknown()
 
         return ProfileRecognitionKnown(profile_id, record.preferred_name)
+
+    def matchable_profile_ids(self, *, now_ms: int) -> tuple[VoiceProfileId, ...]:
+        _ = self.expire(now_ms=now_ms)
+        return tuple(
+            profile_id
+            for profile_id, record in self._records.items()
+            if record.lifecycle is ProfileLifecycle.ACTIVE and record.confirmed
+        )
+
+    def encrypted_template(
+        self, profile_id: VoiceProfileId
+    ) -> EncryptedVoiceTemplate | None:
+        return self._vault.load_encrypted(profile_id)
 
     def correct(self, correction: ProfileCorrection) -> ProfileRecognitionResult:
         record = self._records.get(correction.profile_id)

@@ -1,6 +1,6 @@
 
 import os
-from base64 import b64encode
+from base64 import b64decode, b64encode
 from hashlib import sha256
 from pathlib import Path
 from typing import final
@@ -49,6 +49,14 @@ class FileVoiceProfileVault:
             path.unlink()
 
             _fsync_directory(self._directory)
+
+    def load_encrypted(
+        self, profile_id: VoiceProfileId
+    ) -> EncryptedVoiceTemplate | None:
+        path = self._path(profile_id)
+        if not path.is_file():
+            return None
+        return EncryptedVoiceTemplate(b64decode(path.read_bytes(), validate=True))
 
     def _path(self, profile_id: VoiceProfileId) -> Path:
         digest = sha256(f"{self._session_id}:{profile_id}".encode()).hexdigest()

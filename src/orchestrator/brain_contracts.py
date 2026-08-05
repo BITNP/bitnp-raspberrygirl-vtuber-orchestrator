@@ -85,6 +85,9 @@ class BrainStateSnapshot:
     compaction_required: bool = False
     knowledge_references: tuple[str, ...] = ()
     mcp_allowlist: frozenset[str] = frozenset()
+    speaker_profile_id: str | None = None
+    speaker_preferred_name: str | None = None
+    speaker_confidence: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

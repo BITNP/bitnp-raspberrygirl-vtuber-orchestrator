@@ -30,6 +30,14 @@ class ASRAudienceEvent:
 
     seq: int
 
+    stream_id: str | None = None
+
+    input_epoch: int | None = None
+
+    rtp_start_timestamp: int | None = None
+
+    rtp_end_timestamp: int | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class PipelineConfig:

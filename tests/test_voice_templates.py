@@ -7,9 +7,14 @@ import pytest
 from cryptography.exceptions import InvalidTag
 
 from orchestrator.control_ingress import ProfileEnrollmentControl
-from orchestrator.identity import VoiceProfileId
+from orchestrator.identity import (
+    EncryptedVoiceTemplate,
+    ProfileEnrollment,
+    VoiceProfileId,
+)
 from orchestrator.ids import SessionId, TraceId
 from orchestrator.json_boundary import parse_json_value
+from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import EventCorrelation, EventSequence
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
@@ -107,3 +112,129 @@ def test_evidence_enrollment_is_recent_session_local_and_single_use() -> None:
     assert modular_intervals_overlap(
         0xFFFF_FF00, 0x0000_0180, 0x0000_0000, 0x0000_0100
     )
+
+
+def test_asr_match_requires_stream_epoch_and_rollover_overlap() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        clock=lambda: 1_000,
+    )
+    runtime.configure_voice_identity(bytes(range(32)))
+    enrollment_evidence = VoiceEvidence(
+        session_id="session-1",
+        evidence_id="enroll",
+        stream_id="mic-1",
+        input_epoch=4,
+        rtp_start_timestamp=10,
+        rtp_end_timestamp=650,
+        embedding_model_revision="campp-v1",
+        embedding=(1.0, 0.0),
+        speech_ms=640,
+        quality_score=0.9,
+        correlation=EnvelopeCorrelation("trace", "session-1", 1),
+    )
+    assert runtime.receive_voice_evidence(enrollment_evidence)
+    control = ProfileEnrollmentControl(
+        profile_id=VoiceProfileId("profile-1"),
+        preferred_name="嘉宾",
+        evidence_id="enroll",
+        consented=True,
+        correlation=EventCorrelation(
+            TraceId("operator"), SessionId("session-1"), EventSequence(2)
+        ),
+    )
+    assert runtime.enroll_profile_from_evidence(control).accepted
+    matching_evidence = VoiceEvidence(
+        session_id="session-1",
+        evidence_id="match",
+        stream_id="mic-1",
+        input_epoch=4,
+        rtp_start_timestamp=0xFFFF_FF00,
+        rtp_end_timestamp=0x0000_0180,
+        embedding_model_revision="campp-v1",
+        embedding=(1.0, 0.0),
+        speech_ms=640,
+        quality_score=0.9,
+        correlation=EnvelopeCorrelation("trace", "session-1", 3),
+    )
+    assert runtime.receive_voice_evidence(matching_evidence)
+    correlation = EventCorrelation(
+        TraceId("asr"), SessionId("session-1"), EventSequence(4)
+    )
+    event = ASRAudienceEvent(
+        "你好",
+        1_000,
+        "segment-1",
+        4,
+        stream_id="mic-1",
+        input_epoch=4,
+        rtp_start_timestamp=0,
+        rtp_end_timestamp=0x100,
+    )
+
+    runtime._recognize_voice(  # pyright: ignore[reportPrivateUsage]
+        event, correlation
+    )
+    identity = runtime._speaker_identities[  # pyright: ignore[reportPrivateUsage]
+        correlation
+    ]
+
+    assert identity.profile_id == VoiceProfileId("profile-1")
+    assert identity.preferred_name == "嘉宾"
+    assert identity.confidence == pytest.approx(1.0)
+
+
+def test_legacy_opaque_template_is_marked_for_re_enrollment() -> None:
+    runtime = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        clock=lambda: 1_000,
+    )
+    runtime.configure_voice_identity(bytes(range(32)))
+    profile_id = VoiceProfileId("legacy")
+    _ = runtime.enroll_profile(
+        ProfileEnrollment(
+            profile_id=profile_id,
+            preferred_name="旧访客",
+            encrypted_template=EncryptedVoiceTemplate(b"legacy-opaque-template"),
+            consented=True,
+        ),
+        EventCorrelation(
+            TraceId("operator"), SessionId("session-1"), EventSequence(1)
+        ),
+    )
+    assert runtime.receive_voice_evidence(
+        VoiceEvidence(
+            session_id="session-1",
+            evidence_id="match",
+            stream_id="mic-1",
+            input_epoch=1,
+            rtp_start_timestamp=10,
+            rtp_end_timestamp=650,
+            embedding_model_revision="campp-v1",
+            embedding=(1.0, 0.0),
+            speech_ms=640,
+            quality_score=0.9,
+            correlation=EnvelopeCorrelation("trace", "session-1", 2),
+        )
+    )
+    runtime._recognize_voice(  # pyright: ignore[reportPrivateUsage]
+        ASRAudienceEvent(
+            "你好",
+            1_000,
+            "segment",
+            3,
+            stream_id="mic-1",
+            input_epoch=1,
+            rtp_start_timestamp=10,
+            rtp_end_timestamp=650,
+        ),
+        EventCorrelation(
+            TraceId("asr"), SessionId("session-1"), EventSequence(3)
+        ),
+    )
+
+    assert profile_id in runtime.re_enrollment_required

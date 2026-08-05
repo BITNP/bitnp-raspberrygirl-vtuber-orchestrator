@@ -25,6 +25,11 @@ class VoiceProfileVault(Protocol):
     def delete(self, profile_id: VoiceProfileId) -> None:
         ...
 
+    def load_encrypted(
+        self, profile_id: VoiceProfileId
+    ) -> EncryptedVoiceTemplate | None:
+        ...
+
 
 @final
 class InMemoryVoiceProfileVault:
@@ -43,6 +48,11 @@ class InMemoryVoiceProfileVault:
         _ = self._templates.pop(profile_id, None)
 
     def template(self, profile_id: VoiceProfileId) -> EncryptedVoiceTemplate | None:
+        return self._templates.get(profile_id)
+
+    def load_encrypted(
+        self, profile_id: VoiceProfileId
+    ) -> EncryptedVoiceTemplate | None:
         return self._templates.get(profile_id)
 
 
