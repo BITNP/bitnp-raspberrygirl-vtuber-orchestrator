@@ -8,6 +8,7 @@ from orchestrator.json_boundary import JsonValue, parse_json_value
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
     FlushAcknowledgement,
+    FlushDisposition,
     FlushRequestId,
     GeneratedSsrc,
     SegmentId,
@@ -27,6 +28,8 @@ MAX_UDP_PORT = 65_535
 MAX_VOICE_EMBEDDING_DIMENSIONS = 1_024
 
 MAX_ASR_TEXT_LENGTH = 4_000
+MAX_ASR_SPAN_SAMPLES = 16_000 * 30
+MAX_EVIDENCE_SPAN_SAMPLES = 16_000 * 2
 
 
 type ControlEvent = (
@@ -55,7 +58,7 @@ class _AsrEventFields(TypedDict):
     correlation: EnvelopeCorrelation
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class ControlEnvelopeError(Exception):
     field_name: str
 
@@ -108,6 +111,8 @@ class StreamState:
 
     stream_id: str
 
+    command_id: str
+
     state: str
 
     correlation: EnvelopeCorrelation
@@ -125,6 +130,7 @@ class VoiceEvidence:
 
     session_id: str
     stream_id: str
+    input_epoch: int
     rtp_start_timestamp: int
     rtp_end_timestamp: int
     embedding_model_revision: str
@@ -238,6 +244,7 @@ def parse_control_event(raw_message: str) -> ControlEvent:
             parsed = StreamState(
                 session_id=_text(value, "session_id"),
                 stream_id=_text(data, "stream_id"),
+                command_id=_text(data, "command_id"),
                 state=_stream_state(data),
                 correlation=correlation,
                 turn_id=_optional_turn_id(value),
@@ -276,6 +283,7 @@ def parse_control_event(raw_message: str) -> ControlEvent:
                 target_generated_ssrc=GeneratedSsrc(
                     _ssrc_field(data, "target_generated_ssrc")
                 ),
+                disposition=_flush_disposition(data),
                 correlation=correlation,
             )
 
@@ -285,6 +293,7 @@ def parse_control_event(raw_message: str) -> ControlEvent:
             parsed = VoiceEvidence(
                 session_id=_text(value, "session_id"),
                 stream_id=_text(data, "stream_id"),
+                input_epoch=_nonnegative_int(data, "input_epoch"),
                 rtp_start_timestamp=_nonnegative_int(data, "rtp_start_timestamp"),
                 rtp_end_timestamp=_nonnegative_int(data, "rtp_end_timestamp"),
                 embedding_model_revision=_text(data, "embedding_model_revision"),
@@ -383,10 +392,11 @@ def _validate_stream_state(data: dict[str, JsonValue], source: str) -> None:
 
     _ = _stream_state(data)
 
-    if set(data).difference({"stream_id", "state", "cancellation_epoch"}):
+    if set(data) != {"command_id", "stream_id", "state", "cancellation_epoch"}:
         raise ControlEnvelopeError(field_name="data")
 
-    _ = _optional_cancellation_epoch(data)
+    _ = _text(data, "command_id")
+    _ = _nonnegative_int(data, "cancellation_epoch")
 
 
 def _optional_turn_id(value: dict[str, JsonValue]) -> TurnId | None:
@@ -434,6 +444,8 @@ def _validate_flush(
         "request_id",
         "target_generated_ssrc",
     }
+    if expected_source == "sound":
+        required.add("disposition")
 
     for field_name in required:
         if field_name not in data:
@@ -450,10 +462,14 @@ def _validate_flush(
 
     _ = _ssrc_field(data, "target_generated_ssrc")
 
+    if expected_source == "sound":
+        _ = _flush_disposition(data)
+
 
 def _validate_voice_evidence(data: dict[str, JsonValue], source: str) -> None:
     required = {
         "stream_id",
+        "input_epoch",
         "rtp_start_timestamp",
         "rtp_end_timestamp",
         "embedding_model_revision",
@@ -463,9 +479,10 @@ def _validate_voice_evidence(data: dict[str, JsonValue], source: str) -> None:
     if source != "mic" or set(data) != required:
         raise ControlEnvelopeError(field_name="data")
     _ = _text(data, "stream_id")
-    start = _nonnegative_int(data, "rtp_start_timestamp")
-    if _nonnegative_int(data, "rtp_end_timestamp") < start:
-        raise ControlEnvelopeError(field_name="data.rtp_end_timestamp")
+    _ = _nonnegative_int(data, "input_epoch")
+    start = _rtp_timestamp(data, "rtp_start_timestamp")
+    end = _rtp_timestamp(data, "rtp_end_timestamp")
+    _validate_rtp_span(start, end, MAX_EVIDENCE_SPAN_SAMPLES)
     _ = _text(data, "embedding_model_revision")
     _ = _embedding(data)
     quality = _mapping(data, "quality")
@@ -473,6 +490,14 @@ def _validate_voice_evidence(data: dict[str, JsonValue], source: str) -> None:
         raise ControlEnvelopeError(field_name="data.quality")
     _ = _nonnegative_int(quality, "speech_ms")
     _ = _quality_score(quality)
+
+
+def _flush_disposition(data: dict[str, JsonValue]) -> FlushDisposition:
+    raw = _text(data, "disposition")
+    try:
+        return FlushDisposition(raw)
+    except ValueError as error:
+        raise ControlEnvelopeError(field_name="data.disposition") from error
 
 
 def _parse_asr_event(
@@ -494,9 +519,9 @@ def _parse_asr_event(
         or set(data) - (required | {"confidence"})
     ):
         raise ControlEnvelopeError(field_name="data")
-    start = _nonnegative_int(data, "rtp_start_timestamp")
-    if _nonnegative_int(data, "rtp_end_timestamp") < start:
-        raise ControlEnvelopeError(field_name="data.rtp_end_timestamp")
+    start = _rtp_timestamp(data, "rtp_start_timestamp")
+    end = _rtp_timestamp(data, "rtp_end_timestamp")
+    _validate_rtp_span(start, end, MAX_ASR_SPAN_SAMPLES)
     text = _text(data, "text")
     if len(text) > MAX_ASR_TEXT_LENGTH:
         raise ControlEnvelopeError(field_name="data.text")
@@ -511,7 +536,7 @@ def _parse_asr_event(
         "stream_id": _text(data, "stream_id"),
         "segment_id": _text(data, "segment_id"),
         "rtp_start_timestamp": start,
-        "rtp_end_timestamp": _nonnegative_int(data, "rtp_end_timestamp"),
+        "rtp_end_timestamp": end,
         "cancellation_epoch": CancellationEpoch(
             _nonnegative_int(data, "cancellation_epoch")
         ),
@@ -566,6 +591,19 @@ def _nonnegative_int(data: dict[str, JsonValue], field_name: str) -> int:
         raise ControlEnvelopeError(field_name=f"data.{field_name}")
 
     return value
+
+
+def _rtp_timestamp(data: dict[str, JsonValue], field_name: str) -> int:
+    value = _nonnegative_int(data, field_name)
+    if value > MAX_SSRC:
+        raise ControlEnvelopeError(field_name=f"data.{field_name}")
+    return value
+
+
+def _validate_rtp_span(start: int, end: int, maximum: int) -> None:
+    distance = (end - start) & MAX_SSRC
+    if not 0 < distance <= maximum:
+        raise ControlEnvelopeError(field_name="data.rtp_end_timestamp")
 
 
 def _endpoint_port(data: dict[str, JsonValue]) -> int:

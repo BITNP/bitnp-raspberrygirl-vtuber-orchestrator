@@ -51,7 +51,7 @@ async def run_transport() -> None:
         session_runtime = SessionRuntime.create(
             session_id=session_id,
             turn_id_prefix="turn",
-            task_config=SchedulerTaskConfig(frozenset(TaskKind), 1),
+            task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
             response_execution_mode=getattr(
                 config,
                 "response_execution_mode",

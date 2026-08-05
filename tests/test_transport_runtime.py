@@ -11,6 +11,7 @@ from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.config import TrustedLanToken
 from orchestrator.ids import ConnectionId, SessionId
 from orchestrator.ids import TurnId as AgentTurnId
+from orchestrator.json_boundary import parse_json_value
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.streaming_contracts import (
@@ -114,8 +115,15 @@ class _RouteWithoutEpochAdvance:
         return 0
 
     def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None:
+        return EnvelopeCorrelation("trace", stream.session_id, 1)
+
+    def input_epoch(self, stream: StreamKey) -> int:
         _ = stream
-        return None
+        return 1
+
+    def owns_mic_input(self, stream: StreamKey, owner: ConnectionId) -> bool:
+        _ = stream, owner
+        return True
 
 
 @dataclass
@@ -367,14 +375,18 @@ def test_dispatch_never_releases_retired_mic_rtp_source() -> None:
 
         await dispatcher.register(_source_registration(), SOURCE_PEER[0], source)
 
-        assert source.messages == []
+        assert len(source.messages) == 1
+        ready = parse_json_value(source.messages[0])
+        assert isinstance(ready, dict)
+        assert ready["event_type"] == "mic.input.ready"
+        assert ready["data"] == {"stream_id": STREAM_ID, "input_epoch": 1}
 
         # Source registration is compatibility-only and cannot start media.
         assert sink.messages == []
 
         await dispatcher.register(_sink_ready(), SINK_PEER[0], sink)
 
-        assert source.messages == []
+        assert len(source.messages) == 1
 
     asyncio.run(verify_startup_gate())
 
@@ -384,6 +396,11 @@ def test_finished_playback_never_requires_mic_epoch_advance() -> None:
     dispatcher = TransportControlDispatch(route)
     fence = _RecordingOutputFence()
     dispatcher.set_output_fence(fence)
+    peer = RecordingControlPeer()
+    mic = RecordingControlPeer()
+
+    asyncio.run(dispatcher.register(_sink_registration(), SINK_PEER[0], peer))
+    asyncio.run(dispatcher.register(_source_registration(), SOURCE_PEER[0], mic))
 
     asyncio.run(
         dispatcher.register(
@@ -391,17 +408,18 @@ def test_finished_playback_never_requires_mic_epoch_advance() -> None:
                 "media.stream.state",
                 "sound",
                 {
+                    "command_id": f"rtp-{STREAM_ID}-0",
                     "stream_id": STREAM_ID,
                     "state": "finished",
                     "cancellation_epoch": 0,
                 },
             ),
             SINK_PEER[0],
-            RecordingControlPeer(),
+            peer,
         )
     )
 
-    assert route.registrations == 1
+    assert route.registrations == 3
     assert len(fence.finishes) == 1
 
 
@@ -414,6 +432,10 @@ def test_finished_playback_notifies_turn_reducer_only_after_fence_accepts() -> N
     dispatcher.set_playback_finished_callback(
         finished_streams.append
     )
+    peer = RecordingControlPeer()
+    mic = RecordingControlPeer()
+    asyncio.run(dispatcher.register(_sink_registration(), SINK_PEER[0], peer))
+    asyncio.run(dispatcher.register(_source_registration(), SOURCE_PEER[0], mic))
 
     asyncio.run(
         dispatcher.register(
@@ -421,13 +443,14 @@ def test_finished_playback_notifies_turn_reducer_only_after_fence_accepts() -> N
                 "media.stream.state",
                 "sound",
                 {
+                    "command_id": f"rtp-{STREAM_ID}-0",
                     "stream_id": STREAM_ID,
                     "state": "finished",
-                    "cancellation_epoch": 2,
+                    "cancellation_epoch": 0,
                 },
             ),
             SINK_PEER[0],
-            RecordingControlPeer(),
+            peer,
         )
     )
 
@@ -479,6 +502,7 @@ def test_hub_routes_voice_evidence_only_to_the_matching_session_runtime() -> Non
     evidence = VoiceEvidence(
         session_id=SESSION_ID,
         stream_id=STREAM_ID,
+        input_epoch=1,
         rtp_start_timestamp=10,
         rtp_end_timestamp=330,
         embedding_model_revision="camplusplus-onnx-v1",
@@ -527,8 +551,7 @@ def test_control_connection_rejects_comments_without_response_coordinator() -> N
     assert observables.snapshot.active_turn_id is None
 
     assert [rejection.correlation.trace_id for rejection in observables.rejections] == [
-        "trace-comment",
-        "trace-foreign",
+        "trace-comment"
     ]
 
     assert observables.task_commits == ()
@@ -559,7 +582,7 @@ def test_onsite_asr_final_is_routed_to_matching_session_runtime() -> None:
     assert session_runtime.observables.dispatches == ()
 
 
-def test_onsite_asr_final_creates_an_isolated_session_runtime() -> None:
+def test_onsite_asr_final_cannot_create_an_unregistered_session_runtime() -> None:
     runtime = TransportRuntime(_loopback_config())
     created: list[SessionRuntime] = []
 
@@ -581,9 +604,7 @@ def test_onsite_asr_final_creates_an_isolated_session_runtime() -> None:
         )
 
     assert not asyncio.run(run())
-    assert len(created) == 1
-    assert created[0].scheduler.snapshot.session_id == SessionId("session-new")
-    assert created[0].observables.dispatches == ()
+    assert created == []
 
 
 def test_control_connection_refuses_comments_without_valid_credential() -> None:
@@ -634,7 +655,7 @@ def test_control_connection_refuses_comments_without_valid_credential() -> None:
     assert observables.sound_transitions == ()
 
 
-def test_control_connection_routes_authenticated_profile_action_and_presentation() -> (
+def test_control_connection_rejects_mixed_roles_on_one_authenticated_connection() -> (
     None
 ):
     # Given: one authenticated control connection carrying only canonical commands.
@@ -666,23 +687,13 @@ def test_control_connection_routes_authenticated_profile_action_and_presentation
 
     asyncio.run(runtime.handle_control(connection))
 
-    # Then: typed reducer paths record outcomes and the exact ACK commits deck state.
+    # Then: the first source binds the connection role and other roles are rejected.
 
-    assert session_runtime.interaction_ingress.reducer.presentation_state == (
-        "deck-transport",
-        "v1",
-        1,
-    )
+    assert session_runtime.interaction_ingress.reducer.presentation_state is None
 
     stages = [record.stage for record in session_runtime.operational_journal.records]
 
-    assert stages == [
-        "profile_enrolled",
-        "profile_revoked",
-        "action",
-        "presentation_command",
-        "presentation_ack",
-    ]
+    assert stages == []
 
     assert session_runtime.deck_dispatcher.journal == ()
 
@@ -840,7 +851,12 @@ def _stream_state(state: str) -> str:
     return _envelope(
         "media.stream.state",
         "sound",
-        {"stream_id": STREAM_ID, "state": state},
+        {
+            "command_id": f"rtp-{STREAM_ID}-0",
+            "stream_id": STREAM_ID,
+            "state": state,
+            "cancellation_epoch": 0,
+        },
     )
 
 

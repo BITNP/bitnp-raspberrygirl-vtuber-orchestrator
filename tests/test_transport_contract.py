@@ -30,7 +30,7 @@ def test_transport_config_requires_wss_tls_and_token_outside_loopback() -> None:
 
     # Then: production cannot silently downgrade the control plane from WSS.
 
-    assert error.value.field_name == "TRUSTED_LAN_TOKEN"
+    assert error.value.field_name == "ORCHESTRATOR_MIC_CONTROL_TOKEN"
 
 
 def test_transport_config_allows_explicit_loopback_ws_for_tests() -> None:
@@ -77,7 +77,7 @@ def test_transport_config_requires_tls_paths_outside_loopback() -> None:
         "ORCHESTRATOR_TRANSPORT_ADVERTISED_HOST": "orchestrator.example.test",
         "ORCHESTRATOR_TRANSPORT_ADVERTISED_CONTROL_PORT": "443",
         "ORCHESTRATOR_TRANSPORT_ADVERTISED_RTP_PORT": "5004",
-        "TRUSTED_LAN_TOKEN": "placeholder-transport-token",
+        **_role_tokens(),
     }
 
     # When: the typed configuration is loaded.
@@ -129,7 +129,7 @@ def test_transport_config_exposes_deployable_wss_and_udp_endpoints() -> None:
         "ORCHESTRATOR_TRANSPORT_ADVERTISED_RTP_PORT": "5004",
         "ORCHESTRATOR_CONTROL_TLS_CERT_PATH": "/run/secrets/control.crt",
         "ORCHESTRATOR_CONTROL_TLS_KEY_PATH": "/run/secrets/control.key",
-        "TRUSTED_LAN_TOKEN": "placeholder-transport-token",
+        **_role_tokens(),
     }
 
     # When: the typed configuration is loaded.
@@ -149,3 +149,28 @@ def test_transport_config_exposes_deployable_wss_and_udp_endpoints() -> None:
     assert config.tls_cert_path == Path("/run/secrets/control.crt")
 
     assert config.tls_key_path == Path("/run/secrets/control.key")
+
+
+def test_transport_config_rejects_duplicate_role_tokens() -> None:
+    environment = {
+        "ORCHESTRATOR_TRANSPORT_ADVERTISED_HOST": "orchestrator.example.test",
+        "ORCHESTRATOR_CONTROL_TLS_CERT_PATH": "/run/secrets/control.crt",
+        "ORCHESTRATOR_CONTROL_TLS_KEY_PATH": "/run/secrets/control.key",
+        **_role_tokens(),
+        "ORCHESTRATOR_SOUND_CONTROL_TOKEN": "mic-role-token",
+    }
+
+    with pytest.raises(ConfigParseError) as error:
+        _ = load_transport_config_from_env(environment)
+
+    assert error.value.field_name == "ORCHESTRATOR_*_CONTROL_TOKEN"
+
+
+def _role_tokens() -> dict[str, str]:
+    return {
+        "ORCHESTRATOR_MIC_CONTROL_TOKEN": "mic-role-token",
+        "ORCHESTRATOR_SOUND_CONTROL_TOKEN": "sound-role-token",
+        "ORCHESTRATOR_COMMENTS_CONTROL_TOKEN": "comments-role-token",
+        "ORCHESTRATOR_FRONTEND_CONTROL_TOKEN": "frontend-role-token",
+        "ORCHESTRATOR_OPERATOR_CONTROL_TOKEN": "operator-role-token",
+    }

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Final, NewType, Protocol, final
 
 StreamingContractVersion = NewType("StreamingContractVersion", str)
@@ -15,6 +16,11 @@ CancellationEpoch = NewType("CancellationEpoch", int)
 FlushRequestId = NewType("FlushRequestId", str)
 
 GeneratedSsrc = NewType("GeneratedSsrc", int)
+
+
+class FlushDisposition(StrEnum):
+    APPLIED = "APPLIED"
+    REPLAYED = "REPLAYED"
 
 
 STREAMING_CONTRACT_VERSION: Final = StreamingContractVersion("1.0.0")
@@ -82,12 +88,18 @@ class FlushAcknowledgement:
 
     target_generated_ssrc: GeneratedSsrc
 
+    disposition: FlushDisposition = FlushDisposition.APPLIED
+
     version: StreamingContractVersion = STREAMING_CONTRACT_VERSION
 
     correlation: EnvelopeIdentity | None = None
 
     @classmethod
-    def from_flush(cls, flush: StreamFlush) -> FlushAcknowledgement:
+    def from_flush(
+        cls,
+        flush: StreamFlush,
+        disposition: FlushDisposition = FlushDisposition.APPLIED,
+    ) -> FlushAcknowledgement:
         return cls(
             stream=flush.stream,
             turn_id=flush.turn_id,
@@ -95,6 +107,7 @@ class FlushAcknowledgement:
             cancellation_epoch=flush.cancellation_epoch,
             request_id=flush.request_id,
             target_generated_ssrc=flush.target_generated_ssrc,
+            disposition=disposition,
             version=flush.version,
             correlation=flush.correlation,
         )
@@ -157,9 +170,10 @@ class FlushAdmission:
     def acknowledge(self, acknowledgement: FlushAcknowledgement) -> bool:
         pending = self._pending.get(acknowledgement.stream)
 
-        if pending is None or acknowledgement != FlushAcknowledgement.from_flush(
-            pending.flush
-        ):
+        if pending is None or acknowledgement not in {
+            FlushAcknowledgement.from_flush(pending.flush, FlushDisposition.APPLIED),
+            FlushAcknowledgement.from_flush(pending.flush, FlushDisposition.REPLAYED),
+        }:
             flush = (
                 pending.flush
                 if pending is not None

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from orchestrator.json_boundary import parse_json_value
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
     FlushAcknowledgement,
@@ -84,11 +85,14 @@ def test_flush_envelope_parses_every_epoch_correlated_identity() -> None:
 def test_flush_acknowledgement_parses_every_envelope_and_command_correlation() -> None:
     # Given: a Sound acknowledgement preserving a generated-media flush identity.
 
-    acknowledgement_envelope = (
-        _flush_envelope()
-        .replace('"media.stream.flush"', '"media.stream.flush.ack"')
-        .replace('"orchestrator"', '"sound"')
-    )
+    acknowledgement_value = parse_json_value(_flush_envelope())
+    assert isinstance(acknowledgement_value, dict)
+    acknowledgement_value["event_type"] = "media.stream.flush.ack"
+    acknowledgement_value["source"] = "sound"
+    acknowledgement_data = acknowledgement_value["data"]
+    assert isinstance(acknowledgement_data, dict)
+    acknowledgement_data["disposition"] = "APPLIED"
+    acknowledgement_envelope = json.dumps(acknowledgement_value)
 
     # When: the WSS boundary parses the acknowledgement.
 
@@ -147,6 +151,7 @@ def test_voice_evidence_is_bounded_and_keeps_rtp_correlation() -> None:
             "seq": 7,
             "data": {
                 "stream_id": "stream-001",
+                "input_epoch": 1,
                 "rtp_start_timestamp": 1_000,
                 "rtp_end_timestamp": 4_200,
                 "embedding_model_revision": "camplusplus-onnx-v1",
@@ -161,6 +166,7 @@ def test_voice_evidence_is_bounded_and_keeps_rtp_correlation() -> None:
     assert evidence == VoiceEvidence(
         session_id="session-001",
         stream_id="stream-001",
+        input_epoch=1,
         rtp_start_timestamp=1_000,
         rtp_end_timestamp=4_200,
         embedding_model_revision="camplusplus-onnx-v1",

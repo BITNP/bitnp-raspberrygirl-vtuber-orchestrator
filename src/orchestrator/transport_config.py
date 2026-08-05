@@ -1,10 +1,11 @@
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal
 
 from orchestrator.config import ConfigParseError, TrustedLanToken
+from orchestrator.control_roles import RoleTokens
 
 CONTROL_BIND_HOST_KEY: Final = "ORCHESTRATOR_CONTROL_BIND_HOST"
 
@@ -26,7 +27,14 @@ TLS_KEY_PATH_KEY: Final = "ORCHESTRATOR_CONTROL_TLS_KEY_PATH"
 
 LOOPBACK_WS_KEY: Final = "ORCHESTRATOR_TRANSPORT_ALLOW_LOOPBACK_WS"
 
-TOKEN_KEY: Final = "TRUSTED_LAN_TOKEN"  # noqa: S105 - environment key name only.
+MIC_TOKEN_KEY: Final = "ORCHESTRATOR_MIC_CONTROL_TOKEN"  # noqa: S105
+SOUND_TOKEN_KEY: Final = "ORCHESTRATOR_SOUND_CONTROL_TOKEN"  # noqa: S105
+COMMENTS_TOKEN_KEY: Final = "ORCHESTRATOR_COMMENTS_CONTROL_TOKEN"  # noqa: S105
+FRONTEND_TOKEN_KEY: Final = "ORCHESTRATOR_FRONTEND_CONTROL_TOKEN"  # noqa: S105
+OPERATOR_TOKEN_KEY: Final = "ORCHESTRATOR_OPERATOR_CONTROL_TOKEN"  # noqa: S105
+MAX_SESSIONS_KEY: Final = "ORCHESTRATOR_MAX_SESSIONS"
+SESSION_IDLE_TTL_SECONDS_KEY: Final = "ORCHESTRATOR_SESSION_IDLE_TTL_SECONDS"
+SESSION_SWEEP_SECONDS_KEY: Final = "ORCHESTRATOR_SESSION_SWEEP_SECONDS"
 
 DEFAULT_CONTROL_BIND_HOST: Final = "127.0.0.1"
 
@@ -72,6 +80,14 @@ class TransportConfig:
 
     tls_key_path: Path | None
 
+    role_tokens: RoleTokens = field(default_factory=RoleTokens)
+
+    max_sessions: int = 16
+
+    session_idle_ttl_seconds: int = 1800
+
+    session_sweep_seconds: int = 30
+
 
 def load_transport_config_from_env(env: Mapping[str, str]) -> TransportConfig:
     loopback_ws = _parse_loopback_ws(env.get(LOOPBACK_WS_KEY))
@@ -93,6 +109,8 @@ def load_transport_config_from_env(env: Mapping[str, str]) -> TransportConfig:
 
         _require_loopback_host(advertised_host, ADVERTISED_HOST_KEY)
 
+    role_tokens = _parse_role_tokens(env, loopback_ws)
+
     return TransportConfig(
         control_bind_host=control_bind_host,
         control_bind_port=_parse_port(
@@ -113,12 +131,22 @@ def load_transport_config_from_env(env: Mapping[str, str]) -> TransportConfig:
             ADVERTISED_RTP_PORT_KEY,
         ),
         control_scheme="ws" if loopback_ws else "wss",
-        control_token=_parse_token(env.get(TOKEN_KEY), loopback_ws),
+        control_token=None,
         tls_cert_path=_parse_tls_path(
             env.get(TLS_CERT_PATH_KEY), TLS_CERT_PATH_KEY, loopback_ws
         ),
         tls_key_path=_parse_tls_path(
             env.get(TLS_KEY_PATH_KEY), TLS_KEY_PATH_KEY, loopback_ws
+        ),
+        role_tokens=role_tokens,
+        max_sessions=_parse_positive_int(
+            env.get(MAX_SESSIONS_KEY), MAX_SESSIONS_KEY, 16
+        ),
+        session_idle_ttl_seconds=_parse_positive_int(
+            env.get(SESSION_IDLE_TTL_SECONDS_KEY), SESSION_IDLE_TTL_SECONDS_KEY, 1800
+        ),
+        session_sweep_seconds=_parse_positive_int(
+            env.get(SESSION_SWEEP_SECONDS_KEY), SESSION_SWEEP_SECONDS_KEY, 30
         ),
     )
 
@@ -161,11 +189,29 @@ def _require_loopback_host(host: str, field_name: str) -> None:
         raise ConfigParseError(field_name=field_name)
 
 
-def _parse_token(value: str | None, loopback_ws: bool) -> TrustedLanToken | None:
+def _parse_role_tokens(env: Mapping[str, str], loopback_ws: bool) -> RoleTokens:
     if loopback_ws:
-        return None
-
-    return TrustedLanToken(_require_text(value, TOKEN_KEY))
+        return RoleTokens()
+    values = {
+        key: TrustedLanToken(_require_text(env.get(key), key))
+        for key in (
+            MIC_TOKEN_KEY,
+            SOUND_TOKEN_KEY,
+            COMMENTS_TOKEN_KEY,
+            FRONTEND_TOKEN_KEY,
+            OPERATOR_TOKEN_KEY,
+        )
+    }
+    tokens = RoleTokens(
+        mic=values[MIC_TOKEN_KEY],
+        sound=values[SOUND_TOKEN_KEY],
+        comments=values[COMMENTS_TOKEN_KEY],
+        frontend=values[FRONTEND_TOKEN_KEY],
+        operator=values[OPERATOR_TOKEN_KEY],
+    )
+    if not tokens.validate_unique():
+        raise ConfigParseError(field_name="ORCHESTRATOR_*_CONTROL_TOKEN")
+    return tokens
 
 
 def _parse_tls_path(
@@ -175,3 +221,10 @@ def _parse_tls_path(
         return None
 
     return Path(_require_text(value, field_name))
+
+
+def _parse_positive_int(value: str | None, field_name: str, default: int) -> int:
+    parsed = str(default) if value is None or value.strip() == "" else value.strip()
+    if not parsed.isdecimal() or int(parsed) < 1:
+        raise ConfigParseError(field_name=field_name)
+    return int(parsed)

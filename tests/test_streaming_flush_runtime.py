@@ -333,10 +333,7 @@ async def _rejection_proof() -> None:
 
     assert await runtime.admit_replacement(flush) is False
 
-    assert [failure.reason for failure in runtime.flush_failures] == [
-        "invalid_ack",
-        "timeout",
-    ]
+    assert [failure.reason for failure in runtime.flush_failures] == ["timeout"]
 
     await _close_runtime(runtime, source, sink, tasks)
 
@@ -541,6 +538,7 @@ def _acknowledgement(flush: StreamFlush, *, session_id: str = "session-001") -> 
                 "cancellation_epoch": int(flush.cancellation_epoch),
                 "request_id": str(flush.request_id),
                 "target_generated_ssrc": int(flush.target_generated_ssrc),
+                "disposition": "APPLIED",
             },
             trace_id="trace-source-001",
             seq=29,

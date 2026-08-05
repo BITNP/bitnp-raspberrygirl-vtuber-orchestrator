@@ -123,6 +123,8 @@ class RtpHub:
 
         self._mic_inputs: set[StreamKey] = set()
 
+        self._mic_input_owners: dict[StreamKey, ConnectionId] = {}
+
         self._sinks: dict[StreamKey, PeerAddress] = {}
 
         self._sink_owners: dict[StreamKey, ConnectionId] = {}
@@ -218,7 +220,9 @@ class RtpHub:
     ) -> None:
         self._voice_evidence_callback = callback
 
-    def accept_asr_final(self, event: AsrFinal) -> bool:
+    def accept_asr_final(
+        self, event: AsrFinal, owner: ConnectionId | None = None
+    ) -> bool:
         """Validate that a final belongs to a live Mic route exactly once.
 
         Recognition text is deliberately not accepted from RTP or arbitrary
@@ -227,6 +231,8 @@ class RtpHub:
         """
         stream = StreamKey(event.session_id, event.stream_id)
         if stream not in self._mic_inputs:
+            return False
+        if owner is not None and self._mic_input_owners.get(stream) != owner:
             return False
         if int(event.cancellation_epoch) != self._route_generations.get(stream, 0):
             return False
@@ -491,7 +497,12 @@ class RtpHub:
         match parsed_event:
             case MicInputRegistration(session_id=session_id, stream_id=stream_id):
                 stream = StreamKey(session_id, stream_id)
+                next_epoch = self._route_generations.get(stream, 0) + 1
+                self._route_generations[stream] = next_epoch
+                _ = self._last_asr_sequences.pop(stream, None)
                 self._mic_inputs.add(stream)
+                if owner is not None:
+                    self._mic_input_owners[stream] = owner
                 self._correlations[stream] = parsed_event.correlation
                 observability = self._observability
                 if observability is not None:
@@ -582,6 +593,12 @@ class RtpHub:
             await bridge.wait_quiescent()
 
     def remove_connection(self, owner: ConnectionId) -> None:
+        for stream, input_owner in tuple(self._mic_input_owners.items()):
+            if input_owner == owner:
+                self._invalidate_stream(stream)
+                self._mic_inputs.discard(stream)
+                _ = self._mic_input_owners.pop(stream, None)
+                _ = self._last_asr_sequences.pop(stream, None)
         for stream, route_owner in tuple(self._sink_owners.items()):
             if route_owner == owner:
                 self._remove_sink(stream)
@@ -606,11 +623,30 @@ class RtpHub:
     def remove_stream(self, session_id: str, stream_id: str) -> None:
         self._remove_stream(StreamKey(session_id, stream_id))
 
+    def remove_session(self, session_id: str) -> None:
+        streams = {
+            *(stream for stream in self._mic_inputs if stream.session_id == session_id),
+            *(stream for stream in self._sinks if stream.session_id == session_id),
+            *(
+                stream
+                for stream in self._correlations
+                if stream.session_id == session_id
+            ),
+        }
+        for stream in streams:
+            self._remove_stream(stream)
+
     def output_ssrc(self, stream: StreamKey, cancellation_epoch: int = 0) -> int:
         return generated_ssrc(stream, CancellationEpoch(cancellation_epoch))
 
     def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None:
         return self._correlations.get(stream)
+
+    def input_epoch(self, stream: StreamKey) -> int:
+        return self._route_generations.get(stream, 0)
+
+    def owns_mic_input(self, stream: StreamKey, owner: ConnectionId) -> bool:
+        return self._mic_input_owners.get(stream) == owner
 
     def _register_sink(
         self,

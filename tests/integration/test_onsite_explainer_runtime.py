@@ -71,14 +71,16 @@ class _Datagrams:
 @dataclass(slots=True)
 class _SoundBinding:
 
-    handler: Callable[[bytes], None] | None = None
+    handler: Callable[[bytes, tuple[str, int] | None], None] | None = None
 
     @property
     def port(self) -> int:
 
         return 50_006
 
-    def set_packet_handler(self, handler: Callable[[bytes], None]) -> None:
+    def set_packet_handler(
+        self, handler: Callable[[bytes, tuple[str, int] | None], None]
+    ) -> None:
 
         self.handler = handler
 
@@ -86,7 +88,7 @@ class _SoundBinding:
 
         assert self.handler is not None
 
-        self.handler(packet)
+        self.handler(packet, None)
 
     def close(self) -> None:
 
@@ -485,6 +487,7 @@ async def _sound_runtime_playback_proof() -> None:
             rtp_host=SOUND_BIND_HOST,
             rtp_port=50_006,
             advertised_rtp_host="sound.example.test",
+            jitter_target_ms=20,
         ),
         udp_binder=_SoundBinder(binding),
         control_connector=_SoundConnector(control),
@@ -558,7 +561,8 @@ def _sound_command(ssrc: int) -> str:
             "start_rtp_timestamp": 96_000,
             "ssrc": ssrc,
             "codec": _codec(),
-            "rtp_endpoint": {"host": "sound.example.test", "port": 50_006},
+            "cancellation_epoch": 0,
+            "rtp_sender_endpoint": {"host": "127.0.0.1", "port": 50_004},
         },
     )
 

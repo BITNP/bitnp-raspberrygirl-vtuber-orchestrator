@@ -30,6 +30,7 @@ from orchestrator.transport_control import (
     SinkRegistration,
     StreamReady,
     StreamState,
+    VoiceEvidence,
     parse_control_event,
 )
 
@@ -66,6 +67,10 @@ class RouteRegistry(Protocol):
 
     def correlation(self, stream: StreamKey) -> EnvelopeCorrelation | None: ...
 
+    def input_epoch(self, stream: StreamKey) -> int: ...
+
+    def owns_mic_input(self, stream: StreamKey, owner: ConnectionId) -> bool: ...
+
 
 class OutputFence(Protocol):
     def acknowledge(self, acknowledgement: FlushAcknowledgement) -> bool: ...
@@ -96,16 +101,20 @@ class TransportControlDispatch:
         *,
         clock: FlushClock | None = None,
         observability: OnsiteObservability | None = None,
+        rtp_sender_endpoint: tuple[str, int] = ("127.0.0.1", 5004),
     ) -> None:
         self._hub: RouteRegistry = hub
 
         self._observability = observability
+        self._rtp_sender_endpoint = rtp_sender_endpoint
 
         self._sinks: dict[StreamKey, _SinkPeer] = {}
 
         self._dispatched: set[StreamKey] = set()
 
         self._ready_sinks: set[StreamKey] = set()
+
+        self._leases: dict[StreamKey, tuple[str, int]] = {}
 
         self._flush_outbox: list[StreamFlush] = []
 
@@ -126,7 +135,7 @@ class TransportControlDispatch:
         """Receive only physically verified playback completion events."""
         self._playback_finished_callback = callback
 
-    async def register(  # noqa: C901, PLR0911
+    async def register(  # noqa: C901, PLR0911, PLR0912
         self, raw_message: str, peer_ip: str, connection: ControlPeer
     ) -> None:
         event = parse_control_event(raw_message)
@@ -135,13 +144,36 @@ class TransportControlDispatch:
             "control_register event=%s peer=%s", type(event).__name__, peer_ip
         )
 
-        self._hub.register_control(event, peer_ip, _connection_id(connection))
+        owner = _connection_id(connection)
+        if isinstance(event, VoiceEvidence):
+            evidence_stream = StreamKey(event.session_id, event.stream_id)
+            if (
+                not self._hub.owns_mic_input(evidence_stream, owner)
+                or event.input_epoch != self._hub.input_epoch(evidence_stream)
+            ):
+                return
+        if isinstance(event, StreamState):
+            stream = StreamKey(event.session_id, event.stream_id)
+            if (
+                event.cancellation_epoch is None
+                or self._leases.get(stream)
+                != (event.command_id, int(event.cancellation_epoch))
+            ):
+                return
+
+        self._hub.register_control(event, peer_ip, owner)
 
         if isinstance(event, StreamState):
             self._record_playback(event)
 
         match event:
             case MicInputRegistration(session_id=session_id, stream_id=stream_id):
+                stream = StreamKey(session_id, stream_id)
+                await connection.send(
+                    _mic_input_ready_envelope(
+                        stream, self._hub.input_epoch(stream), event.correlation
+                    )
+                )
                 await self._dispatch_start(StreamKey(session_id, stream_id))
                 return
 
@@ -168,6 +200,9 @@ class TransportControlDispatch:
                 stream_id=stream_id,
                 state="cancelled" | "error",
             ):
+                sink = self._sinks.get(StreamKey(session_id, stream_id))
+                if sink is None or sink.connection is not connection:
+                    return
                 self._discard(StreamKey(session_id, stream_id))
 
             case StreamState(
@@ -178,6 +213,9 @@ class TransportControlDispatch:
                 segment_id=segment_id,
                 cancellation_epoch=cancellation_epoch,
             ):
+                sink = self._sinks.get(StreamKey(session_id, stream_id))
+                if sink is None or sink.connection is not connection:
+                    return
                 self._finish_playback(
                     stream=StreamKey(session_id, stream_id),
                     turn_id=turn_id,
@@ -190,6 +228,9 @@ class TransportControlDispatch:
                 return
 
             case FlushAcknowledgement() as acknowledgement:
+                sink = self._sinks.get(acknowledgement.stream)
+                if sink is None or sink.connection is not connection:
+                    return
                 self._record_flush_acknowledgement(acknowledgement)
 
                 admitted = self._flush_admission.acknowledge(acknowledgement)
@@ -264,10 +305,14 @@ class TransportControlDispatch:
             _stream_command_envelope(
                 flush.stream,
                 self._hub.output_ssrc(flush.stream, int(flush.cancellation_epoch)),
-                sink,
+                self._rtp_sender_endpoint,
                 self._hub.correlation(flush.stream),
                 flush,
             )
+        )
+        self._leases[flush.stream] = (
+            _media_command_id(flush.stream, int(flush.cancellation_epoch)),
+            int(flush.cancellation_epoch),
         )
         _LOGGER.debug(
             "control_sent event=media.stream.command session=%s stream=%s epoch=%d",
@@ -285,9 +330,13 @@ class TransportControlDispatch:
             return
         await sink.connection.send(
             _stream_end_envelope(
-                stream, epoch, self._hub.output_ssrc(stream, epoch), correlation
+                stream,
+                epoch,
+                self._hub.output_ssrc(stream, epoch),
+                correlation,
             )
         )
+        self._leases[stream] = (_media_command_id(stream, epoch), epoch)
         _LOGGER.debug(
             "control_sent event=media.stream.end session=%s stream=%s epoch=%d",
             stream.session_id,
@@ -304,11 +353,12 @@ class TransportControlDispatch:
             _stream_command_envelope(
                 stream,
                 self._hub.output_ssrc(stream, epoch),
-                sink,
+                self._rtp_sender_endpoint,
                 correlation,
                 epoch=epoch,
             )
         )
+        self._leases[stream] = (_media_command_id(stream, epoch), epoch)
         _LOGGER.debug(
             "control_sent event=media.stream.command session=%s stream=%s epoch=%d",
             stream.session_id,
@@ -351,6 +401,8 @@ class TransportControlDispatch:
 
         self._ready_sinks.clear()
 
+        self._leases.clear()
+
         self._flush_outbox.clear()
 
     def set_observability(self, observability: OnsiteObservability) -> None:
@@ -370,6 +422,18 @@ class TransportControlDispatch:
 
                 self._ready_sinks.discard(stream)
 
+                _ = self._leases.pop(stream, None)
+
+    def remove_session(self, session_id: str) -> None:
+        for stream in tuple(self._sinks):
+            if stream.session_id == session_id:
+                self._discard(stream)
+        self._flush_outbox[:] = [
+            flush
+            for flush in self._flush_outbox
+            if flush.stream.session_id != session_id
+        ]
+
     async def _dispatch_start(self, stream: StreamKey) -> None:
         sink = self._sinks.get(stream)
 
@@ -385,9 +449,13 @@ class TransportControlDispatch:
 
         await sink.connection.send(
             _stream_command_envelope(
-                stream, self._hub.output_ssrc(stream), sink, correlation
+                stream,
+                self._hub.output_ssrc(stream),
+                self._rtp_sender_endpoint,
+                correlation,
             )
         )
+        self._leases[stream] = (_media_command_id(stream, 0), 0)
 
     async def _deliver_flushes(self) -> None:
         while self._flush_outbox:
@@ -409,6 +477,8 @@ class TransportControlDispatch:
         self._dispatched.discard(stream)
 
         self._ready_sinks.discard(stream)
+
+        _ = self._leases.pop(stream, None)
 
     def _record_playback(self, event: StreamState) -> None:
         observability = self._observability
@@ -488,7 +558,7 @@ class TransportControlDispatch:
 def _stream_command_envelope(  # noqa: PLR0913
     stream: StreamKey,
     ssrc: int,
-    sink: _SinkPeer,
+    rtp_sender_endpoint: tuple[str, int],
     correlation: EnvelopeCorrelation | None,
     flush: StreamFlush | None = None,
     epoch: int | None = None,
@@ -498,19 +568,23 @@ def _stream_command_envelope(  # noqa: PLR0913
 
         raise RuntimeError(message)
 
+    cancellation_epoch = (
+        int(flush.cancellation_epoch)
+        if flush is not None
+        else (0 if epoch is None else epoch)
+    )
     data: dict[str, object] = {
-        "command_id": f"rtp-{stream.stream_id}",
+        "command_id": _media_command_id(stream, cancellation_epoch),
         "stream_id": stream.stream_id,
         "start_rtp_timestamp": 96_000,
         "ssrc": ssrc,
         "codec": _CODEC,
-        "rtp_endpoint": {"host": sink.host, "port": sink.udp_port},
+        "cancellation_epoch": cancellation_epoch,
+        "rtp_sender_endpoint": {
+            "host": rtp_sender_endpoint[0],
+            "port": rtp_sender_endpoint[1],
+        },
     }
-
-    if flush is not None:
-        data["cancellation_epoch"] = int(flush.cancellation_epoch)
-    elif epoch is not None:
-        data["cancellation_epoch"] = epoch
 
     return _envelope(
         event_type="media.stream.command",
@@ -530,13 +604,28 @@ def _cancel_envelope(stream_id: str, correlation: EnvelopeCorrelation) -> str:
     )
 
 
+def _mic_input_ready_envelope(
+    stream: StreamKey, input_epoch: int, correlation: EnvelopeCorrelation
+) -> str:
+    return _envelope(
+        event_type="mic.input.ready",
+        correlation=correlation,
+        data={"stream_id": stream.stream_id, "input_epoch": input_epoch},
+    )
+
+
 def _stream_end_envelope(
     stream: StreamKey, epoch: int, ssrc: int, correlation: EnvelopeCorrelation
 ) -> str:
     return _envelope(
         event_type="media.stream.end",
         correlation=correlation,
-        data={"stream_id": stream.stream_id, "cancellation_epoch": epoch, "ssrc": ssrc},
+        data={
+            "command_id": _media_command_id(stream, epoch),
+            "stream_id": stream.stream_id,
+            "cancellation_epoch": epoch,
+            "ssrc": ssrc,
+        },
     )
 
 
@@ -557,6 +646,10 @@ def _flush_envelope(flush: StreamFlush, correlation: EnvelopeCorrelation) -> str
 
 def _connection_id(connection: ControlPeer) -> ConnectionId:
     return ConnectionId(str(id(connection)))
+
+
+def _media_command_id(stream: StreamKey, epoch: int) -> str:
+    return f"rtp-{stream.stream_id}-{epoch}"
 
 
 def _envelope(

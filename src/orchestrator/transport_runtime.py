@@ -20,19 +20,28 @@ from orchestrator.comment_ingress import (
     CommentTokenValue,
 )
 from orchestrator.control_ingress import SessionEndControl, parse_session_control
+from orchestrator.control_roles import (
+    MAX_CONTROL_FRAME_BYTES,
+    ROLE_SOURCES,
+    SESSION_ADMISSION_EVENTS,
+    PeerRole,
+    role_allows,
+    valid_session_id,
+)
 from orchestrator.frontend_effects import send_caption_timeline
 from orchestrator.ids import (
-    SegmentId as SchedulerSegmentId,
-)
-from orchestrator.ids import (
+    ConnectionId,
     SessionId,
     TraceId,
+)
+from orchestrator.ids import (
+    SegmentId as SchedulerSegmentId,
 )
 from orchestrator.ids import (
     TurnId as SchedulerTurnId,
 )
 from orchestrator.interaction_ingress import parse_comment_proposal
-from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
+from orchestrator.json_boundary import JsonBoundaryError, JsonValue, parse_json_value
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.sessions import EventCorrelation, EventSequence
@@ -41,7 +50,6 @@ from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import (
     AsrFinal,
     ControlEnvelopeError,
-    bearer_token_matches,
     parse_control_event,
 )
 from orchestrator.transport_dispatch import TransportControlDispatch
@@ -115,6 +123,20 @@ class TransportReadiness:
         return self.listener_ready
 
 
+@dataclass(slots=True)
+class _ControlPeerState:
+    role: PeerRole | None
+    connection_id: int
+    remote_address: str
+    session_id: str | None = None
+
+
+@dataclass(slots=True)
+class _SessionLease:
+    last_activity_ms: int
+    owners: set[int]
+
+
 @final
 class TransportRuntime:
     def __init__(
@@ -140,7 +162,12 @@ class TransportRuntime:
         self._onsite_bridge: OnsiteBridge | None = onsite_bridge
 
         self._control_dispatch: TransportControlDispatch = TransportControlDispatch(
-            self._hub, clock=clock
+            self._hub,
+            clock=clock,
+            rtp_sender_endpoint=(
+                config.advertised_host,
+                config.advertised_udp_port,
+            ),
         )
 
         self._hub.set_output_finished_callback(
@@ -167,6 +194,8 @@ class TransportRuntime:
 
         self._flush_driver: asyncio.Task[None] | None = None
 
+        self._session_sweeper: asyncio.Task[None] | None = None
+
         self._agent_tts_tasks: set[asyncio.Task[None]] = set()
 
         self._preoutput_agent_tts: dict[tuple[str, str], asyncio.Task[None]] = {}
@@ -174,6 +203,8 @@ class TransportRuntime:
         self._session_runtime: SessionRuntime | None = None
 
         self._session_runtimes: dict[str, SessionRuntime] = {}
+
+        self._session_leases: dict[str, _SessionLease] = {}
 
         self._session_runtime_factory: SessionRuntimeFactory | None = None
 
@@ -183,10 +214,16 @@ class TransportRuntime:
 
         self._active_timelines: dict[str, tuple[CaptionTimelineCommand, TurnId]] = {}
 
+        self._control_peers: dict[int, _ControlPeerState] = {}
+
     def set_session_runtime(self, session_runtime: SessionRuntime) -> None:
         self._session_runtime = session_runtime
         self._session_runtimes[str(session_runtime.scheduler.snapshot.session_id)] = (
             session_runtime
+        )
+        _ = self._session_leases.setdefault(
+            str(session_runtime.scheduler.snapshot.session_id),
+            _SessionLease(_monotonic_ms(), set()),
         )
 
         self.set_output_fence(session_runtime.output_fence)
@@ -345,6 +382,7 @@ class TransportRuntime:
         )
 
         self._flush_driver = asyncio.create_task(self._drive_flush_admission())
+        self._session_sweeper = asyncio.create_task(self._sweep_sessions_forever())
         _LOGGER.debug(
             "transport_started udp=%s:%d control=%s:%d",
             self._config.udp_bind_host,
@@ -444,6 +482,13 @@ class TransportRuntime:
         return TransportReadiness(listener_ready, self._hub.route_ready)
 
     async def close(self) -> None:
+        session_sweeper = self._session_sweeper
+        if session_sweeper is not None:
+            _ = session_sweeper.cancel()
+            with suppress(asyncio.CancelledError):
+                await session_sweeper
+            self._session_sweeper = None
+
         flush_driver = self._flush_driver
 
         if flush_driver is not None:
@@ -487,29 +532,101 @@ class TransportRuntime:
 
         self._control_dispatch.clear()
 
+        for session_id in tuple(self._session_runtimes):
+            await self._teardown_session(session_id, reason="transport_closed")
+
     async def handle_control(  # noqa: C901, PLR0912, PLR0915
         self, connection: ControlConnection
     ) -> None:
         peer_ip = _peer_ip(connection)
 
+        authorization = _connection_authorization(connection)
+        role = self._config.role_tokens.resolve(authorization)
+        legacy_authenticated = (
+            self._config.control_token is not None
+            and authorization == f"Bearer {self._config.control_token}"
+        )
+        state = _ControlPeerState(role, id(connection), peer_ip)
+        self._control_peers[id(connection)] = state
+
         try:
             async for message in connection:
                 if isinstance(message, str):
+                    if len(message.encode("utf-8")) > MAX_CONTROL_FRAME_BYTES:
+                        _LOGGER.debug(
+                            "control_rejected peer=%s reason=frame_too_large", peer_ip
+                        )
+                        continue
                     _LOGGER.debug(
                         "control_received peer=%s bytes=%d", peer_ip, len(message)
                     )
-                    if not bearer_token_matches(
-                        self._config.control_token,
-                        _connection_authorization(connection),
-                    ):
+                    envelope = _control_envelope(message)
+                    if envelope is None:
                         continue
+
+                    event_type = envelope.get("event_type")
+                    source = envelope.get("source")
+                    session_id = envelope.get("session_id")
+                    if not valid_session_id(session_id) or not isinstance(
+                        session_id, str
+                    ):
+                        _LOGGER.debug(
+                            "control_rejected peer=%s reason=invalid_session_id",
+                            peer_ip,
+                        )
+                        continue
+                    if state.role is None and (
+                        self._config.control_scheme == "ws" or legacy_authenticated
+                    ):
+                        state.role = _role_for_source(source)
+                    if state.role is None or not role_allows(
+                        state.role, source, event_type
+                    ):
+                        _LOGGER.debug(
+                            "control_rejected peer=%s role=%s event=%s reason=%s",
+                            peer_ip,
+                            state.role,
+                            event_type,
+                            "role_forbidden",
+                        )
+                        continue
+                    if state.role is not PeerRole.OPERATOR:
+                        if state.session_id is None:
+                            state.session_id = session_id
+                        elif state.session_id != session_id:
+                            _LOGGER.debug(
+                                "control_rejected peer=%s role=%s event=%s reason=%s",
+                                peer_ip,
+                                state.role,
+                                event_type,
+                                "session_owner_mismatch",
+                            )
+                            continue
 
                     frontend_session = _frontend_registration(message)
                     if frontend_session is not None:
+                        if self._runtime_for_session(
+                            frontend_session, allow_create=True
+                        ) is None:
+                            continue
                         self._frontend_connections[frontend_session] = connection
+                        self._touch_session(frontend_session, owner=id(connection))
                         continue
 
-                    session_runtime = self._runtime_for_message(message)
+                    session_runtime = self._runtime_for_session(
+                        session_id,
+                        fallback=self._session_runtime,
+                        allow_create=event_type in SESSION_ADMISSION_EVENTS,
+                    )
+                    if session_runtime is not None:
+                        self._touch_session(
+                            session_id,
+                            owner=(
+                                None
+                                if state.role is PeerRole.OPERATOR
+                                else id(connection)
+                            ),
+                        )
 
                     if session_runtime is not None and parse_comment_proposal(message):
                         _LOGGER.debug(
@@ -543,7 +660,9 @@ class TransportRuntime:
                             control_event.correlation.seq,
                             control_event.text,
                         )
-                        if not self._hub.accept_asr_final(control_event):
+                        if not self._hub.accept_asr_final(
+                            control_event, ConnectionId(str(id(connection)))
+                        ):
                             _LOGGER.debug(
                                 "mic_asr_final_rejected session=%s stream=%s segment=%s",  # noqa: E501
                                 control_event.session_id,
@@ -600,6 +719,9 @@ class TransportRuntime:
                                     session_runtime.scheduler.snapshot.session_id,
                                     reason="session_ended",
                                 )
+                                await self._teardown_session(
+                                    session_id, reason="session_ended"
+                                )
 
                             continue
 
@@ -615,6 +737,7 @@ class TransportRuntime:
                         continue
 
         finally:
+            _ = self._control_peers.pop(id(connection), None)
             comment_ingress = self._comment_ingresses.pop(id(connection), None)
 
             if comment_ingress is not None:
@@ -625,31 +748,87 @@ class TransportRuntime:
                     del self._frontend_connections[session_id]
 
             self._control_dispatch.remove_connection(connection)
-
-    def _runtime_for_message(self, raw_message: str) -> SessionRuntime | None:
-        try:
-            value = parse_json_value(raw_message)
-        except JsonBoundaryError:
-            return None
-        if not isinstance(value, dict):
-            return None
-        session_id = value.get("session_id")
-        if not isinstance(session_id, str):
-            return None
-        return self._runtime_for_session(session_id, fallback=self._session_runtime)
+            if state.session_id is not None:
+                lease = self._session_leases.get(state.session_id)
+                if lease is not None:
+                    lease.owners.discard(id(connection))
 
     def _runtime_for_session(
-        self, session_id: str, *, fallback: SessionRuntime | None = None
+        self,
+        session_id: str,
+        *,
+        fallback: SessionRuntime | None = None,
+        allow_create: bool = False,
     ) -> SessionRuntime | None:
         runtime = self._session_runtimes.get(session_id)
         if runtime is not None:
             return runtime
-        factory = self._session_runtime_factory
-        if factory is None:
+        if (
+            fallback is not None
+            and str(fallback.scheduler.snapshot.session_id) == session_id
+        ):
             return fallback
+        factory = self._session_runtime_factory
+        if factory is None or not allow_create:
+            return None
+        if len(self._session_runtimes) >= self._config.max_sessions:
+            return None
         runtime = factory(SessionId(session_id))
         self.set_session_runtime(runtime)
         return runtime
+
+    def _touch_session(self, session_id: str, *, owner: int | None = None) -> None:
+        lease = self._session_leases.get(session_id)
+        if lease is None:
+            return
+        lease.last_activity_ms = _monotonic_ms()
+        if owner is not None:
+            lease.owners.add(owner)
+
+    async def sweep_sessions(self, *, now_ms: int | None = None) -> tuple[str, ...]:
+        current_ms = _monotonic_ms() if now_ms is None else now_ms
+        ttl_ms = self._config.session_idle_ttl_seconds * 1_000
+        expired: list[str] = []
+        for session_id, lease in tuple(self._session_leases.items()):
+            runtime = self._session_runtimes.get(session_id)
+            if (
+                runtime is None
+                or lease.owners
+                or current_ms - lease.last_activity_ms < ttl_ms
+                or _session_has_active_work(runtime)
+            ):
+                continue
+            await self._teardown_session(session_id, reason="idle_ttl_expired")
+            expired.append(session_id)
+        return tuple(expired)
+
+    async def _sweep_sessions_forever(self) -> None:
+        while True:
+            await asyncio.sleep(self._config.session_sweep_seconds)
+            _ = await self.sweep_sessions()
+
+    async def _teardown_session(self, session_id: str, *, reason: str) -> None:
+        runtime = self._session_runtimes.pop(session_id, None)
+        _ = self._session_leases.pop(session_id, None)
+        _ = self._frontend_connections.pop(session_id, None)
+        _ = self._active_timelines.pop(session_id, None)
+        self._hub.remove_session(session_id)
+        self._control_dispatch.remove_session(session_id)
+        for key, task in tuple(self._preoutput_agent_tts.items()):
+            if key[0] == session_id:
+                _ = task.cancel()
+                _ = self._preoutput_agent_tts.pop(key, None)
+        if runtime is None:
+            return
+        if runtime is self._session_runtime:
+            self._session_runtime = None
+        correlation = EventCorrelation(
+            TraceId(f"session-teardown:{reason}"),
+            SessionId(session_id),
+            EventSequence(0),
+        )
+        _ = runtime.end_session(correlation)
+        _LOGGER.debug("session_torn_down session=%s reason=%s", session_id, reason)
 
     async def _send_caption_timeline(
         self,
@@ -835,7 +1014,17 @@ async def _listen_control(
     def authorize(connection: ControlConnection, request: Request) -> Response | None:
         authorization = request.headers.get("Authorization")
 
-        if bearer_token_matches(config.control_token, authorization):
+        if (
+            config.role_tokens.resolve(authorization) is not None
+            or (
+                config.control_scheme == "ws"
+                and authorization is None
+            )
+            or (
+                config.control_token is not None
+                and authorization == f"Bearer {config.control_token}"
+            )
+        ):
             return None
 
         return connection.respond(HTTPStatus.UNAUTHORIZED, "Unauthorized\n")
@@ -846,6 +1035,7 @@ async def _listen_control(
         config.control_bind_port,
         process_request=authorize,
         ssl=ssl_context,
+        max_size=MAX_CONTROL_FRAME_BYTES,
     )
 
 
@@ -855,6 +1045,18 @@ def _event_correlation(correlation: EnvelopeIdentity) -> EventCorrelation:
         TraceId(correlation.trace_id),
         SessionId(correlation.session_id),
         EventSequence(correlation.seq),
+    )
+
+
+def _monotonic_ms() -> int:
+    return monotonic_ns() // 1_000_000
+
+
+def _session_has_active_work(runtime: SessionRuntime) -> bool:
+    return any(
+        record.state.value
+        in {"created", "admitted", "queued", "running", "cancelling"}
+        for record in runtime.task_registry.records
     )
 
 
@@ -890,6 +1092,25 @@ def _connection_authorization(connection: ControlConnection) -> str | None:
     value = candidate("Authorization") if callable(candidate) else None
 
     return value if isinstance(value, str) else None
+
+
+def _control_envelope(raw_message: str) -> dict[str, JsonValue] | None:
+    try:
+        value = parse_json_value(raw_message)
+    except JsonBoundaryError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _role_for_source(source: object) -> PeerRole | None:
+    return next(
+        (
+            role
+            for role, expected_source in ROLE_SOURCES.items()
+            if source == expected_source
+        ),
+        None,
+    )
 
 
 def _ssl_context(config: TransportConfig) -> ssl.SSLContext | None:

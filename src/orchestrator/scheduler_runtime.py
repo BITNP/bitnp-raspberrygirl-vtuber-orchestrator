@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -144,6 +145,12 @@ class _TtsProviderCancelledError(Exception):
 
 def _monotonic_ms() -> int:
     return monotonic_ns() // 1_000_000
+
+
+def _bounded_observation_summary(observation: str) -> str:
+    normalized = " ".join(observation.split())
+    digest = hashlib.sha256(observation.encode("utf-8")).hexdigest()
+    return f"status=success digest=sha256:{digest} text={normalized[:512]}"
 
 
 class AsyncAudienceGate(Protocol):
@@ -1097,6 +1104,7 @@ class SessionRuntime:
                 parsed.marked_text,
                 response.observation if response.tool_request is not None else None,
             )
+            self._commit_response_after_output_started(task_id, correlation)
         else:
             _ = self.cancel_task(task_id, correlation)
             _ = self.turn_coordinator.fail(
@@ -1124,7 +1132,7 @@ class SessionRuntime:
                             f"{pending.provenance.source_id}:tool"
                         ),
                     ),
-                    pending.observation,
+                    _bounded_observation_summary(pending.observation),
                 )
             )
         self.interaction_ingress.data.consider_context(
