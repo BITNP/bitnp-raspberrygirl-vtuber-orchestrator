@@ -1,7 +1,8 @@
 import asyncio
 import hashlib
 import logging
-from collections.abc import Awaitable, Callable
+from collections import deque
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field, replace
 from time import monotonic_ns
 from typing import Protocol
@@ -174,6 +175,7 @@ _BRAIN_CONTEXT_POLICY = StaticContextBudgetPolicy(
 _VOICE_EVIDENCE_CAPACITY = 128
 _VOICE_EVIDENCE_MINIMUM_QUALITY = 0.5
 _VOICE_EVIDENCE_MINIMUM_SPEECH_MS = 500
+_AUDIENCE_QUEUE_CAPACITY = 16
 
 _DEFAULT_AGENT_CAPABILITIES = frozenset(
     {
@@ -210,6 +212,14 @@ class _AgentTtsExecution:
     record: TaskRecord
     correlation: EventCorrelation
     output_started: Callable[[], None] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingAudienceAdmission:
+    source: BrainAudienceSource
+    correlation: EventCorrelation
+    run: Callable[[], Coroutine[None, None, RuntimeOutcome]]
+    result: asyncio.Future[RuntimeOutcome]
 
 
 @dataclass(slots=True)
@@ -262,6 +272,20 @@ class SessionRuntime:
     )
 
     _correlations: set[EventCorrelation] = field(default_factory=set)
+
+    _pending_correlations: set[EventCorrelation] = field(default_factory=set)
+
+    _voice_admissions: deque[_PendingAudienceAdmission] = field(
+        default_factory=deque
+    )
+
+    _comment_admissions: deque[_PendingAudienceAdmission] = field(
+        default_factory=deque
+    )
+
+    _admission_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    _admission_worker: asyncio.Task[None] | None = None
 
     _deck_intents: dict[TaskId, DeckDispatchIntent] = field(default_factory=dict)
 
@@ -619,7 +643,7 @@ class SessionRuntime:
         """
         return self._reject(proposal.correlation, "async_response_required")
 
-    async def receive_comment_async(  # noqa: PLR0911
+    async def receive_comment_async(
         self, proposal: CommentProposal
     ) -> RuntimeOutcome:
         coordinator = self.async_response_coordinator
@@ -632,10 +656,6 @@ class SessionRuntime:
         if coordinator is None or gate is None:
             return self._reject(proposal.correlation, "response_coordinator_missing")
         correlation = proposal.correlation
-        if self._ended:
-            return self._reject(correlation, "session_ended")
-        if correlation in self._correlations:
-            return self._reject(correlation, "duplicate_correlation")
         audience_input = BrainAudienceInput(
             session_id=str(correlation.session_id),
             trace_id=str(correlation.trace_id),
@@ -644,13 +664,22 @@ class SessionRuntime:
             received_at_ms=self.clock(),
             text=proposal.text,
         )
-        decision = await gate.evaluate(
+        return await self._gate_and_enqueue_audience(
+            gate,
             audience_input,
-            active_summary=self._frontend_caption,
-            recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+            correlation,
+            lambda: self._admit_comment(
+                coordinator, proposal, audience_input, correlation
+            ),
         )
-        if decision is GateDecision.DISCARD:
-            return self._reject(correlation, "agent_gate_discarded")
+
+    async def _admit_comment(
+        self,
+        coordinator: AsyncResponseCoordinator,
+        proposal: CommentProposal,
+        audience_input: BrainAudienceInput,
+        correlation: EventCorrelation,
+    ) -> RuntimeOutcome:
         outcome = self.interaction_ingress.receive_comment(
             text=proposal.text, correlation=correlation
         )
@@ -671,6 +700,111 @@ class SessionRuntime:
         return RuntimeOutcome(
             accepted=True, correlation=correlation, turn_id=accepted_turn
         )
+
+    async def _gate_and_enqueue_audience(  # noqa: C901, PLR0911
+        self,
+        gate: AsyncAudienceGate,
+        audience_input: BrainAudienceInput,
+        correlation: EventCorrelation,
+        admission: Callable[[], Coroutine[None, None, RuntimeOutcome]],
+    ) -> RuntimeOutcome:
+        if self._ended:
+            return self._reject(correlation, "session_ended")
+        if (
+            correlation in self._correlations
+            or correlation in self._pending_correlations
+        ):
+            return self._reject(correlation, "duplicate_correlation")
+        self._pending_correlations.add(correlation)
+        try:
+            decision = await gate.evaluate(
+                audience_input,
+                active_summary=self._frontend_caption,
+                recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+            )
+        except asyncio.CancelledError:
+            self._pending_correlations.discard(correlation)
+            raise
+        except Exception:
+            self._pending_correlations.discard(correlation)
+            _LOGGER.exception(
+                "gate_failed trace=%s session=%s seq=%s source=%s rejected",
+                correlation.trace_id,
+                correlation.session_id,
+                correlation.sequence,
+                audience_input.source,
+            )
+            return self._reject(correlation, "agent_gate_failed")
+        if decision is GateDecision.DISCARD:
+            self._pending_correlations.discard(correlation)
+            return self._reject(correlation, "agent_gate_discarded")
+        if (
+            self._ended
+            or str(correlation.session_id) != str(self.scheduler.snapshot.session_id)
+            or correlation in self._correlations
+        ):
+            self._pending_correlations.discard(correlation)
+            return self._reject(correlation, "audience_admission_stale")
+
+        result = asyncio.get_running_loop().create_future()
+        pending = _PendingAudienceAdmission(
+            audience_input.source, correlation, admission, result
+        )
+        async with self._admission_lock:
+            queued = len(self._voice_admissions) + len(self._comment_admissions)
+            if queued >= _AUDIENCE_QUEUE_CAPACITY:
+                if audience_input.source is BrainAudienceSource.COMMENT:
+                    self._pending_correlations.discard(correlation)
+                    return self._reject(correlation, "audience_queue_full")
+                if not self._comment_admissions:
+                    self._pending_correlations.discard(correlation)
+                    return self._reject(correlation, "audience_queue_full")
+                evicted = self._comment_admissions.popleft()
+                self._pending_correlations.discard(evicted.correlation)
+                if not evicted.result.done():
+                    evicted.result.set_result(
+                        self._reject(evicted.correlation, "audience_comment_evicted")
+                    )
+            target = (
+                self._voice_admissions
+                if audience_input.source is BrainAudienceSource.ASR
+                else self._comment_admissions
+            )
+            target.append(pending)
+            if self._admission_worker is None or self._admission_worker.done():
+                self._admission_worker = asyncio.create_task(
+                    self._run_audience_admissions(),
+                    name=f"audience-admission-{self.scheduler.snapshot.session_id}",
+                )
+        return await asyncio.shield(result)
+
+    async def _run_audience_admissions(self) -> None:
+        while True:
+            async with self._admission_lock:
+                if self._voice_admissions:
+                    pending = self._voice_admissions.popleft()
+                elif self._comment_admissions:
+                    pending = self._comment_admissions.popleft()
+                else:
+                    self._admission_worker = None
+                    return
+            try:
+                outcome = await pending.run()
+            except Exception:
+                _LOGGER.exception(
+                    "admission_failed trace=%s session=%s seq=%s source=%s rejected",
+                    pending.correlation.trace_id,
+                    pending.correlation.session_id,
+                    pending.correlation.sequence,
+                    pending.source,
+                )
+                outcome = self._reject(
+                    pending.correlation, "audience_admission_failed"
+                )
+            finally:
+                self._pending_correlations.discard(pending.correlation)
+            if not pending.result.done():
+                pending.result.set_result(outcome)
 
     async def _run_async_response(  # noqa: C901, PLR0911, PLR0912, PLR0915
         self,
@@ -1815,7 +1949,7 @@ class SessionRuntime:
         _ = event
         return self._reject(correlation, "async_response_required")
 
-    async def receive_asr_final_async(  # noqa: PLR0911
+    async def receive_asr_final_async(
         self,
         event: ASRAudienceEvent,
         correlation: EventCorrelation,
@@ -1830,10 +1964,6 @@ class SessionRuntime:
             return self._reject(correlation, "shadow_coordinator_missing")
         if coordinator is None or gate is None:
             return self._reject(correlation, "response_coordinator_missing")
-        if correlation in self._correlations:
-            return self._reject(correlation, "duplicate_correlation")
-        if self._ended:
-            return self._reject(correlation, "session_ended")
         audience_input = BrainAudienceInput(
             session_id=str(correlation.session_id),
             trace_id=str(correlation.trace_id),
@@ -1842,13 +1972,19 @@ class SessionRuntime:
             received_at_ms=event.received_at_ms,
             text=event.text,
         )
-        decision = await gate.evaluate(
+        return await self._gate_and_enqueue_audience(
+            gate,
             audience_input,
-            active_summary=self._frontend_caption,
-            recent_turn_context=self.interaction_ingress.data.recent_turn_context,
+            correlation,
+            lambda: self._admit_asr_final(coordinator, audience_input, correlation),
         )
-        if decision is GateDecision.DISCARD:
-            return self._reject(correlation, "agent_gate_discarded")
+
+    async def _admit_asr_final(
+        self,
+        coordinator: AsyncResponseCoordinator,
+        audience_input: BrainAudienceInput,
+        correlation: EventCorrelation,
+    ) -> RuntimeOutcome:
         transition = self.scheduler.apply(
             StartTurn(
                 expected_revision=self.scheduler.snapshot.revision,
@@ -1886,6 +2022,19 @@ class SessionRuntime:
         """Cancel session work and erase session-owned durable and transient state."""
         if self._ended:
             return self._reject(correlation, "session_ended")
+        self._ended = True
+        worker = self._admission_worker
+        if worker is not None and not worker.done():
+            _ = worker.cancel()
+        self._admission_worker = None
+        for pending in (*self._voice_admissions, *self._comment_admissions):
+            if not pending.result.done():
+                pending.result.set_result(
+                    self._reject(pending.correlation, "session_ended")
+                )
+        self._voice_admissions.clear()
+        self._comment_admissions.clear()
+        self._pending_correlations.clear()
         cancelled = self.task_registry.cancel_pending(reason="session_ended")
         self._cancel_preoutput_tts(cancelled)
         self._cancel_active_response_providers(cancelled)
@@ -1906,7 +2055,6 @@ class SessionRuntime:
         self.interaction_ingress.data.clear_session()
         self.interaction_ingress.clear_session_data()
         _ = self.task_registry.clear_terminal_tombstones()
-        self._ended = True
         return self._interaction_outcome(
             correlation, "session_ended", accepted=True, task_id=None
         )
