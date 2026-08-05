@@ -246,7 +246,10 @@ class TransportRuntime:
             _SessionLease(_monotonic_ms(), set()),
         )
 
-        self.set_output_fence(session_runtime.output_fence)
+        self.set_output_fence(
+            session_runtime.output_fence,
+            str(session_runtime.scheduler.snapshot.session_id),
+        )
 
         session_runtime.set_preoutput_tts_cancellation(
             lambda turn_id: self._cancel_preoutput_agent_tts(
@@ -391,10 +394,14 @@ class TransportRuntime:
         if isinstance(bridge, OnsiteExplainerBridge):
             bridge.set_observability(observability)
 
-    def set_output_fence(self, output_fence: SchedulerOutputFence) -> None:
-        self._hub.set_output_fence(output_fence)
+    def set_output_fence(
+        self,
+        output_fence: SchedulerOutputFence,
+        session_id: str | None = None,
+    ) -> None:
+        self._hub.set_output_fence(output_fence, session_id)
 
-        self._control_dispatch.set_output_fence(output_fence)
+        self._control_dispatch.set_output_fence(output_fence, session_id)
 
     async def start(self) -> None:
         self._datagram_transport = await self._datagram_listener(
@@ -1187,11 +1194,7 @@ def _monotonic_ms() -> int:
 
 
 def _session_has_active_work(runtime: SessionRuntime) -> bool:
-    return any(
-        record.state.value
-        in {"created", "admitted", "queued", "running", "cancelling"}
-        for record in runtime.task_registry.records
-    )
+    return runtime.has_active_work
 
 
 def _comment_ingress_config(config: TransportConfig) -> CommentIngressConfig:

@@ -117,6 +117,8 @@ class RtpHub:
 
         self._output_fence: SchedulerOutputFence | None = None
 
+        self._output_fences: dict[str, SchedulerOutputFence] = {}
+
         self._observability: OnsiteObservability | None = None
 
         self._correlations: dict[StreamKey, EnvelopeCorrelation] = {}
@@ -253,7 +255,7 @@ class RtpHub:
         caller holds the new frame locally while this method waits, so no new
         RTP can be dropped into the pending-fence gap.
         """
-        output_fence = self._output_fence
+        output_fence = self._fence_for(stream)
         correlation = self._correlations.get(stream)
         request_flush = self._replacement_flush_callback
         admit_replacement = self._replacement_admit_callback
@@ -292,7 +294,7 @@ class RtpHub:
         """Wait for one exact Sound acknowledgement behind a task result fence."""
         # The caller captured both collaborators before creating the pending
         # replacement, so this exchange has a stable control surface.
-        output_fence = cast("SchedulerOutputFence", self._output_fence)
+        output_fence = cast("SchedulerOutputFence", self._fence_for(stream))
         request_flush = cast(
             "Callable[[StreamFlush], Awaitable[None]]",
             self._replacement_flush_callback,
@@ -370,8 +372,13 @@ class RtpHub:
     def set_observability(self, observability: OnsiteObservability) -> None:
         self._observability = observability
 
-    def set_output_fence(self, output_fence: SchedulerOutputFence) -> None:
-        self._output_fence = output_fence
+    def set_output_fence(
+        self, output_fence: SchedulerOutputFence, session_id: str | None = None
+    ) -> None:
+        if session_id is None:
+            self._output_fence = output_fence
+        else:
+            self._output_fences[session_id] = output_fence
 
         bridge = self._onsite_bridge
 
@@ -381,11 +388,14 @@ class RtpHub:
                 self.prepare_onsite_response_output
             )
 
+    def _fence_for(self, stream: StreamKey) -> SchedulerOutputFence | None:
+        return self._output_fences.get(stream.session_id, self._output_fence)
+
     def authorize_onsite_output(
         self, stream: StreamKey, epoch: CancellationEpoch
     ) -> bool:
         """Activate a scheduler lease for a finalized onsite utterance."""
-        output_fence = self._output_fence
+        output_fence = self._fence_for(stream)
 
         if output_fence is None:
             return True
@@ -419,7 +429,7 @@ class RtpHub:
         Mic's input epoch only validates incoming ASR.  It is deliberately
         independent from the monotonically increasing output lease generation.
         """
-        output_fence = self._output_fence
+        output_fence = self._fence_for(stream)
         if output_fence is None:
             return input_epoch
         correlation = self._correlations.get(stream)
@@ -452,7 +462,7 @@ class RtpHub:
         is the sole route through the scheduler-owned Sound flush task; callers
         retain their first frame until its exact acknowledgement is committed.
         """
-        output_fence = self._output_fence
+        output_fence = self._fence_for(stream)
         if output_fence is None:
             return input_epoch
         if not output_fence.has_active_lease(stream):
@@ -555,7 +565,7 @@ class RtpHub:
     async def deliver_generated_rtp(
         self, stream: StreamKey, epoch: CancellationEpoch, packet: bytes
     ) -> None:
-        output_fence = self._output_fence
+        output_fence = self._fence_for(stream)
 
         if output_fence is None and epoch != CancellationEpoch(
             self._route_generations.get(stream, 0)
@@ -625,12 +635,14 @@ class RtpHub:
         self._sink_owners.clear()
 
         self._voice_evidence_callbacks.clear()
+        self._output_fences.clear()
 
     def remove_stream(self, session_id: str, stream_id: str) -> None:
         self._remove_stream(StreamKey(session_id, stream_id))
 
     def remove_session(self, session_id: str) -> None:
         _ = self._voice_evidence_callbacks.pop(session_id, None)
+        _ = self._output_fences.pop(session_id, None)
         streams = {
             *(stream for stream in self._mic_inputs if stream.session_id == session_id),
             *(stream for stream in self._sinks if stream.session_id == session_id),

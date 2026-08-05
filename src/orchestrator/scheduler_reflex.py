@@ -259,6 +259,10 @@ class SchedulerOutputFence:
     def has_active_lease(self, stream: StreamKey) -> bool:
         return stream in self._leases
 
+    @property
+    def has_active_playback(self) -> bool:
+        return bool(self._leases or self._pending or self._acknowledged)
+
     def acknowledge(self, acknowledgement: FlushAcknowledgement) -> bool:
         pending = self._pending.get(acknowledgement.stream)
 

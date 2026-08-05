@@ -125,6 +125,8 @@ class TransportControlDispatch:
 
         self._output_fence: OutputFence | None = None
 
+        self._output_fences: dict[str, OutputFence] = {}
+
         # Called only after OutputFence accepted an exact Sound finished event.
         # The callback is observational state reduction, never transport I/O.
         self._playback_finished_callback: Callable[[StreamKey], None] | None = None
@@ -235,7 +237,7 @@ class TransportControlDispatch:
 
                 admitted = self._flush_admission.acknowledge(acknowledgement)
 
-                output_fence = self._output_fence
+                output_fence = self._fence_for(acknowledgement.stream)
 
                 if admitted and output_fence is not None:
                     _ = output_fence.acknowledge(acknowledgement)
@@ -255,7 +257,7 @@ class TransportControlDispatch:
         segment_id: SegmentId | None,
         cancellation_epoch: CancellationEpoch | None,
     ) -> None:
-        output_fence = self._output_fence
+        output_fence = self._fence_for(stream)
         if output_fence is None:
             return
         finished = output_fence.finish(
@@ -408,8 +410,16 @@ class TransportControlDispatch:
     def set_observability(self, observability: OnsiteObservability) -> None:
         self._observability = observability
 
-    def set_output_fence(self, output_fence: OutputFence) -> None:
-        self._output_fence = output_fence
+    def set_output_fence(
+        self, output_fence: OutputFence, session_id: str | None = None
+    ) -> None:
+        if session_id is None:
+            self._output_fence = output_fence
+        else:
+            self._output_fences[session_id] = output_fence
+
+    def _fence_for(self, stream: StreamKey) -> OutputFence | None:
+        return self._output_fences.get(stream.session_id, self._output_fence)
 
     def remove_connection(self, connection: ControlPeer) -> None:
         self._hub.remove_connection(_connection_id(connection))
@@ -425,6 +435,7 @@ class TransportControlDispatch:
                 _ = self._leases.pop(stream, None)
 
     def remove_session(self, session_id: str) -> None:
+        _ = self._output_fences.pop(session_id, None)
         for stream in tuple(self._sinks):
             if stream.session_id == session_id:
                 self._discard(stream)

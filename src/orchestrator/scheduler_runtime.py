@@ -621,6 +621,36 @@ class SessionRuntime:
         """Expose an immutable lifecycle view for diagnostics and tests."""
         return self.turn_coordinator.state
 
+    @property
+    def has_active_work(self) -> bool:
+        active_task = any(
+            record.state
+            in {
+                TaskState.CREATED,
+                TaskState.ADMITTED,
+                TaskState.QUEUED,
+                TaskState.RUNNING,
+                TaskState.CANCELLING,
+            }
+            for record in self.task_registry.records
+        )
+        active_turn = self.turn_coordinator.state.phase not in {
+            TurnPhase.IDLE,
+            TurnPhase.COMPLETED,
+        }
+        return bool(
+            active_task
+            or active_turn
+            or self.output_fence.has_active_playback
+            or self._pending_response_commits
+            or self._active_deck_tasks
+            or self._maintenance_tasks
+            or self._active_response_provider_tasks
+            or self._active_preoutput_tts_provider_tasks
+            or self._voice_admissions
+            or self._comment_admissions
+        )
+
     def _begin_response_turn(self, turn_id: TurnId) -> None:
         """Move an already-admitted scheduler turn into reasoning.
 

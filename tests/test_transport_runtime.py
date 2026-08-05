@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Final
 
 import pytest
@@ -36,6 +36,7 @@ from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import (
     AuthenticatedControl,
     EnvelopeCorrelation,
+    MicInputRegistration,
     VoiceEvidence,
 )
 from orchestrator.transport_dispatch import TransportControlDispatch
@@ -660,6 +661,93 @@ def test_onsite_asr_final_cannot_create_an_unregistered_session_runtime() -> Non
 
     assert not asyncio.run(run())
     assert created == []
+
+
+def test_session_capacity_is_checked_before_factory_construction() -> None:
+    runtime = TransportRuntime(replace(_loopback_config(), max_sessions=1))
+    constructed: list[str] = []
+
+    def factory(session_id: SessionId) -> SessionRuntime:
+        constructed.append(str(session_id))
+        return SessionRuntime.create(
+            session_id=session_id,
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        )
+
+    runtime.set_session_runtime_factory(factory)
+
+    first = runtime._runtime_for_session(  # pyright: ignore[reportPrivateUsage]
+        "session-1", allow_create=True
+    )
+    second = runtime._runtime_for_session(  # pyright: ignore[reportPrivateUsage]
+        "session-2", allow_create=True
+    )
+
+    assert first is not None
+    assert second is None
+    assert constructed == ["session-1"]
+
+
+def test_output_fences_are_isolated_per_session() -> None:
+    first = SessionRuntime.create(
+        session_id=SessionId("session-1"),
+        turn_id_prefix="first",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+    )
+    second = SessionRuntime.create(
+        session_id=SessionId("session-2"),
+        turn_id_prefix="second",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+    )
+    hub = RtpHub()
+    hub.set_output_fence(first.output_fence, "session-1")
+    hub.set_output_fence(second.output_fence, "session-2")
+    hub.register_control(
+        MicInputRegistration(
+            "session-1",
+            "mic",
+            EnvelopeCorrelation("trace-1", "session-1", 1),
+        ),
+        "127.0.0.1",
+    )
+
+    _ = hub.authorize_onsite_output(
+        StreamKey("session-1", "mic"), CancellationEpoch(0)
+    )
+
+    assert first.scheduler.snapshot.revision == 1
+    assert second.scheduler.snapshot.revision == 0
+
+
+def test_idle_sweeper_exempts_active_playback_then_erases_session() -> None:
+    async def scenario() -> None:
+        runtime = TransportRuntime(
+            replace(_loopback_config(), session_idle_ttl_seconds=1)
+        )
+        session = SessionRuntime.create(
+            session_id=SessionId("session-1"),
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        )
+        runtime.set_session_runtime(session)
+        active = session.output_fence.activate(
+            stream=StreamKey("session-1", "mic"),
+            segment_id=SegmentId("segment"),
+            correlation=EnvelopeCorrelation("trace", "session-1", 1),
+        )
+
+        assert await runtime.sweep_sessions(now_ms=10**15) == ()
+        lease = session.output_fence
+        assert lease.finish(
+            stream=active.stream,
+            turn_id=active.turn_id,
+            segment_id=active.segment_id,
+            cancellation_epoch=active.cancellation_epoch,
+        )
+        assert await runtime.sweep_sessions(now_ms=10**15) == ("session-1",)
+
+    asyncio.run(scenario())
 
 
 def test_control_connection_refuses_comments_without_valid_credential() -> None:
