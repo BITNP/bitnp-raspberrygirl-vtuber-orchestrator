@@ -22,8 +22,10 @@ from orchestrator.brain_contracts import (
     ToolRequest,
 )
 from orchestrator.brain_runtime import (
+    is_asr_clarification_speech,
     is_deterministic_asr_echo,
     is_explicit_asr_interruption,
+    is_low_information_asr,
 )
 from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.context_compactor import AsyncContextCompactor
@@ -203,6 +205,8 @@ _VOICE_EVIDENCE_MINIMUM_SPEECH_MS = 500
 _AUDIENCE_QUEUE_CAPACITY = 16
 _PLAYBACK_HISTORY_CAPACITY = 32
 _BRAIN_CANDIDATE_LOG = "brain_candidate trace=%s session=%s seq=%s source=%s decision=%s speech=%r operation_intent=%s operation_arguments=%r"  # noqa: E501
+_BRAIN_POLICY_REJECTION_LOG = "brain_candidate_policy_rejected trace=%s session=%s seq=%s reason=%s input=%r speech=%r"  # noqa: E501
+_PREBRAIN_REJECTION_LOG = "audience_prebrain_rejected trace=%s session=%s seq=%s source=%s reason=%s text=%r"  # noqa: E501
 _OPERATION_REQUEST_LOG = "operation_request trace=%s session=%s turn=%s segment=%s kind=%s name=%s arguments=%r"  # noqa: E501
 _OPERATION_OBSERVATION_LOG = "operation_observation trace=%s session=%s turn=%s segment=%s kind=%s name=%s observation=%r"  # noqa: E501
 _TTS_FIRST_FRAME_LOG = "tts_first_frame_admitted trace=%s session=%s turn=%s segment=%s task=%s speech=%r"  # noqa: E501
@@ -217,6 +221,34 @@ _DEFAULT_AGENT_CAPABILITIES = frozenset(
         "task:memory_patch",
     }
 )
+
+
+def _prebrain_audience_rejection(
+    audience_input: BrainAudienceInput,
+    frontend_caption: str,
+    recent_turn_context: tuple[str, ...],
+) -> str | None:
+    if is_low_information_asr(audience_input):
+        return "asr_low_information"
+    if is_deterministic_asr_echo(
+        audience_input, frontend_caption, recent_turn_context
+    ):
+        return "deterministic_asr_echo"
+    return None
+
+
+def _brain_candidate_policy_rejection(
+    snapshot: BrainStateSnapshot, proposal: ResponseProposal
+) -> str | None:
+    if is_asr_clarification_speech(snapshot.input, proposal.speech):
+        return "brain_asr_clarification_rejected"
+    if (
+        snapshot.input.source is BrainAudienceSource.ASR
+        and snapshot.was_playing_1000ms_ago
+        and not is_explicit_asr_interruption(snapshot.input)
+    ):
+        return "brain_playback_policy_violated"
+    return None
 
 
 @dataclass(slots=True)
@@ -910,13 +942,23 @@ class SessionRuntime:
         ):
             return self._reject(correlation, "duplicate_correlation")
         self._pending_correlations.add(correlation)
-        if is_deterministic_asr_echo(
+        prebrain_rejection = _prebrain_audience_rejection(
             audience_input,
             self._frontend_caption,
             self.interaction_ingress.data.recent_turn_context,
-        ):
+        )
+        if prebrain_rejection is not None:
+            _LOGGER.debug(
+                _PREBRAIN_REJECTION_LOG,
+                correlation.trace_id,
+                correlation.session_id,
+                correlation.sequence,
+                audience_input.source,
+                prebrain_rejection,
+                audience_input.text,
+            )
             self._pending_correlations.discard(correlation)
-            return self._reject(correlation, "deterministic_asr_echo")
+            return self._reject(correlation, prebrain_rejection)
         result = asyncio.get_running_loop().create_future()
         expected_revision = self.scheduler.snapshot.revision
         local_received_at_ms = self.clock()
@@ -1024,19 +1066,18 @@ class SessionRuntime:
         )
         if initial.decision is BrainDecision.DISCARD:
             return self._reject(correlation, "brain_discarded")
-        if (
-            snapshot.input.source is BrainAudienceSource.ASR
-            and snapshot.was_playing_1000ms_ago
-            and not is_explicit_asr_interruption(snapshot.input)
-        ):
+        policy_rejection = _brain_candidate_policy_rejection(snapshot, initial)
+        if policy_rejection is not None:
             _LOGGER.debug(
-                "brain_playback_policy_rejected trace=%s session=%s seq=%s text=%r",
+                _BRAIN_POLICY_REJECTION_LOG,
                 correlation.trace_id,
                 correlation.session_id,
                 correlation.sequence,
+                policy_rejection,
                 snapshot.input.text,
+                initial.speech,
             )
-            return self._reject(correlation, "brain_playback_policy_violated")
+            return self._reject(correlation, policy_rejection)
         if (
             initial.operation is not None
             and coordinator.tool_request(initial, snapshot) is None

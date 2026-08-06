@@ -17,8 +17,10 @@ from orchestrator.brain_runtime import (
     JsonResponseBrain,
     McpIntentRegistration,
     build_async_response_coordinator,
+    is_asr_clarification_speech,
     is_deterministic_asr_echo,
     is_explicit_asr_interruption,
+    is_low_information_asr,
 )
 from orchestrator.ids import SessionId
 from orchestrator.llm import (
@@ -109,6 +111,53 @@ def test_deterministic_echo_applies_only_to_asr() -> None:
     assert is_deterministic_asr_echo(_snapshot().input, "这里介绍产品功能", ())
     comment = replace(_snapshot().input, source=AudienceSource.COMMENT)
     assert not is_deterministic_asr_echo(comment, "这里介绍产品功能", ())
+
+
+@pytest.mark.parametrize(
+    ("candidate", "reply"),
+    [
+        ("很高兴", "智能体 - 你好，很高兴为您服务"),
+        ("而请您再重复一遍吗", "智能体 - 能请您再重复一遍吗"),
+        (
+            "请问您是想还是需要我继续为您服务呢",
+            "智能体 - 请问您是想确认什么，还是需要我继续为您服务呢",
+        ),
+    ],
+)
+def test_deterministic_echo_tolerates_bounded_asr_fragment_errors(
+    candidate: str, reply: str
+) -> None:
+    assert is_deterministic_asr_echo(
+        replace(_snapshot().input, text=candidate), "", (reply,)
+    )
+
+
+def test_low_information_asr_rejects_single_character_noise_only() -> None:
+    assert is_low_information_asr(replace(_snapshot().input, text="y"))
+    assert is_low_information_asr(replace(_snapshot().input, text="あ"))
+    assert not is_low_information_asr(replace(_snapshot().input, text="你好"))
+
+
+@pytest.mark.parametrize(
+    "speech",
+    [
+        "您好，我听到您说了一个 y。",
+        "抱歉，我刚才没有听清楚，能请您再重复一遍吗？",
+        "我这边听到的有些模糊，请再说一次。",
+    ],
+)
+def test_asr_clarification_speech_is_fail_closed(speech: str) -> None:
+    assert is_asr_clarification_speech(_snapshot().input, speech)
+    assert not is_asr_clarification_speech(
+        replace(_snapshot().input, source=AudienceSource.COMMENT), speech
+    )
+
+
+def test_explicit_repeat_request_may_receive_a_repeat_response() -> None:
+    assert not is_asr_clarification_speech(
+        replace(_snapshot().input, text="请再说一遍"),
+        "好的，我重新说一遍。",
+    )
 
 
 @pytest.mark.parametrize(

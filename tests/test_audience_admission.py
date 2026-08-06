@@ -302,3 +302,62 @@ def test_explicit_interruption_can_be_accepted_during_playback_policy() -> None:
         assert outcome.accepted
 
     asyncio.run(scenario())
+
+
+def test_single_character_asr_is_rejected_before_brain() -> None:
+    async def scenario() -> None:
+        started = asyncio.Event()
+        runtime = _runtime(
+            _Brain(ResponseProposal(BrainDecision.ACCEPT, "不应调用", None), started)
+        )
+        coordinator = runtime.async_response_coordinator
+        assert coordinator is not None
+
+        outcome = await runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+            coordinator,
+            replace(_input(1, AudienceSource.ASR), text="y"),
+            _correlation(1),
+            lambda _proposal, _snapshot: asyncio.sleep(
+                0,
+                result=RuntimeOutcome(accepted=True, correlation=_correlation(1)),
+            ),
+        )
+
+        assert not outcome.accepted
+        assert not started.is_set()
+        assert runtime.observables.rejections[-1].reason == "asr_low_information"
+
+    asyncio.run(scenario())
+
+
+def test_asr_clarification_reply_cannot_create_turn() -> None:
+    async def scenario() -> None:
+        runtime = _runtime(
+            _Brain(
+                ResponseProposal(
+                    BrainDecision.ACCEPT,
+                    "抱歉,我没有听清,请您再重复一遍。",
+                    None,
+                )
+            )
+        )
+        coordinator = runtime.async_response_coordinator
+        assert coordinator is not None
+
+        outcome = await runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+            coordinator,
+            replace(_input(1, AudienceSource.ASR), text="无法理解的识别结果"),
+            _correlation(1),
+            lambda _proposal, _snapshot: asyncio.sleep(
+                0,
+                result=RuntimeOutcome(accepted=True, correlation=_correlation(1)),
+            ),
+        )
+
+        assert not outcome.accepted
+        assert runtime.scheduler.snapshot.active_turn_id is None
+        assert runtime.observables.rejections[-1].reason == (
+            "brain_asr_clarification_rejected"
+        )
+
+    asyncio.run(scenario())
