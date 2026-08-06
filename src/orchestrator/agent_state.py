@@ -118,6 +118,24 @@ class TurnCoordinator:
         )
 
     def start_synthesizing(self, *, turn_id: str, epoch: int) -> StateTransition:
+        state = self._state
+        if state.turn_id == turn_id and state.epoch == epoch:
+            if state.phase is TurnPhase.PLAYING:
+                return self._set(
+                    AgentState(
+                        epoch,
+                        TurnPhase.SYNTHESIZING,
+                        pending_interrupt=True,
+                        turn_id=turn_id,
+                        retained_playback_turn_id=turn_id,
+                    ),
+                    StateEffect.START_TTS,
+                )
+            if state.phase is TurnPhase.COMPLETED:
+                return self._set(
+                    AgentState(epoch, TurnPhase.SYNTHESIZING, turn_id=turn_id),
+                    StateEffect.START_TTS,
+                )
         return self._advance(
             turn_id, epoch, {TurnPhase.REASONING}, TurnPhase.SYNTHESIZING,
             StateEffect.START_TTS,

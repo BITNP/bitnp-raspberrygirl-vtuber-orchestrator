@@ -1,11 +1,9 @@
-
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, NewType, override
-
-from orchestrator.response_execution_mode import ResponseExecutionMode
 
 DEFAULT_SERVICE_NAME: Final = "orchestrator"
 
@@ -30,8 +28,6 @@ LLM_MODEL_KEY: Final = "ORCHESTRATOR_LLM_MODEL"
 LLM_API_KEY_KEY: Final = "ORCHESTRATOR_LLM_API_KEY"
 
 LLM_REASONING_DIALECT_KEY: Final = "ORCHESTRATOR_LLM_REASONING_DIALECT"
-
-LLM_GATE_MODEL_KEY: Final = "ORCHESTRATOR_LLM_GATE_MODEL"
 
 LLM_BRAIN_MODEL_KEY: Final = "ORCHESTRATOR_LLM_BRAIN_MODEL"
 
@@ -65,7 +61,10 @@ SERVICE_VERSION_KEY: Final = "ORCHESTRATOR_SERVICE_VERSION"
 
 SESSION_ID_PREFIX_KEY: Final = "ORCHESTRATOR_SESSION_ID_PREFIX"
 
-RESPONSE_EXECUTION_MODE_KEY: Final = "ORCHESTRATOR_RESPONSE_EXECUTION_MODE"
+PPT_DECK_CATALOG_KEY: Final = "ORCHESTRATOR_PPT_DECK_CATALOG"
+
+_DECK_ID_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_MAX_PPT_DECKS: Final = 32
 
 LlmProvider = Literal["mock", "openai_compatible"]
 
@@ -86,7 +85,6 @@ LlmApiKey = NewType("LlmApiKey", str)
 
 @dataclass(frozen=True, slots=True)
 class ConfigParseError(Exception):
-
     field_name: str
 
     @override
@@ -96,7 +94,6 @@ class ConfigParseError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class OrchestratorConfigInput:
-
     service_name: str
 
     service_version: str
@@ -114,8 +111,6 @@ class OrchestratorConfigInput:
     llm_api_key: LlmApiKey | None = None
 
     llm_reasoning_dialect: LlmReasoningDialect | None = None
-
-    llm_gate_model: str | None = None
 
     llm_brain_model: str | None = None
 
@@ -143,12 +138,11 @@ class OrchestratorConfigInput:
 
     tls_ca_path: str | None = None
 
-    response_execution_mode: ResponseExecutionMode = ResponseExecutionMode.NEW_EXECUTE
+    ppt_deck_catalog: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
 class OrchestratorConfig:
-
     service_name: str
 
     service_version: str
@@ -166,8 +160,6 @@ class OrchestratorConfig:
     llm_api_key: LlmApiKey | None = None
 
     llm_reasoning_dialect: LlmReasoningDialect | None = None
-
-    llm_gate_model: str | None = None
 
     llm_brain_model: str | None = None
 
@@ -195,7 +187,7 @@ class OrchestratorConfig:
 
     tls_ca_path: Path | None = None
 
-    response_execution_mode: ResponseExecutionMode = ResponseExecutionMode.NEW_EXECUTE
+    ppt_deck_catalog: frozenset[str] = frozenset()
 
     @classmethod
     def parse(cls, config: OrchestratorConfigInput) -> "OrchestratorConfig":
@@ -227,6 +219,11 @@ class OrchestratorConfig:
             TTS_ENDPOINT_KEY,
             TTS_MODEL_KEY,
         )
+        if len(config.ppt_deck_catalog) > _MAX_PPT_DECKS or any(
+            _DECK_ID_PATTERN.fullmatch(deck_id) is None
+            for deck_id in config.ppt_deck_catalog
+        ):
+            raise ConfigParseError(field_name=PPT_DECK_CATALOG_KEY)
 
         return cls(
             service_name=config.service_name.strip(),
@@ -238,7 +235,6 @@ class OrchestratorConfig:
             llm_model=_normalize_optional(config.llm_model),
             llm_api_key=config.llm_api_key,
             llm_reasoning_dialect=config.llm_reasoning_dialect,
-            llm_gate_model=_normalize_optional(config.llm_gate_model),
             llm_brain_model=_normalize_optional(config.llm_brain_model),
             llm_maintenance_model=_normalize_optional(config.llm_maintenance_model),
             asr_provider=config.asr_provider,
@@ -252,7 +248,7 @@ class OrchestratorConfig:
             tts_mode=config.tts_mode,
             trusted_lan_token=config.trusted_lan_token,
             tls_ca_path=_parse_optional_path(config.tls_ca_path),
-            response_execution_mode=config.response_execution_mode,
+            ppt_deck_catalog=config.ppt_deck_catalog,
         )
 
 
@@ -286,7 +282,6 @@ def load_config_from_env(env: Mapping[str, str] | None = None) -> OrchestratorCo
             llm_reasoning_dialect=_parse_llm_reasoning_dialect(
                 source.get(LLM_REASONING_DIALECT_KEY)
             ),
-            llm_gate_model=source.get(LLM_GATE_MODEL_KEY),
             llm_brain_model=source.get(LLM_BRAIN_MODEL_KEY),
             llm_maintenance_model=source.get(LLM_MAINTENANCE_MODEL_KEY),
             asr_provider=_parse_asr_provider(source.get(ASR_PROVIDER_KEY)),
@@ -300,9 +295,7 @@ def load_config_from_env(env: Mapping[str, str] | None = None) -> OrchestratorCo
             tts_mode=_parse_tts_mode(source.get(TTS_MODE_KEY)),
             trusted_lan_token=_parse_optional_token(source.get(TRUSTED_LAN_TOKEN_KEY)),
             tls_ca_path=source.get(TLS_CA_PATH_KEY),
-            response_execution_mode=_parse_response_execution_mode(
-                source.get(RESPONSE_EXECUTION_MODE_KEY)
-            ),
+            ppt_deck_catalog=_parse_deck_catalog(source.get(PPT_DECK_CATALOG_KEY)),
         )
     )
 
@@ -368,15 +361,6 @@ def _parse_tts_mode(raw_mode: str | None) -> TtsMode:
             raise ConfigParseError(field_name=TTS_MODE_KEY)
 
 
-def _parse_response_execution_mode(raw_mode: str | None) -> ResponseExecutionMode:
-    if raw_mode is None:
-        return ResponseExecutionMode.NEW_EXECUTE
-    try:
-        return ResponseExecutionMode(raw_mode.strip())
-    except ValueError as error:
-        raise ConfigParseError(field_name=RESPONSE_EXECUTION_MODE_KEY) from error
-
-
 def _require_provider_fields(
     provider: LlmProvider | AsrProvider | TtsProvider,
     endpoint: str | None,
@@ -427,3 +411,16 @@ def _parse_optional_token(raw_token: str | None) -> TrustedLanToken | None:
         return None
 
     return TrustedLanToken(raw_token.strip())
+
+
+def _parse_deck_catalog(raw_catalog: str | None) -> frozenset[str]:
+    if raw_catalog is None or raw_catalog.strip() == "":
+        return frozenset()
+    values = tuple(item.strip() for item in raw_catalog.split(","))
+    if (
+        len(values) > _MAX_PPT_DECKS
+        or len(set(values)) != len(values)
+        or any(_DECK_ID_PATTERN.fullmatch(item) is None for item in values)
+    ):
+        raise ConfigParseError(field_name=PPT_DECK_CATALOG_KEY)
+    return frozenset(values)

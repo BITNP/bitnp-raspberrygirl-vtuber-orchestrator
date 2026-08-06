@@ -24,6 +24,8 @@ class _Config:
 
     tts_provider: str = "mock"
 
+    ppt_deck_catalog: frozenset[str] = frozenset()
+
 
 @dataclass
 class _Bridge:

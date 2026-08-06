@@ -235,9 +235,7 @@ class TransportRuntime:
 
         self._frontend_connections: dict[str, FrontendConnection] = {}
 
-        self._pending_presentations: dict[
-            tuple[str, str], _PendingPresentation
-        ] = {}
+        self._pending_presentations: dict[tuple[str, str], _PendingPresentation] = {}
 
         self._active_timelines: dict[str, tuple[CaptionTimelineCommand, TurnId]] = {}
 
@@ -274,10 +272,6 @@ class TransportRuntime:
             self._dispatch_presentation,
         )
 
-        bridge = self._onsite_bridge
-        if isinstance(bridge, OnsiteExplainerBridge):
-            bridge.set_asr_final_handler(self.receive_onsite_asr_final)
-
     def set_session_runtime_factory(self, factory: SessionRuntimeFactory) -> None:
         self._session_runtime_factory = factory
 
@@ -308,8 +302,11 @@ class TransportRuntime:
             EventSequence(event.seq),
         )
         outcome = await session_runtime.receive_asr_final_async(event, correlation)
-        self._schedule_agent_tts(session_runtime, outcome, stream, correlation)
-        return outcome.accepted
+        if outcome.accepted:
+            self._schedule_agent_tts(session_runtime, outcome, stream, correlation)
+        # A discard or failed candidate is still fully handled by the single
+        # Brain pipeline and must never fall through to the legacy actor path.
+        return True
 
     def _schedule_agent_tts(
         self,
@@ -353,10 +350,7 @@ class TransportRuntime:
         correlation: EventCorrelation,
     ) -> None:
         bridge = self._onsite_bridge
-        if (
-            outcome.accepted
-            and isinstance(bridge, OnsiteExplainerBridge)
-        ):
+        if outcome.accepted and isinstance(bridge, OnsiteExplainerBridge):
             turn_id = outcome.turn_id
             if turn_id is None:
                 return
@@ -390,6 +384,19 @@ class TransportRuntime:
                 correlation,
                 timeline_started,
             )
+            if await session_runtime.wait_for_operation_followup(turn_id):
+                _ = await session_runtime.run_agent_tts_for_turn(
+                    turn_id,
+                    lambda text, output_started: bridge.speak_response(
+                        stream,
+                        text,
+                        session_runtime.cancellation_epoch,
+                        str(turn_id),
+                        output_started,
+                    ),
+                    correlation,
+                    timeline_started,
+                )
 
     def set_observability(self, observability: OnsiteObservability) -> None:
         self._hub.set_observability(observability)
@@ -462,11 +469,10 @@ class TransportRuntime:
             # contract-test mode.
             return None
         response_state = session_runtime.response_turn_state
-        if (
-            response_state.turn_id == str(replacement.turn_id)
-            and not session_runtime.response_cutover_pending(
-                SchedulerTurnId(str(replacement.turn_id))
-            )
+        if response_state.turn_id == str(
+            replacement.turn_id
+        ) and not session_runtime.response_cutover_pending(
+            SchedulerTurnId(str(replacement.turn_id))
         ):
             # A replacement may only ask Sound to flush after this exact
             # response turn has prepared its first frame.  Rejecting here
@@ -482,9 +488,8 @@ class TransportRuntime:
 
     def _sound_flush_task_is_current(self, stream: StreamKey, task_id: TaskId) -> bool:
         session_runtime = self._runtime_for_session(stream.session_id)
-        return (
-            session_runtime is not None
-            and session_runtime.sound_flush_is_current(task_id)
+        return session_runtime is not None and session_runtime.sound_flush_is_current(
+            task_id
         )
 
     def _complete_sound_flush_task(self, stream: StreamKey, task_id: TaskId) -> bool:
@@ -647,9 +652,12 @@ class TransportRuntime:
 
                     frontend_session = _frontend_registration(message)
                     if frontend_session is not None:
-                        if self._runtime_for_session(
-                            frontend_session, allow_create=True
-                        ) is None:
+                        if (
+                            self._runtime_for_session(
+                                frontend_session, allow_create=True
+                            )
+                            is None
+                        ):
                             continue
                         self._frontend_connections[frontend_session] = connection
                         self._touch_session(frontend_session, owner=id(connection))
@@ -952,12 +960,19 @@ class TransportRuntime:
         if (
             pending is None
             or pending.owner is not connection
-            or control.correlation.session_id
-            != SessionId(session_id)
+            or control.correlation.session_id != SessionId(session_id)
             or pending.future.done()
         ):
             return False
-        pending.future.set_result(control.result.succeeded)
+        runtime = self._runtime_for_session(session_id, fallback=self._session_runtime)
+        if runtime is None:
+            return False
+        correlation = runtime.presentation_correlation(control.result.command_id)
+        if correlation is None:
+            return False
+        outcome = runtime.receive_presentation_result(control.result, correlation)
+        succeeded = control.result.succeeded and outcome.accepted
+        pending.future.set_result(succeeded)
         return True
 
     async def _send_caption_timeline(
@@ -1205,10 +1220,7 @@ async def _listen_control(
 
         if (
             config.role_tokens.resolve(authorization) is not None
-            or (
-                config.control_scheme == "ws"
-                and authorization is None
-            )
+            or (config.control_scheme == "ws" and authorization is None)
             or (
                 config.control_token is not None
                 and authorization == f"Bearer {config.control_token}"

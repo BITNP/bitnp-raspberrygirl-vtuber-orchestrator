@@ -1,7 +1,15 @@
 import asyncio
+from dataclasses import dataclass
 
-from orchestrator.brain_contracts import AudienceInput, AudienceSource, GateDecision
+from orchestrator.brain_contracts import (
+    AudienceInput,
+    AudienceSource,
+    BrainStateSnapshot,
+)
 from orchestrator.ids import SessionId, TraceId
+from orchestrator.intent_router import IntentRouter
+from orchestrator.response_contracts import BrainDecision, ResponseProposal
+from orchestrator.response_coordinator import AsyncResponseCoordinator
 from orchestrator.runtime_contracts import RuntimeOutcome
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import (
@@ -13,233 +21,161 @@ from orchestrator.sessions import (
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 
 
-class _AcceptGate:
-    async def evaluate(
+@dataclass
+class _Brain:
+    proposal: ResponseProposal
+    started: asyncio.Event | None = None
+    release: asyncio.Event | None = None
+
+    async def respond(
         self,
-        audience_input: AudienceInput,
+        snapshot: BrainStateSnapshot,
         *,
-        active_summary: str,
-        recent_turn_context: tuple[str, ...] = (),
-    ) -> GateDecision:
-        _ = audience_input, active_summary, recent_turn_context
-        await asyncio.sleep(0)
-        return GateDecision.ACCEPT
+        available_operations: tuple[dict[str, object], ...],
+        observation: str | None = None,
+    ) -> ResponseProposal:
+        _ = snapshot, available_operations, observation
+        if self.started is not None:
+            _ = self.started.set()
+        if self.release is not None:
+            _ = await self.release.wait()
+        return self.proposal
 
 
-class _FailOnceGate:
-    def __init__(self) -> None:
-        self.failed: bool = False
+class _Tools:
+    async def execute(self, request: object, snapshot: BrainStateSnapshot) -> None:
+        _ = request, snapshot
 
-    async def evaluate(
+
+@dataclass
+class _OrderedBrain:
+    first_started: asyncio.Event
+    release_first: asyncio.Event
+    calls: list[int]
+
+    async def respond(
         self,
-        audience_input: AudienceInput,
+        snapshot: BrainStateSnapshot,
         *,
-        active_summary: str,
-        recent_turn_context: tuple[str, ...] = (),
-    ) -> GateDecision:
-        _ = audience_input, active_summary, recent_turn_context
-        if not self.failed:
-            self.failed = True
-            raise RuntimeError
-        return GateDecision.ACCEPT
+        available_operations: tuple[dict[str, object], ...],
+        observation: str | None = None,
+    ) -> ResponseProposal:
+        _ = available_operations, observation
+        self.calls.append(snapshot.input.sequence)
+        if len(self.calls) == 1:
+            self.first_started.set()
+            _ = await self.release_first.wait()
+        return ResponseProposal(BrainDecision.ACCEPT, "回答", None)
 
 
-class _BlockedGate:
-    def __init__(self) -> None:
-        self.started: asyncio.Event = asyncio.Event()
-        self.release: asyncio.Event = asyncio.Event()
-
-    async def evaluate(
-        self,
-        audience_input: AudienceInput,
-        *,
-        active_summary: str,
-        recent_turn_context: tuple[str, ...] = (),
-    ) -> GateDecision:
-        _ = audience_input, active_summary, recent_turn_context
-        _ = self.started.set()
-        _ = await self.release.wait()
-        return GateDecision.ACCEPT
-
-
-def _runtime() -> SessionRuntime:
-    return SessionRuntime.create(
+def _runtime(brain: _Brain) -> SessionRuntime:
+    runtime = SessionRuntime.create(
         session_id=SessionId("session-1"),
         turn_id_prefix="turn",
         task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 2),
     )
+    runtime.async_response_coordinator = AsyncResponseCoordinator(
+        brain, IntentRouter(()), _Tools()
+    )
+    return runtime
 
 
 def _correlation(sequence: int) -> EventCorrelation:
     return EventCorrelation(
-        TraceId(f"trace-{sequence}"),
-        SessionId("session-1"),
-        EventSequence(sequence),
+        TraceId(f"trace-{sequence}"), SessionId("session-1"), EventSequence(sequence)
     )
 
 
-def _input(sequence: int, source: AudienceSource) -> AudienceInput:
+def _input(
+    sequence: int, source: AudienceSource = AudienceSource.COMMENT
+) -> AudienceInput:
     return AudienceInput(
-        session_id="session-1",
-        trace_id=f"trace-{sequence}",
-        sequence=sequence,
-        source=source,
-        received_at_ms=sequence,
-        text=f"input-{sequence}",
+        "session-1",
+        f"trace-{sequence}",
+        sequence,
+        source,
+        sequence,
+        f"input-{sequence}",
     )
 
 
-def test_voice_is_admitted_before_queued_comments() -> None:
+def test_discard_candidate_does_not_create_turn_or_advance_epoch() -> None:
     async def scenario() -> None:
-        runtime = _runtime()
-        gate = _AcceptGate()
-        first_started = asyncio.Event()
-        release_first = asyncio.Event()
-        order: list[str] = []
-
-        async def first() -> RuntimeOutcome:
-            order.append("comment-1")
-            _ = first_started.set()
-            _ = await release_first.wait()
-            return RuntimeOutcome(accepted=True, correlation=_correlation(1))
-
-        async def record(name: str, sequence: int) -> RuntimeOutcome:
-            order.append(name)
-            return RuntimeOutcome(
-                accepted=True, correlation=_correlation(sequence)
-            )
-
-        first_task = asyncio.create_task(
-            runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
-                gate,
-                _input(1, AudienceSource.COMMENT),
-                _correlation(1),
-                first,
-            )
-        )
-        _ = await first_started.wait()
-        comment_task = asyncio.create_task(
-            runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
-                gate,
-                _input(2, AudienceSource.COMMENT),
-                _correlation(2),
-                lambda: record("comment-2", 2),
-            )
-        )
-        voice_task = asyncio.create_task(
-            runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
-                gate,
-                _input(3, AudienceSource.ASR),
-                _correlation(3),
-                lambda: record("voice-3", 3),
-            )
-        )
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        _ = release_first.set()
-        _ = await asyncio.gather(first_task, comment_task, voice_task)
-
-        assert order == ["comment-1", "voice-3", "comment-2"]
-
-    asyncio.run(scenario())
-
-
-def test_gate_exception_fails_closed_and_later_input_survives() -> None:
-    async def scenario() -> None:
-        runtime = _runtime()
-        gate = _FailOnceGate()
-
-        failed = await runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
-            gate,
-            _input(1, AudienceSource.COMMENT),
+        runtime = _runtime(_Brain(ResponseProposal(BrainDecision.DISCARD, "", None)))
+        revision = runtime.scheduler.snapshot.revision
+        epoch = runtime.cancellation_epoch
+        coordinator = runtime.async_response_coordinator
+        assert coordinator is not None
+        outcome = await runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+            coordinator,
+            _input(1),
             _correlation(1),
-            lambda: asyncio.sleep(
+            lambda _proposal, _snapshot: asyncio.sleep(
                 0,
                 result=RuntimeOutcome(
                     accepted=True, correlation=_correlation(1)
                 ),
             ),
         )
-        accepted = await runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
-            gate,
-            _input(2, AudienceSource.COMMENT),
-            _correlation(2),
-            lambda: asyncio.sleep(
-                0,
-                result=RuntimeOutcome(
-                    accepted=True, correlation=_correlation(2)
-                ),
-            ),
-        )
-
-        assert failed.accepted is False
-        assert accepted.accepted is True
+        assert not outcome.accepted
+        assert runtime.scheduler.snapshot.revision == revision
+        assert runtime.cancellation_epoch == epoch
 
     asyncio.run(scenario())
 
 
-def test_gate_result_revalidates_owner_and_scheduler_revision() -> None:
+def test_candidate_revalidates_scheduler_revision_before_admission() -> None:
     async def scenario() -> None:
-        runtime = _runtime()
-        gate = _BlockedGate()
-        owner_valid = True
+        started = asyncio.Event()
+        release = asyncio.Event()
+        runtime = _runtime(
+            _Brain(
+                ResponseProposal(BrainDecision.ACCEPT, "回答", None), started, release
+            )
+        )
+        coordinator = runtime.async_response_coordinator
+        assert coordinator is not None
         task = asyncio.create_task(
-            runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
-                gate,
-                _input(1, AudienceSource.COMMENT),
+            runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+                coordinator,
+                _input(1),
                 _correlation(1),
-                lambda: asyncio.sleep(
+                lambda _proposal, _snapshot: asyncio.sleep(
                     0,
                     result=RuntimeOutcome(
                         accepted=True, correlation=_correlation(1)
                     ),
                 ),
-                admission_valid=lambda: owner_valid,
             )
         )
-        _ = await gate.started.wait()
-        owner_valid = False
-        _ = gate.release.set()
-        assert (await task).accepted is False
-
-        second_gate = _BlockedGate()
-        second = asyncio.create_task(
-            runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
-                second_gate,
-                _input(2, AudienceSource.COMMENT),
-                _correlation(2),
-                lambda: asyncio.sleep(
-                    0,
-                    result=RuntimeOutcome(
-                        accepted=True, correlation=_correlation(2)
-                    ),
-                ),
-            )
-        )
-        _ = await second_gate.started.wait()
+        _ = await started.wait()
         snapshot = runtime.scheduler.snapshot
         _ = runtime.scheduler.apply(
-            StartTurn(
-                expected_revision=snapshot.revision,
-                event=SchedulerEvent("test", _correlation(99)),
-            )
+            StartTurn(snapshot.revision, SchedulerEvent("test", _correlation(99)))
         )
-        _ = second_gate.release.set()
-        assert (await second).accepted is False
+        _ = release.set()
+        assert not (await task).accepted
 
     asyncio.run(scenario())
 
 
-def test_duplicate_gate_race_is_rejected_atomically() -> None:
+def test_duplicate_candidate_is_rejected_while_first_is_in_flight() -> None:
     async def scenario() -> None:
-        runtime = _runtime()
-        gate = _BlockedGate()
+        started = asyncio.Event()
+        release = asyncio.Event()
+        runtime = _runtime(
+            _Brain(
+                ResponseProposal(BrainDecision.ACCEPT, "回答", None), started, release
+            )
+        )
+        coordinator = runtime.async_response_coordinator
+        assert coordinator is not None
         first = asyncio.create_task(
-            runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
-                gate,
-                _input(1, AudienceSource.ASR),
+            runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+                coordinator,
+                _input(1),
                 _correlation(1),
-                lambda: asyncio.sleep(
+                lambda _proposal, _snapshot: asyncio.sleep(
                     0,
                     result=RuntimeOutcome(
                         accepted=True, correlation=_correlation(1)
@@ -247,18 +183,67 @@ def test_duplicate_gate_race_is_rejected_atomically() -> None:
                 ),
             )
         )
-        _ = await gate.started.wait()
-        duplicate = await runtime._gate_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
-            _AcceptGate(),
-            _input(1, AudienceSource.ASR),
+        _ = await started.wait()
+        duplicate = await runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+            coordinator,
+            _input(1),
             _correlation(1),
-            lambda: asyncio.sleep(
+            lambda _proposal, _snapshot: asyncio.sleep(
                 0,
-                result=RuntimeOutcome(accepted=True, correlation=_correlation(1)),
+                result=RuntimeOutcome(
+                    accepted=True, correlation=_correlation(1)
+                ),
             ),
         )
-        _ = gate.release.set()
-        assert duplicate.accepted is False
-        assert (await first).accepted is True
+        assert not duplicate.accepted
+        _ = release.set()
+        assert (await first).accepted
+
+    asyncio.run(scenario())
+
+
+def test_candidates_are_serialized_before_brain_with_voice_priority() -> None:
+    async def scenario() -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        brain = _OrderedBrain(started, release, [])
+        runtime = SessionRuntime.create(
+            session_id=SessionId("session-1"),
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset({TaskKind.INTERACTIVE}), 2),
+        )
+        coordinator = AsyncResponseCoordinator(brain, IntentRouter(()), _Tools())
+        runtime.async_response_coordinator = coordinator
+
+        def submit(
+            sequence: int, source: AudienceSource
+        ) -> asyncio.Task[RuntimeOutcome]:
+            return asyncio.create_task(
+                runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+                    coordinator,
+                    _input(sequence, source),
+                    _correlation(sequence),
+                    lambda _proposal, _snapshot: asyncio.sleep(
+                        0,
+                        result=RuntimeOutcome(
+                            accepted=True, correlation=_correlation(sequence)
+                        ),
+                    ),
+                )
+            )
+
+        first = submit(1, AudienceSource.COMMENT)
+        _ = await started.wait()
+        second_comment = submit(2, AudienceSource.COMMENT)
+        await asyncio.sleep(0)
+        voice = submit(3, AudienceSource.ASR)
+        await asyncio.sleep(0)
+
+        assert brain.calls == [1]
+        release.set()
+        outcomes = await asyncio.gather(first, second_comment, voice)
+
+        assert all(outcome.accepted for outcome in outcomes)
+        assert brain.calls == [1, 3, 2]
 
     asyncio.run(scenario())

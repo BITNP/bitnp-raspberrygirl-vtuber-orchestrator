@@ -9,13 +9,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from orchestrator.ids import ConnectionId, SessionId
-from orchestrator.llm import MockLLMAdapter
 from orchestrator.media_adapters import SynthesizedAudio
-from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
-from orchestrator.pipeline import OrchestratorTurnPipeline, PipelineAdapters
-from orchestrator.pipeline_contracts import ASRAudienceEvent, PipelineConfig
-from orchestrator.retrieval import RetrievalFixtureProvider
+from orchestrator.pipeline_contracts import ASRAudienceEvent
+from orchestrator.response_coordinator import run_blocking_provider
 from orchestrator.scheduler_reflex import SchedulerOutputFence
 from orchestrator.sessions import SessionScheduler
 from orchestrator.streaming_contracts import (
@@ -330,7 +327,7 @@ async def _streaming_cancellation_proof() -> None:
         )
     )
 
-    _ = await asyncio.to_thread(tts.next_started.wait)
+    _ = await run_blocking_provider(tts.next_started.wait)
     _ = task.cancel()
     try:
         _ = await task
@@ -378,7 +375,7 @@ async def _response_streaming_proof() -> None:
     # When: the first full 20 ms PCM frame has arrived but the SSE response is
     # still blocked before its second chunk.
 
-    _ = await asyncio.to_thread(tts.first_chunk_ready.wait)
+    _ = await run_blocking_provider(tts.first_chunk_ready.wait)
     async with asyncio.timeout(1.0):
         _ = await output_ready.wait()
 
@@ -549,25 +546,13 @@ def _rtp_packet() -> bytes:
 
 
 def _bridge(asr: _DelayedAsr, *, legacy_keyed: bool = True) -> OnsiteExplainerBridge:
-
-    legacy_frame_limit = 1 if legacy_keyed else None
+    _ = asr, legacy_keyed
 
     return OnsiteExplainerBridge(
-        asr=asr,
         tts=_Tts(),
-        pipeline_factory=lambda: OrchestratorTurnPipeline(
-            adapters=PipelineAdapters(
-                mode_policy=AdaptiveAgentPolicy(),
-                llm=MockLLMAdapter(("onsite answer",)),
-                retrieval=RetrievalFixtureProvider(()),
-            ),
-            config=PipelineConfig(1, "turn-onsite", "segment-onsite"),
-        ),
         voice="raspberry",
         ref_audio="file:///voice.wav",
         ref_text="reference",
-        frames_per_utterance=1,
-        legacy_keyed_frames_per_utterance=legacy_frame_limit,
     )
 
 

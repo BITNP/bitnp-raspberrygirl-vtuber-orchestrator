@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from orchestrator.ids import ConnectionId
     from orchestrator.observability import OnsiteObservability, OnsiteStage
     from orchestrator.scheduler_reflex import OutputLease, SchedulerOutputFence
-    from orchestrator.streaming_pipeline_actors import StreamPipelineActors
     from orchestrator.task_registry import TaskId
 
 
@@ -85,15 +84,9 @@ class OnsiteBridge(Protocol):
         callback: Callable[[StreamKey, SegmentId], Awaitable[CancellationEpoch | None]],
     ) -> None: ...
 
-    def submit_mic_rtp(
-        self, stream: StreamKey, packet: bytes, epoch: CancellationEpoch
-    ) -> None: ...
-
     def invalidate_stream(
         self, stream: StreamKey, next_epoch: CancellationEpoch
     ) -> None: ...
-
-    def disconnect_stream(self, stream: StreamKey) -> None: ...
 
     async def wait_quiescent(self) -> None: ...
 
@@ -134,8 +127,6 @@ class RtpHub:
         self._sinks: dict[StreamKey, PeerAddress] = {}
 
         self._sink_owners: dict[StreamKey, ConnectionId] = {}
-
-        self._onsite_actors: StreamPipelineActors | None = None
 
         self._route_generations: dict[StreamKey, int] = {}
 
@@ -309,6 +300,16 @@ class RtpHub:
         reason = "sound_flush_timeout"
         try:
             if self._replacement_task_current(stream, task_id):
+                _LOGGER.debug(
+                    "sound_flush_request session=%s stream=%s turn=%s %s",
+                    stream.session_id,
+                    stream.stream_id,
+                    replacement.turn_id,
+                    (
+                        f"segment={replacement.segment_id} "
+                        f"epoch={replacement.cancellation_epoch}"
+                    ),
+                )
                 await request_flush(flush)
             else:
                 reason = "sound_flush_stale_before_request"
@@ -318,6 +319,16 @@ class RtpHub:
                     reason = "sound_flush_stale"
                     break
                 if output_fence.can_emit(stream, replacement.cancellation_epoch):
+                    _LOGGER.debug(
+                        "sound_flush_acknowledged session=%s stream=%s turn=%s %s",
+                        stream.session_id,
+                        stream.stream_id,
+                        replacement.turn_id,
+                        (
+                            f"segment={replacement.segment_id} "
+                            f"epoch={replacement.cancellation_epoch}"
+                        ),
+                    )
                     result = await self._admit_replacement_if_current(
                         stream, flush, task_id
                     )
@@ -643,11 +654,6 @@ class RtpHub:
             observability.record_stream(stage, stream)
 
     async def wait_for_onsite_jobs(self) -> None:
-        actors = self._onsite_actors
-
-        if actors is not None:
-            await actors.wait_quiescent()
-
         bridge = self._onsite_bridge
 
         if bridge is not None:
@@ -665,12 +671,6 @@ class RtpHub:
                 self._remove_sink(stream)
 
     def clear(self) -> None:
-        actors = self._onsite_actors
-
-        if actors is not None:
-            for stream in actors.streams:
-                self._invalidate_stream(stream)
-
         self._mic_inputs.clear()
 
         self._correlations.clear()
@@ -747,11 +747,6 @@ class RtpHub:
             self._onsite_bridge.invalidate_stream(
                 stream, CancellationEpoch(next_generation)
             )
-
-        actors = self._onsite_actors
-
-        if actors is not None:
-            _ = actors.discard(stream)
 
 def _is_canonical_rtp(data: bytes) -> bool:
     return (

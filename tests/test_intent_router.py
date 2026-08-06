@@ -14,7 +14,12 @@ def _mcp_spec(name: str) -> IntentSpec:
         tool_kind="mcp",
         tool_name=name,
         required_capability=f"mcp:{name}",
-        build_arguments=lambda _snapshot: {"query": "trusted"},
+        argument_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["query"],
+            "properties": {"query": {"type": "string", "maxLength": 64}},
+        },
         model_label="受控工具",
     )
 
@@ -36,6 +41,6 @@ def test_intent_spec_rejects_invalid_lifecycle_configuration() -> None:
             "mcp",
             "server/tool",
             "mcp:server/tool",
-            lambda _s: {},
+            {"type": "object", "additionalProperties": False},
             lane="bad",
         )

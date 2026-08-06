@@ -9,7 +9,11 @@ from orchestrator.brain_contracts import (
     BrainStateSnapshot,
 )
 from orchestrator.intent_router import IntentRouter, IntentSpec
-from orchestrator.response_contracts import ResponseProposal
+from orchestrator.response_contracts import (
+    BrainDecision,
+    OperationProposal,
+    ResponseProposal,
+)
 from orchestrator.response_coordinator import (
     AsyncResponseCoordinator,
     ResponseSupersededError,
@@ -18,105 +22,94 @@ from orchestrator.response_coordinator import (
 
 def _snapshot() -> BrainStateSnapshot:
     return BrainStateSnapshot(
-        session_id="session-1",
-        turn_id="turn-1",
-        revision=1,
-        cancellation_epoch=0,
-        input=AudienceInput("session-1", "trace-1", 1, AudienceSource.ASR, 1, "查询"),
-        context_summary="",
-        recent_context=(),
-        memory_markdown="",
-        capabilities=frozenset({"knowledge.lookup"}),
+        "session-1",
+        "candidate-1",
+        1,
+        0,
+        AudienceInput("session-1", "trace-1", 1, AudienceSource.ASR, 1, "查询"),
+        "",
+        (),
+        "",
+        frozenset({"mcp:web/search"}),
     )
 
 
 @dataclass
 class _Brain:
     responses: list[ResponseProposal]
-    allowed: list[frozenset[str]] = field(default_factory=list)
+    operations: list[tuple[dict[str, object], ...]] = field(default_factory=list)
 
     async def respond(
         self,
         snapshot: BrainStateSnapshot,
         *,
-        allowed_intents: frozenset[str],
-        observations: tuple[str, ...] = (),
+        available_operations: tuple[dict[str, object], ...],
+        observation: str | None = None,
     ) -> ResponseProposal:
-        _ = snapshot, observations
-        self.allowed.append(allowed_intents)
+        _ = snapshot, observation
+        self.operations.append(available_operations)
         return self.responses.pop(0)
 
 
+@dataclass
 class _Tools:
+    requests: int = 0
+
     async def execute(self, request: object, snapshot: BrainStateSnapshot) -> str:
         _ = request, snapshot
-        return "检索结果"
+        self.requests += 1
+        return "status=success digest=sha256:x text=晴"
 
 
-class _FailingTools:
-    async def execute(self, request: object, snapshot: BrainStateSnapshot) -> str:
-        _ = request, snapshot
-        raise OSError
-
-
-def test_tool_intent_has_one_final_answer_call_without_reopening_tools() -> None:
-    brain = _Brain(
-        [ResponseProposal("", "knowledge"), ResponseProposal("答案", "answer")]
-    )
-    coordinator = AsyncResponseCoordinator(
+def _coordinator(brain: _Brain, tools: _Tools) -> AsyncResponseCoordinator:
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["query"],
+        "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 64}},
+    }
+    return AsyncResponseCoordinator(
         brain,
         IntentRouter(
             (
                 IntentSpec(
-                    "knowledge",
-                    "knowledge",
-                    "local",
-                    "knowledge.lookup",
-                    lambda snapshot: {"query": snapshot.input.text},
+                    "mcp.web_search", "mcp", "web/search", "mcp:web/search", schema
                 ),
             )
         ),
-        _Tools(),
+        tools,
     )
 
-    result = asyncio.run(coordinator.respond(_snapshot()))
 
-    assert result.proposal.reply == "答案"
-    assert result.observation == "检索结果"
-    assert brain.allowed == [frozenset({"answer", "knowledge"}), frozenset({"answer"})]
+def test_no_operation_uses_one_brain_call() -> None:
+    brain = _Brain([ResponseProposal(BrainDecision.ACCEPT, "您好", None)])
+    result = asyncio.run(_coordinator(brain, _Tools()).respond(_snapshot()))
+    assert result.proposal.speech == "您好"
+    assert len(brain.operations) == 1
 
 
-def test_stale_turn_cannot_commit_a_model_result() -> None:
-    coordinator = AsyncResponseCoordinator(
-        _Brain([ResponseProposal("答案", "answer")]), IntentRouter(()), _Tools()
+def test_one_operation_uses_one_tool_and_at_most_two_brain_calls() -> None:
+    brain = _Brain(
+        [
+            ResponseProposal(
+                BrainDecision.ACCEPT,
+                "我来查询",
+                OperationProposal("mcp.web_search", {"query": "天气"}),
+            ),
+            ResponseProposal(BrainDecision.ACCEPT, "明天晴", None),
+        ]
     )
+    tools = _Tools()
+    result = asyncio.run(_coordinator(brain, tools).respond(_snapshot()))
+    assert result.proposal.speech == "明天晴"
+    assert tools.requests == 1
+    assert len(brain.operations) == 2
+    assert brain.operations[1] == ()
 
+
+def test_stale_candidate_cannot_commit() -> None:
+    coordinator = _coordinator(
+        _Brain([ResponseProposal(BrainDecision.ACCEPT, "答案", None)]), _Tools()
+    )
     with pytest.raises(ResponseSupersededError):
         _ = asyncio.run(coordinator.respond(_snapshot(), is_current=lambda: False))
-
-
-def test_failed_tool_still_has_exactly_one_tools_disabled_final_answer() -> None:
-    brain = _Brain(
-        [ResponseProposal("", "knowledge"), ResponseProposal("暂不可用", "answer")]
-    )
-    coordinator = AsyncResponseCoordinator(
-        brain,
-        IntentRouter(
-            (
-                IntentSpec(
-                    "knowledge",
-                    "knowledge",
-                    "local",
-                    "knowledge.lookup",
-                    lambda snapshot: {"query": snapshot.input.text},
-                ),
-            )
-        ),
-        _FailingTools(),
-    )
-
-    result = asyncio.run(coordinator.respond(_snapshot()))
-
-    assert result.proposal == ResponseProposal("暂不可用", "answer")
-    assert result.observation == "工具调用未成功完成。请基于已知信息简短说明。"
-    assert brain.allowed == [frozenset({"answer", "knowledge"}), frozenset({"answer"})]

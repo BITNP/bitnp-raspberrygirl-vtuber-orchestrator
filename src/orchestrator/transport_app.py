@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from orchestrator.brain_runtime import (
     AsyncJsonCompletion,
-    build_async_agent_gate,
     build_async_context_compactor,
     build_async_memory_candidate_extractor,
     build_async_response_coordinator,
@@ -16,7 +16,6 @@ from orchestrator.config import OrchestratorConfig, load_config_from_env
 from orchestrator.ids import SessionId
 from orchestrator.observability import OnsiteObservability
 from orchestrator.onsite_bridge import build_onsite_bridge
-from orchestrator.response_execution_mode import ResponseExecutionMode
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 from orchestrator.transport_config import load_transport_config_from_env
@@ -24,6 +23,18 @@ from orchestrator.transport_runtime import TransportRuntime
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from orchestrator.brain_contracts import BrainStateSnapshot, ToolRequest
+
+
+@dataclass(frozen=True, slots=True)
+class _PresentationToolExecutor:
+    runtime: SessionRuntime
+
+    async def execute(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> str | None:
+        return await self.runtime.execute_presentation_tool(request, snapshot)
 
 
 async def run_transport() -> None:
@@ -46,38 +57,37 @@ async def run_transport() -> None:
     transport_config = load_transport_config_from_env(os.environ)
 
     brain_completion = getattr(bridge, "llm", None)
+    presentation_decks = config.ppt_deck_catalog
 
     def create_session_runtime(session_id: SessionId) -> SessionRuntime:
         session_runtime = SessionRuntime.create(
             session_id=session_id,
             turn_id_prefix="turn",
             task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
-            response_execution_mode=getattr(
-                config,
-                "response_execution_mode",
-                ResponseExecutionMode.NEW_EXECUTE,
-            ),
         )
         session_runtime.configure_voice_identity(
             getattr(transport_config, "voice_template_key", None),
             evidence_ttl_seconds=getattr(
                 transport_config, "voice_evidence_ttl_seconds", 120
             ),
-            match_threshold=getattr(
-                transport_config, "voice_match_threshold", 0.90
-            ),
-            ambiguity_margin=getattr(
-                transport_config, "voice_ambiguity_margin", 0.05
-            ),
+            match_threshold=getattr(transport_config, "voice_match_threshold", 0.90),
+            ambiguity_margin=getattr(transport_config, "voice_ambiguity_margin", 0.05),
         )
-        if brain_completion is not None:
-            session_runtime.async_agent_gate = build_async_agent_gate(
-                cast("AsyncJsonCompletion", brain_completion)
+        if presentation_decks:
+            session_runtime.agent_capabilities = (
+                session_runtime.agent_capabilities | {"presentation.deck"}
             )
+        if brain_completion is not None:
             session_runtime.async_response_coordinator = (
                 build_async_response_coordinator(
                     cast("AsyncJsonCompletion", brain_completion),
                     session_runtime.interaction_ingress.data.retrieval,
+                    presentation_executor=(
+                        _PresentationToolExecutor(session_runtime)
+                        if presentation_decks
+                        else None
+                    ),
+                    presentation_decks=presentation_decks,
                 )
             )
             session_runtime.memory_candidate_extractor = (

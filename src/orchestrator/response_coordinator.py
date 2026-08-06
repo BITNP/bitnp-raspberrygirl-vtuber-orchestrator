@@ -1,21 +1,38 @@
-"""Two-stage response coordination with no model-controlled effects.
-
-This is intentionally transport-free.  SessionRuntime owns task admission and
-uses this coordinator only after it has captured an immutable state snapshot.
-"""
+"""At-most-two-call Brain coordination with one isolated operation."""
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
-from orchestrator.response_contracts import ResponseProposal
+from orchestrator.modes import AnswerCandidate, AudienceInput, AudienceSource
+from orchestrator.response_contracts import BrainDecision, ResponseProposal
+
+_BLOCKING_PROVIDER_POOL = ThreadPoolExecutor(
+    max_workers=16, thread_name_prefix="bounded-provider"
+)
+
+
+async def run_blocking_provider[R](
+    function: Callable[..., R], *args: object
+) -> R:
+    operation: Callable[[], R] = partial(function, *args)
+    future = _BLOCKING_PROVIDER_POOL.submit(operation)
+    # Polling is intentional: some supported event-loop/sandbox combinations
+    # lose the cross-thread completion wakeup after the provider has returned.
+    while not future.done():  # noqa: ASYNC110
+        await asyncio.sleep(0.001)
+    return future.result()
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from orchestrator.brain_contracts import BrainStateSnapshot, ToolRequest
     from orchestrator.intent_router import IntentRouter
+    from orchestrator.retrieval import VersionedRetrievalProvider
 
 
 class AsyncResponseBrain(Protocol):
@@ -23,8 +40,8 @@ class AsyncResponseBrain(Protocol):
         self,
         snapshot: BrainStateSnapshot,
         *,
-        allowed_intents: frozenset[str],
-        observations: tuple[str, ...] = (),
+        available_operations: tuple[dict[str, object], ...],
+        observation: str | None = None,
     ) -> ResponseProposal: ...
 
 
@@ -35,7 +52,7 @@ class AsyncResponseToolExecutor(Protocol):
 
 
 class ResponseSupersededError(RuntimeError):
-    """A provider returned after its immutable turn snapshot became stale."""
+    """A provider returned after its immutable snapshot became stale."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,48 +67,64 @@ class AsyncResponseCoordinator:
     brain: AsyncResponseBrain
     router: IntentRouter
     tools: AsyncResponseToolExecutor
+    retrieval: VersionedRetrievalProvider | None = None
 
-    async def initial_response(
-        self, snapshot: BrainStateSnapshot
-    ) -> ResponseProposal:
-        """Run only the initial, intent-selecting model call."""
+    async def retrieve_knowledge(self, snapshot: BrainStateSnapshot) -> tuple[str, ...]:
+        """Retrieve controlled local knowledge before the first Brain call."""
+        if self.retrieval is None:
+            return ()
+        result = await run_blocking_provider(
+            self.retrieval.retrieve,
+            AnswerCandidate(
+                AudienceInput(
+                    AudienceSource(snapshot.input.source.value),
+                    snapshot.input.text,
+                    snapshot.input.received_at_ms,
+                )
+            ),
+        )
+        return tuple(
+            (
+                f"corpus={int(ref.corpus_revision)} index={int(ref.index_revision)} "
+                f"source={ref.ref_id} title={ref.title} excerpt={ref.text[:4000]}"
+            )
+            for ref in result.refs
+        )
+
+    async def initial_response(self, snapshot: BrainStateSnapshot) -> ResponseProposal:
         return await self.brain.respond(
-            snapshot, allowed_intents=self.router.allowed_intents(snapshot)
+            snapshot, available_operations=self.router.available_operations(snapshot)
         )
 
     def tool_request(
         self, proposal: ResponseProposal, snapshot: BrainStateSnapshot
     ) -> ToolRequest | None:
-        """Build the trusted request for a previously accepted intent."""
-        if proposal.intent == "answer":
+        if proposal.operation is None:
             return None
-        return self.router.request(proposal.intent, snapshot)
+        return self.router.request(proposal.operation, snapshot)
 
     def tool_timeout_ms(self, proposal: ResponseProposal) -> int | None:
-        """Expose the registered, model-independent budget for a tool turn."""
-        if proposal.intent == "answer":
-            return None
-        return self.router.timeout_for(proposal.intent)
+        return (
+            None
+            if proposal.operation is None
+            else self.router.timeout_for(proposal.operation.intent)
+        )
 
     async def execute_tool(
         self, request: ToolRequest, snapshot: BrainStateSnapshot
     ) -> str | None:
-        """Execute one already-authorized tool request without model authority."""
         return await self.tools.execute(request, snapshot)
+
+    def tool_request_is_current(
+        self, request: ToolRequest, capabilities: frozenset[str]
+    ) -> bool:
+        return self.router.permits_request(request, capabilities)
 
     async def final_response(
         self, snapshot: BrainStateSnapshot, observation: str
     ) -> ResponseProposal:
-        """Run the sole post-observation model call with tools disabled."""
-        final = await self.brain.respond(
-            snapshot,
-            allowed_intents=frozenset({"answer"}),
-            observations=(observation,),
-        )
-        return (
-            final
-            if final.intent == "answer"
-            else ResponseProposal(final.reply, "answer", final.used_text_fallback)
+        return await self.brain.respond(
+            snapshot, available_operations=(), observation=observation
         )
 
     async def respond(
@@ -104,21 +137,22 @@ class AsyncResponseCoordinator:
         initial = await self.initial_response(snapshot)
         if not current():
             raise ResponseSupersededError
-        if initial.intent == "answer":
+        if initial.decision is BrainDecision.DISCARD or initial.operation is None:
             return CoordinatedResponse(initial)
         request = self.tool_request(initial, snapshot)
-        if request is None:
-            return CoordinatedResponse(
-                ResponseProposal("抱歉, 这项功能暂时不可用。", "answer")
+        observation = "status=rejected digest=none text=操作请求未通过校验"
+        if request is not None:
+            try:
+                result = await self.execute_tool(request, snapshot)
+            except (OSError, TimeoutError, ValueError):
+                result = None
+            observation = (
+                result
+                if result is not None
+                else "status=failed digest=none text=操作未成功完成"
             )
-        try:
-            observation = await self.execute_tool(request, snapshot)
-        except (OSError, TimeoutError, ValueError):
-            observation = None
         if not current():
             raise ResponseSupersededError
-        if observation is None:
-            observation = "工具调用未成功完成。请基于已知信息简短说明。"
         final = await self.final_response(snapshot, observation)
         if not current():
             raise ResponseSupersededError

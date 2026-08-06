@@ -20,11 +20,6 @@ class AudienceSource(StrEnum):
     COMMENT = "comment"
 
 
-class GateDecision(StrEnum):
-    ACCEPT = "accept"
-    DISCARD = "discard"
-
-
 @dataclass(frozen=True, slots=True)
 class AudienceInput:
     session_id: str
@@ -78,6 +73,7 @@ class BrainStateSnapshot:
     frontend_caption: str = ""
     frontend_animation: str | None = None
     ppt_deck_id: str | None = None
+    ppt_deck_version: str | None = None
     ppt_page: int | None = None
     context_revision: int = 0
     memory_revision: int = 0
@@ -88,6 +84,7 @@ class BrainStateSnapshot:
     speaker_profile_id: str | None = None
     speaker_preferred_name: str | None = None
     speaker_confidence: float | None = None
+    was_playing_1000ms_ago: bool = False
 
 
 @dataclass(frozen=True, slots=True)

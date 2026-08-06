@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from orchestrator.brain_contracts import (
     AudienceInput,
     AudienceSource,
@@ -7,92 +9,137 @@ from orchestrator.brain_contracts import (
 )
 from orchestrator.intent_router import IntentRouter, IntentSpec
 from orchestrator.response_contracts import (
+    BrainDecision,
     CueKind,
+    OperationProposal,
+    parse_final_speech_proposal,
     parse_inline_cues,
     parse_response_proposal,
 )
 
 
-def _snapshot(*, capabilities: frozenset[str] | None = None) -> BrainStateSnapshot:
+def _snapshot() -> BrainStateSnapshot:
     return BrainStateSnapshot(
-        session_id="session-1",
-        turn_id="turn-1",
-        revision=1,
-        cancellation_epoch=0,
-        input=AudienceInput("session-1", "trace-1", 1, AudienceSource.ASR, 1, "查询"),
-        context_summary="",
-        recent_context=(),
-        memory_markdown="",
-        capabilities=frozenset() if capabilities is None else capabilities,
+        "session-1",
+        "candidate-1",
+        1,
+        0,
+        AudienceInput("session-1", "trace-1", 1, AudienceSource.ASR, 1, "查询天气"),
+        "",
+        (),
+        "",
+        frozenset({"mcp:web/search"}),
     )
 
 
-def test_response_proposal_uses_plain_text_fallback_without_repair() -> None:
-    proposal = parse_response_proposal(
-        "不是 JSON", allowed_intents=frozenset({"answer"})
+@pytest.mark.parametrize(
+    ("payload", "decision", "has_operation"),
+    [
+        (
+            {"decision": "discard", "speech": "", "operation": None},
+            BrainDecision.DISCARD,
+            False,
+        ),
+        (
+            {"decision": "accept", "speech": "您好", "operation": None},
+            BrainDecision.ACCEPT,
+            False,
+        ),
+        (
+            {
+                "decision": "accept",
+                "speech": "我来查询。",
+                "operation": {
+                    "intent": "mcp.web_search",
+                    "arguments": {"query": "上海天气"},
+                },
+            },
+            BrainDecision.ACCEPT,
+            True,
+        ),
+    ],
+)
+def test_strict_brain_proposal_variants(
+    payload: dict[str, object], decision: BrainDecision, has_operation: bool
+) -> None:
+    proposal = parse_response_proposal(json.dumps(payload, ensure_ascii=False))
+    assert proposal is not None
+    assert proposal.decision is decision
+    assert (proposal.operation is not None) is has_operation
+
+
+INVALID_PAYLOADS: list[object] = [
+        "not-json",
+        {"decision": "discard", "speech": "不该说", "operation": None},
+        {
+            "decision": "discard",
+            "speech": "",
+            "operation": {"intent": "x", "arguments": {}},
+        },
+        {"decision": "accept", "speech": "", "operation": None},
+        {"decision": "accept", "speech": "好", "operation": []},
+        {
+            "decision": "accept",
+            "speech": "好",
+            "operation": [{"intent": "x", "arguments": {}}],
+        },
+        {
+            "decision": "accept",
+            "speech": "好",
+            "operation": {"intent": "x", "arguments": {}, "extra": 1},
+        },
+]
+
+
+@pytest.mark.parametrize("payload", INVALID_PAYLOADS)
+def test_invalid_proposals_have_no_text_fallback(payload: object) -> None:
+    raw = (
+        payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
     )
-    assert proposal.reply == "不是 JSON"
-    assert proposal.intent == "answer"
-    assert proposal.used_text_fallback
+    assert parse_response_proposal(raw) is None
 
 
-def test_response_proposal_only_accepts_two_allowlisted_fields() -> None:
-    valid = parse_response_proposal(
-        json.dumps({"reply": "您好", "intent": "knowledge"}),
-        allowed_intents=frozenset({"answer", "knowledge"}),
+def test_final_response_cannot_request_another_operation() -> None:
+    raw = json.dumps(
+        {
+            "decision": "accept",
+            "speech": "结果",
+            "operation": {"intent": "again", "arguments": {}},
+        }
     )
-    invalid = parse_response_proposal(
-        json.dumps({"reply": "您好", "intent": "unknown", "extra": True}),
-        allowed_intents=frozenset({"answer", "knowledge"}),
-    )
-    assert valid.intent == "knowledge"
-    assert not valid.used_text_fallback
-    assert invalid.intent == "answer"
-    assert invalid.used_text_fallback
+    assert parse_final_speech_proposal(raw) is None
 
 
-def test_inline_cues_are_stripped_for_tts_and_keep_clean_offsets() -> None:
+def test_speech_cues_are_separated_from_tts_text() -> None:
     result = parse_inline_cues(
         '欢迎<action name="wave"/>大家<expression name="happy"/>!',
         allowed_actions=frozenset({"wave"}),
         allowed_expressions=frozenset({"happy"}),
     )
     assert result.spoken_text == "欢迎大家!"
-    assert result.marked_text == (
-        '欢迎<action name="wave"/>大家<expression name="happy"/>!'
-    )
     assert result.cues[0].kind is CueKind.ACTION
-    assert result.cues[0].text_offset == 2
     assert result.cues[1].kind is CueKind.EXPRESSION
-    assert result.cues[1].text_offset == 4
 
 
-def test_invalid_or_unallowlisted_control_tags_never_reach_tts_or_timeline() -> None:
-    result = parse_inline_cues(
-        '好<action name="dance"/><action nope="x"/>。',
-        allowed_actions=frozenset({"wave"}),
-        allowed_expressions=frozenset(),
-    )
-    assert result.spoken_text == "好。"
-    assert result.marked_text == "好。"
-    assert result.cues == ()
-    assert result.rejected_cues == 1
-
-
-def test_intent_router_builds_arguments_from_trusted_snapshot_only() -> None:
+def test_router_keeps_speech_and_validated_query_separate() -> None:
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["query"],
+        "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 64}},
+    }
     router = IntentRouter(
-        (
-            IntentSpec(
-                "knowledge",
-                "knowledge",
-                "local",
-                "knowledge.lookup",
-                lambda snapshot: {"query": snapshot.input.text},
-            ),
-        )
+        (IntentSpec("mcp.web_search", "mcp", "web/search", "mcp:web/search", schema),)
     )
-    snapshot = _snapshot(capabilities=frozenset({"knowledge.lookup"}))
-    assert router.allowed_intents(snapshot) == frozenset({"answer", "knowledge"})
-    request = router.request("knowledge", snapshot)
+    request = router.request(
+        OperationProposal("mcp.web_search", {"query": "上海天气"}), _snapshot()
+    )
     assert request is not None
-    assert request.arguments == {"query": "查询"}
+    assert request.arguments == {"query": "上海天气"}
+    assert (
+        router.request(
+            OperationProposal("mcp.web_search", {"query": "x", "extra": "speech"}),
+            _snapshot(),
+        )
+        is None
+    )

@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 
-from orchestrator.brain_contracts import AudienceInput, AudienceSource
+from orchestrator.brain_contracts import (
+    AudienceInput,
+    AudienceSource,
+    BrainStateSnapshot,
+    ToolRequest,
+)
 from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.config import TrustedLanToken
 from orchestrator.control_ingress import PresentationResultControl
@@ -25,7 +30,7 @@ from orchestrator.json_boundary import parse_json_value
 from orchestrator.mcp_adapters import DeckDispatchIntent, DeckEffectResultKind
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.provider_streaming import ProviderCancellationHandle
-from orchestrator.response_contracts import ResponseProposal
+from orchestrator.response_contracts import BrainDecision, ResponseProposal
 from orchestrator.response_coordinator import CoordinatedResponse
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import (
@@ -482,9 +487,7 @@ def test_finished_playback_notifies_turn_reducer_only_after_fence_accepts() -> N
     fence = _RecordingOutputFence()
     dispatcher.set_output_fence(fence)
     finished_streams: list[StreamKey] = []
-    dispatcher.set_playback_finished_callback(
-        finished_streams.append
-    )
+    dispatcher.set_playback_finished_callback(finished_streams.append)
     peer = RecordingControlPeer()
     mic = RecordingControlPeer()
     asyncio.run(dispatcher.register(_sink_registration(), SINK_PEER[0], peer))
@@ -507,9 +510,7 @@ def test_finished_playback_notifies_turn_reducer_only_after_fence_accepts() -> N
         )
     )
 
-    assert finished_streams == [
-        StreamKey(session_id=SESSION_ID, stream_id=STREAM_ID)
-    ]
+    assert finished_streams == [StreamKey(session_id=SESSION_ID, stream_id=STREAM_ID)]
 
 
 def test_presentation_dispatch_waits_for_owning_frontend_result() -> None:
@@ -530,6 +531,12 @@ def test_presentation_dispatch_waits_for_owning_frontend_result() -> None:
             1,
             CommandId("presentation-1"),
         )
+        correlation = EventCorrelation(
+            TraceId("brain-request"),
+            SessionId(SESSION_ID),
+            EventSequence(1),
+        )
+        assert session_runtime.receive_presentation(command, correlation).accepted
         task = asyncio.create_task(
             session_runtime.deck_dispatcher.executor.dispatch_async(
                 DeckDispatchIntent(command, 10**15),
@@ -552,6 +559,111 @@ def test_presentation_dispatch_waits_for_owning_frontend_result() -> None:
         assert not runtime.accept_presentation_result(result, wrong_frontend)
         assert runtime.accept_presentation_result(result, frontend)
         assert (await task).kind is DeckEffectResultKind.SUCCEEDED
+
+    asyncio.run(verify())
+
+
+def test_brain_presentation_tool_revalidates_capability_and_commits_result() -> None:
+    async def verify() -> None:
+        session_runtime = SessionRuntime.create(
+            session_id=SessionId(SESSION_ID),
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        )
+        transition = session_runtime.scheduler.apply(
+            StartTurn(
+                session_runtime.scheduler.snapshot.revision,
+                SchedulerEvent(
+                    "audience.input",
+                    EventCorrelation(
+                        TraceId("brain-ppt"),
+                        SessionId(SESSION_ID),
+                        EventSequence(7),
+                    ),
+                ),
+            )
+        )
+        assert isinstance(transition, TransitionAccepted)
+        turn_id = transition.accepted_event.turn_id
+        session_runtime.agent_capabilities |= {"presentation.deck"}
+        snapshot = BrainStateSnapshot(
+            SESSION_ID,
+            str(turn_id),
+            int(session_runtime.scheduler.snapshot.revision),
+            int(session_runtime.cancellation_epoch),
+            AudienceInput(
+                SESSION_ID,
+                "brain-ppt",
+                7,
+                AudienceSource.COMMENT,
+                1,
+                "加载演示",
+            ),
+            "",
+            (),
+            "",
+            session_runtime.agent_capabilities,
+        )
+        request = ToolRequest(
+            "presentation",
+            "load",
+            {
+                "deck_id": "launch-deck",
+                "deck_version": "v1",
+                "page": 1,
+                "command_id": f"brain-{turn_id}-presentation",
+                "session_id": SESSION_ID,
+                "turn_id": str(turn_id),
+            },
+        )
+        result = await session_runtime.execute_presentation_tool(request, snapshot)
+        assert result is not None
+        assert session_runtime.interaction_ingress.reducer.presentation_state == (
+            "launch-deck",
+            "v1",
+            1,
+        )
+
+        current_snapshot = replace(
+            snapshot,
+            ppt_deck_id="launch-deck",
+            ppt_deck_version="v1",
+            ppt_page=1,
+        )
+        navigate = ToolRequest(
+            "presentation",
+            "navigate",
+            {**request.arguments, "page": 2, "command_id": "second-command"},
+        )
+        assert (
+            await session_runtime.execute_presentation_tool(
+                navigate, current_snapshot
+            )
+            is not None
+        )
+        assert session_runtime.interaction_ingress.reducer.presentation_state == (
+            "launch-deck",
+            "v1",
+            2,
+        )
+
+        session_runtime.agent_capabilities -= {"presentation.deck"}
+        rejected = await session_runtime.execute_presentation_tool(
+            ToolRequest(
+                "presentation",
+                "navigate",
+                {**request.arguments, "page": 3, "command_id": "third-command"},
+            ),
+            replace(
+                current_snapshot,
+                ppt_page=2,
+                capabilities=frozenset({"presentation.deck"}),
+            ),
+        )
+        assert rejected is None
+        state = session_runtime.interaction_ingress.reducer.presentation_state
+        assert state is not None
+        assert state[-1] == 2
 
     asyncio.run(verify())
 
@@ -676,7 +788,7 @@ def test_onsite_asr_final_is_routed_to_matching_session_runtime() -> None:
             ASRAudienceEvent("请介绍 BitNet", 20, "asr-1", 1),
         )
 
-    assert not asyncio.run(run())
+    assert asyncio.run(run())
     assert session_runtime.observables.dispatches == ()
 
 
@@ -729,7 +841,7 @@ def test_response_context_commit_does_not_stale_its_own_tts_task() -> None:
             allowed_expressions=frozenset(),
         )
         session_runtime._apply_coordinated_response(  # pyright: ignore[reportPrivateUsage]
-            CoordinatedResponse(ResponseProposal("你好!", "answer")),
+            CoordinatedResponse(ResponseProposal(BrainDecision.ACCEPT, "你好!", None)),
             audience_input,
             envelope,
             correlation,
@@ -821,9 +933,7 @@ def test_output_fences_are_isolated_per_session() -> None:
         "127.0.0.1",
     )
 
-    _ = hub.authorize_onsite_output(
-        StreamKey("session-1", "mic"), CancellationEpoch(0)
-    )
+    _ = hub.authorize_onsite_output(StreamKey("session-1", "mic"), CancellationEpoch(0))
 
     assert first.scheduler.snapshot.revision == 1
     assert second.scheduler.snapshot.revision == 0
@@ -1116,12 +1226,8 @@ def test_new_caption_timeline_cancels_the_previous_active_timeline() -> None:
     runtime = TransportRuntime(_loopback_config())
     peer = RecordingControlPeer()
     runtime.register_frontend_connection(SessionId(SESSION_ID), peer)
-    first = CaptionTimelineCommand(
-        "timeline-1", "第一句", "agent-turn-1", 1, 96_000
-    )
-    second = CaptionTimelineCommand(
-        "timeline-2", "第二句", "agent-turn-2", 2, 96_320
-    )
+    first = CaptionTimelineCommand("timeline-1", "第一句", "agent-turn-1", 1, 96_000)
+    second = CaptionTimelineCommand("timeline-2", "第二句", "agent-turn-2", 2, 96_320)
 
     asyncio.run(
         runtime.emit_caption_timeline(

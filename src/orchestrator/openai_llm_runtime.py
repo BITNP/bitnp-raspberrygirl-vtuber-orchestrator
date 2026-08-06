@@ -16,6 +16,8 @@ from openai import (
     AsyncOpenAI,
 )
 
+from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
+
 if TYPE_CHECKING:
     import json
     from collections.abc import AsyncIterator
@@ -91,7 +93,6 @@ class AsyncOpenAICompatibleLLMRuntime:
     model: str
     api_key: str
     reasoning_dialect: ReasoningDialect
-    gate_model: str | None = None
     brain_model: str | None = None
     maintenance_model: str | None = None
     timeout_seconds: float = 120.0
@@ -99,6 +100,7 @@ class AsyncOpenAICompatibleLLMRuntime:
     ca_path: Path | None = None
     http_client: httpx.AsyncClient | None = None
     _client: AsyncOpenAI = field(init=False, repr=False)
+    _http_client: httpx.AsyncClient = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.endpoint.strip() == "":
@@ -110,7 +112,6 @@ class AsyncOpenAICompatibleLLMRuntime:
         if self.reasoning_dialect not in {"deepseek", "openai"}:
             raise AdapterConfigError(field_name="reasoning_dialect")
         for field_name, configured_model in (
-            ("gate_model", self.gate_model),
             ("brain_model", self.brain_model),
             ("maintenance_model", self.maintenance_model),
         ):
@@ -129,6 +130,7 @@ class AsyncOpenAICompatibleLLMRuntime:
                 )
             )
             client = httpx.AsyncClient(verify=verify, timeout=timeout, trust_env=False)
+        self._http_client = client
         self._client = AsyncOpenAI(
             api_key=self.api_key,
             base_url=f"{self.endpoint.rstrip('/')}/",
@@ -138,7 +140,7 @@ class AsyncOpenAICompatibleLLMRuntime:
         )
 
     async def aclose(self) -> None:
-        await self._client.close()
+        await self._http_client.aclose()
 
     async def complete_json(
         self,
@@ -167,32 +169,43 @@ class AsyncOpenAICompatibleLLMRuntime:
             request.prompt.user,
         )
         try:
+            body: dict[str, object] = {
+                "model": model,
+                "messages": chat_messages(request),
+                "temperature": request.temperature,
+                "stream": False,
+                "response_format": {"type": "json_object"},
+            }
             if self.reasoning_dialect == "deepseek":
-                response = await self._client.chat.completions.create(
-                    model=model,
-                    messages=chat_messages(request),
-                    temperature=request.temperature,
-                    stream=False,
-                    response_format={"type": "json_object"},
-                    extra_body=_deepseek_reasoning_body(request.reasoning),
-                    max_tokens=request.max_completion_tokens,
-                    timeout=self._request_timeout(request.timeout_seconds),
-                )
+                body.update(_deepseek_reasoning_body(request.reasoning))
+                body["max_tokens"] = request.max_completion_tokens
             else:
-                response = await self._client.chat.completions.create(
-                    model=model,
-                    messages=chat_messages(request),
-                    temperature=request.temperature,
-                    stream=False,
-                    response_format={"type": "json_object"},
-                    reasoning_effort=_openai_reasoning_effort(request.reasoning),
-                    max_completion_tokens=request.max_completion_tokens,
-                    timeout=self._request_timeout(request.timeout_seconds),
-                )
-            if len(response.choices) != 1:
+                body["reasoning_effort"] = _openai_reasoning_effort(request.reasoning)
+                body["max_completion_tokens"] = request.max_completion_tokens
+            response = await self._http_client.post(
+                f"{self.endpoint.rstrip('/')}/chat/completions",
+                json=body,
+                timeout=self._request_timeout(request.timeout_seconds),
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+            _ = response.raise_for_status()
+            try:
+                payload = parse_json_value(response.text)
+            except JsonBoundaryError as error:
+                raise ProviderResponseError(
+                    stage="llm", reason="missing_final"
+                ) from error
+            if not isinstance(payload, dict):
+                raise ProviderResponseError(stage="llm", reason="missing_final")
+            parsed_payload = cast("dict[str, object]", payload)
+            choices = parsed_payload.get("choices")
+            parsed_choices = (
+                [] if not isinstance(choices, list) else cast("list[object]", choices)
+            )
+            if len(parsed_choices) != 1:
                 details = (
                     f"schema={schema_name} reason=choice_count "
-                    f"count={len(response.choices)}"
+                    f"count={len(parsed_choices)}"
                 )
                 _LOGGER.debug(
                     "llm_json_invalid_response model=%s %s",
@@ -200,14 +213,21 @@ class AsyncOpenAICompatibleLLMRuntime:
                     details,
                 )
                 raise ProviderResponseError(stage="llm", reason="missing_final")
-            choice = response.choices[0]
-            content = choice.message.content
+            choice_value = parsed_choices[0]
+            if not isinstance(choice_value, dict):
+                raise ProviderResponseError(stage="llm", reason="missing_final")
+            choice = cast("dict[str, object]", choice_value)
+            message_value = choice.get("message")
+            if not isinstance(message_value, dict):
+                raise ProviderResponseError(stage="llm", reason="missing_final")
+            message = cast("dict[str, object]", message_value)
+            content = message.get("content")
             if not isinstance(content, str) or content.strip() == "":
-                reasoning = getattr(choice.message, "reasoning_content", None)
+                reasoning = message.get("reasoning_content")
                 reasoning_chars = len(reasoning) if isinstance(reasoning, str) else 0
                 details = (
                     f"schema={schema_name} reason=missing_content "
-                    f"finish_reason={choice.finish_reason} "
+                    f"finish_reason={choice.get('finish_reason')} "
                     f"content_type={type(content).__name__} "
                     f"reasoning_chars={reasoning_chars}"
                 )
@@ -328,8 +348,6 @@ class AsyncOpenAICompatibleLLMRuntime:
 
     def _model_for(self, workload: LLMWorkload) -> str:
         match workload:
-            case LLMWorkload.GATE:
-                return self.gate_model or self.model
             case LLMWorkload.BRAIN:
                 return self.brain_model or self.model
             case LLMWorkload.MAINTENANCE:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import TYPE_CHECKING, Protocol, final, override
 
 if TYPE_CHECKING:
@@ -116,13 +117,19 @@ class AllowlistedMcpToolExecutor:
                 },
                 ensure_ascii=False,
             )
+        normalized = " ".join(
+            json.dumps(result, ensure_ascii=False, separators=(",", ":")).split()
+        )
+        digest = sha256(result_bytes).hexdigest()
         return json.dumps(
             {
                 "source": "mcp",
                 "server": allowance.server,
                 "tool": allowance.tool,
+                "status": "success",
+                "digest": f"sha256:{digest}",
                 "observed_at": datetime.now(UTC).isoformat(),
-                "result": result,
+                "text": normalized[:512],
             },
             ensure_ascii=False,
         )

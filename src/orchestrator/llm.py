@@ -1,4 +1,3 @@
-
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum, unique
@@ -26,12 +25,9 @@ BRAIN_MAX_COMPLETION_TOKENS: Final = 8_192
 
 MAINTENANCE_MAX_COMPLETION_TOKENS: Final = 4_096
 
-GATE_MAX_COMPLETION_TOKENS: Final = 32
-
 
 @unique
 class LLMWorkload(StrEnum):
-    GATE = "gate"
     BRAIN = "brain"
     MAINTENANCE = "maintenance"
 
@@ -43,14 +39,12 @@ class ReasoningMode(StrEnum):
 
 
 class OpenAIMessagePayload(TypedDict):
-
     role: Literal["system", "user"]
 
     content: str
 
 
 class OpenAIChatPayload(TypedDict):
-
     model: str
 
     messages: list[OpenAIMessagePayload]
@@ -64,7 +58,6 @@ class OpenAIChatPayload(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class AdapterConfigError(ValueError):
-
     field_name: str
 
     @override
@@ -74,7 +67,6 @@ class AdapterConfigError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class LLMTimeoutError(Exception):
-
     reason: str
 
     @override
@@ -84,7 +76,6 @@ class LLMTimeoutError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class LLMPrompt:
-
     system: str
 
     user: str
@@ -92,7 +83,6 @@ class LLMPrompt:
 
 @dataclass(frozen=True, slots=True)
 class LLMRequest:
-
     prompt: LLMPrompt
 
     workload: LLMWorkload
@@ -108,7 +98,6 @@ class LLMRequest:
 
 @dataclass(frozen=True, slots=True)
 class LLMChunk:
-
     index: int
 
     text: str
@@ -116,7 +105,6 @@ class LLMChunk:
 
 @dataclass(frozen=True, slots=True)
 class LLMFinal:
-
     text: str
 
     used_fallback: bool
@@ -124,7 +112,6 @@ class LLMFinal:
 
 @dataclass(frozen=True, slots=True)
 class LLMError:
-
     code: str
 
     message: str
@@ -135,28 +122,23 @@ class LLMError:
 type LLMStreamEvent = LLMChunk | LLMFinal | LLMError
 
 
-class CancellationToken(ProviderCancellationHandle):
-    ...
+class CancellationToken(ProviderCancellationHandle): ...
 
 
 class LLMAdapter(Protocol):
-
     @property
-    def capability(self) -> Literal["streaming", "final_only"]:
-        ...
+    def capability(self) -> Literal["streaming", "final_only"]: ...
 
     def stream(
         self,
         request: LLMRequest,
         *,
         cancellation: CancellationToken | None = None,
-    ) -> Iterator[LLMStreamEvent]:
-        ...
+    ) -> Iterator[LLMStreamEvent]: ...
 
 
 @dataclass(frozen=True, slots=True)
 class MockLLMAdapter:
-
     answer_chunks: tuple[str, ...]
 
     capability: Literal["streaming"] = "streaming"
@@ -187,7 +169,6 @@ class MockLLMAdapter:
 
 @dataclass(frozen=True, slots=True)
 class TimeoutLLMAdapter:
-
     timeout_reason: str
 
     capability: Literal["final_only"] = "final_only"
@@ -207,7 +188,6 @@ class TimeoutLLMAdapter:
 
 @dataclass(frozen=True, slots=True)
 class _TimeoutStream:
-
     reason: str
 
     def __iter__(self) -> Self:
@@ -219,7 +199,6 @@ class _TimeoutStream:
 
 @dataclass(frozen=True, slots=True)
 class FallbackLLMAdapter:
-
     primary: LLMAdapter
 
     fallback_text: str
@@ -250,7 +229,6 @@ class FallbackLLMAdapter:
 
 @dataclass(frozen=True, slots=True)
 class OpenAICompatibleAdapter:
-
     model: str
 
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS

@@ -24,7 +24,7 @@ Orchestrator 拥有 session state、revisioned event history、active turn、tas
 
 ## 数据流动关系
 
-Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口提交给 OpenAI-compatible ASR；它在同一认证 control connection 发送 `asr.final`，`asr.partial` 仅用于诊断。Orchestrator 只接受已注册 stream、当前 session/epoch、未重放序列及合法 RTP 范围的 final，然后与评论共用 Gate、队列和 Brain。Mic 没有 UDP RTP 输入路径。LLM/TTS 生成的音频经校验后 packetize 为 L16 RTP 发给 Sound。每个输出使用独立 packetizer 和生成 SSRC；新的有效 ASR final 会取消过期回答工作，已取消的 LLM/TTS 结果不得产生 RTP。
+Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口提交给 OpenAI-compatible ASR；它在同一认证 control connection 发送 `asr.final`，`asr.partial` 仅用于诊断。Orchestrator 只接受已注册 stream、当前 session/epoch、未重放序列及合法 RTP 范围的 final，然后与评论共用单一 Brain 候选队列。Mic 没有 UDP RTP 输入路径。LLM/TTS 生成的音频经校验后 packetize 为 L16 RTP 发给 Sound。每个输出使用独立 packetizer 和生成 SSRC；新的已接受输入会取消过期回答工作，已取消的 LLM/TTS 结果不得产生 RTP。
 
 评论输入由 Comments 以规范 envelope 提交为 `audience.input`。Frontend 只接收 Orchestrator 源的 caption、action、scene、presentation 等命令，演示命令完成后返回 `presentation.result`。所有迟到、超时、取消或被 supersede 的任务即使物理完成，也不能提交状态或产生副作用。
 
@@ -40,7 +40,7 @@ Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口
 
 ## 模块契约
 
-- Orchestrator：唯一 session state writer、协议权威、Gate/Brain 与 LLM/TTS provider 边界，以及唯一跨服务 reducer 和命令校验者。
+- Orchestrator：唯一 session state writer、协议权威、Brain 与 LLM/TTS provider 边界，以及唯一跨服务 reducer 和命令校验者。
 - Mic：唯一 VAD/endpoint/ASR provider 边界；只在认证 Orchestrator control connection 上注册 `mic.input.register`，并提交 `asr.partial`、`asr.final` 与可选 `voice.evidence`。Mic 不创建 RTP route，也不发送 UDP RTP。
 - Sound：只向 Orchestrator 注册 RTP sink，只播放匹配 `media.stream.command` 的流，并报告 queued、playing、finished、cancelled、flush ack 等状态；只有精确关联的 `finished` 才能释放输出 lease。
 - Comments：只向 Orchestrator 发送观众输入，不拥有平台生产接入的全功能边界。
@@ -50,7 +50,9 @@ Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口
 
 ### 精简回复契约与异步任务
 
-新回复路径使用 `{"reply":"...","intent":"answer"}`：模型不得生成状态操作、媒体命令、MCP 参数或记忆 patch。无法解析的输出按普通文本回复处理，不触发 JSON 修复请求。工具 intent 必须由 Orchestrator 的可信 `IntentSpec` 映射为参数，并且工具观察返回后只允许一次最终 `answer` 回复。
+单一 Brain 使用严格 `decision/speech/operation` 提案。`discard` 必须为空 speech 且无操作；`accept` 必须有非空 speech，并可带至多一个具有独立 arguments 的操作。speech 仅进入 TTS、context 和字幕，arguments 仅进入注册工具的 schema 校验与请求构造。畸形 JSON、未知 intent、非法参数或非法 cue 均无效果，也不进行文本回退或 JSON 修复。本地知识在首次 Brain 前完成有界检索；操作结果最多回填一次，最终 Brain 只能返回无操作 speech。
+
+演示工具只在启动时配置非空 `ORCHESTRATOR_PPT_DECK_CATALOG` 后注册：`presentation.load` 只接受目录内 `deck_id`，`presentation.navigate` 只接受 1 到 10000 的整数 `page`，`presentation.play` 只接受空对象，且三者拒绝额外字段。Orchestrator 根据当前状态补入可信的 session、turn、command ID、deck version 和页码，模型参数不能覆盖这些字段。执行前再次验证实时 capability、revision、epoch 与当前 deck 前置条件；只有 session-owning Frontend 对精确 command ID 的一次回执可提交演示状态，错误 owner、重复或迟到回执均无效。
 
 回复可含 `<action name="..."/>` 和 `<expression name="..."/>`。Orchestrator 只保留 allowlist 内的标记；TTS 接收去标记文本。未来 Frontend 使用 canonical `vtuber.caption.timeline.command` / `vtuber.caption.timeline.cancel` 事件按 `inline-cue/v1` 渲染字幕与 cue。
 
@@ -71,25 +73,17 @@ provider 回调自行推进状态。正常状态为
 可以处在准备状态，但旧物理 playback lease 仍由 `SchedulerOutputFence` 保留，直到 flush
 task 的结果栅栏允许切换。
 
-初始 LLM、受控工具、最终 LLM、TTS、记忆提取和上下文压缩分别登记为 task。初始与
-最终 LLM 最多各一次；最终调用仅允许 `answer`。工具、LLM 或维护 provider 的返回先
+首次 Brain 候选不创建正式 turn、不推进取消代次，也不停止当前播放；接受后才原子创建 turn 并立即提交输入与首次 speech。首次 Brain、受控工具、最终 Brain、TTS、记忆提取和上下文压缩分别登记为 task。首次与
+最终 Brain 最多各一次；最终调用禁止 operation。首次 speech 合成与唯一工具并行，工具、LLM 或维护 provider 的返回先
 经过 task/revision/data-snapshot/epoch/deadline 栅栏，再允许创建下一任务或提交结果。
-音频首帧被接受后才写入 transient context，并才会安排 memory/compaction maintenance
-任务。替换播放必须先获首帧和匹配的 Sound flush ACK；成功时先取消旧字幕 timeline，
+经过校验的 speech 在 TTS 前写入 transient context；终态 speech 后才会安排 memory/compaction maintenance
+任务。每段替换播放必须先获首帧和匹配的 Sound flush ACK；成功时先取消旧字幕 timeline，
 失败则旧音频与旧 timeline 都保持。`PLAYING → COMPLETED` 只能由 Sound 已通过输出
 lease 校验的 `finished` 事件触发；TTS provider 完成或重复/过期 finished 都不能结束逻辑 turn。
 如果 replacement flush 被拒绝、超时或失效，`TurnCoordinator` 会恢复已保留旧 lease 的
 `PLAYING` 状态；新 turn 不得写入 context、memory 或 timeline。
 
-通过 `ORCHESTRATOR_RESPONSE_EXECUTION_MODE` 按 session 选择 `new_shadow` 或
-`new_execute`（默认）。`new_shadow` 运行新模型、
-最小 proposal 解析和 cue 编译，并记录脱敏诊断；它绝不执行 MCP、TTS、Frontend、
-context 或 memory 写入。每个影子 turn 会审计文本回退、intent、cue 拒绝和无效果完成状态，
-`ShadowReplayReport` 会机械核验这些记录、context/memory revision、任务终态和禁止效果
-stage，作为 replay 准入证据；若影子模式缺少新协调器，运行时 fail-closed 拒绝输入，不能回落
-到其他副作用路径。
-`new_execute` 若缺少 Gate 或 ResponseCoordinator 也同样 fail-closed；不会隐式构造
-mock 响应管线或回退到其他执行路径。
+旧 Gate、shadow/execute 模式和现场回退均已删除。缺少 Brain coordinator 时输入 fail-closed；现场 callback 对已丢弃和已接受输入都返回 handled，不能回落到旧 ASR/LLM 路径。
 
 Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 保持回放和健康检查能力。Frontend 不参与 onsite audio loop；字幕 cue 在协议层准备就绪，但不要把同步字幕渲染描述为已完成能力。
 
@@ -134,4 +128,4 @@ uv run sound-receive
 uv run mic-stream
 ```
 
-该链路由 Mic 产生 ASR final，Orchestrator 经 Gate、LLM 和 TTS 后将生成的 L16 RTP 交给 Sound。它不会转发原始 Mic RTP，Frontend 不参与该音频部署。
+该链路由 Mic 产生 ASR final，Orchestrator 经单一 Brain 和 TTS 后将生成的 L16 RTP 交给 Sound。它不会转发原始 Mic RTP，Frontend 不参与该音频部署。

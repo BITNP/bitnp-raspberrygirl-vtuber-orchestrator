@@ -222,7 +222,9 @@ async def _matching_ack_proof() -> None:
 
     await asyncio.sleep(0)
 
-    admitted = await runtime.admit_replacement(flush)
+    admission = asyncio.create_task(runtime.admit_replacement(flush))
+    await _acknowledge_replacement_command(sink)
+    admitted = await admission
 
     mismatched = await runtime.admit_replacement(
         StreamFlush(
@@ -377,7 +379,7 @@ async def _delayed_replacement_proof() -> None:
     )
 
     await sink.incoming.put(_acknowledgement(flush))
-    await asyncio.sleep(0)
+    await _acknowledge_replacement_command(sink)
     replacement_epoch = await prepared
 
     assert replacement_epoch == flush.cancellation_epoch
@@ -429,6 +431,7 @@ async def _session_owned_replacement_proof() -> None:
         if _envelope_value(message)["event_type"] == "media.stream.flush"
     )
     await sink.incoming.put(_acknowledgement(flush))
+    await _acknowledge_replacement_command(sink)
 
     assert await prepared == flush.cancellation_epoch
     completed = session_runtime.task_registry.task(flush_task.request.task_id)
@@ -484,6 +487,15 @@ async def _close_runtime(
     await runtime.close()
 
 
+async def _acknowledge_replacement_command(sink: _WssConnection) -> None:
+    async with asyncio.timeout(1.0):
+        # The ready acknowledgement must follow the replacement command; an
+        # unmatched early ready is deliberately rejected by the transport.
+        while _event_types(sink.sent).count("media.stream.command") < 2:  # noqa: ASYNC110
+            await asyncio.sleep(0)
+    await sink.incoming.put(_sink_ready())
+
+
 def _flush() -> StreamFlush:
 
     return StreamFlush(
@@ -520,6 +532,16 @@ def _sink_registration() -> str:
                 "codec": _codec(),
                 "rtp_endpoint": {"host": "192.0.2.11", "port": 5006},
             },
+        )
+    )
+
+
+def _sink_ready() -> str:
+    return _envelope(
+        _EnvelopeFields(
+            event_type="media.rtp.sink.ready",
+            source="sound",
+            data={"stream_id": "stream-001"},
         )
     )
 

@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,6 @@ from orchestrator.openai_llm_runtime import AsyncOpenAICompatibleLLMRuntime
 
 def test_build_onsite_bridge_rejects_missing_llm_endpoint() -> None:
     # Given: valid onsite ASR and TTS providers but an incomplete real LLM.
-
 
     config = load_config_from_env(
         {
@@ -47,7 +45,6 @@ def test_build_onsite_bridge_rejects_missing_llm_endpoint() -> None:
 def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
     # Given: complete LLM/TTS configuration with no ASR settings.
 
-
     config = load_config_from_env(
         {
             "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
@@ -55,7 +52,6 @@ def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
             "ORCHESTRATOR_LLM_MODEL": "onsite-model",
             "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
             "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
-            "ORCHESTRATOR_LLM_GATE_MODEL": "gate-model",
             "ORCHESTRATOR_LLM_BRAIN_MODEL": "brain-model",
             "ORCHESTRATOR_LLM_MAINTENANCE_MODEL": "maintenance-model",
             "ORCHESTRATOR_TLS_CA_PATH": "/run/secrets/onsite-ca.pem",
@@ -74,13 +70,11 @@ def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
         ref_text="reference",
     )
 
-    # Then: a retired local-ASR call has no provider side effect.
-    assert bridge.asr.transcribe(
-        audio=b"", filename="retired.wav", received_at_ms=0, segment_id="retired", seq=0
-    ) is None
+    # Then: the output bridge has no local ASR or transcription surface.
+    assert not hasattr(bridge, "asr")
+    assert not hasattr(bridge, "transcribe_endpoint")
     assert isinstance(bridge.llm, AsyncOpenAICompatibleLLMRuntime)
     assert bridge.llm.reasoning_dialect == "deepseek"
-    assert bridge.llm.gate_model == "gate-model"
     assert bridge.llm.brain_model == "brain-model"
     assert bridge.llm.maintenance_model == "maintenance-model"
 
@@ -89,7 +83,6 @@ def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: complete HTTPS provider configuration with one shared CA bundle.
-
 
     ca_path = Path("/run/secrets/onsite-ca.pem")
     config = load_config_from_env(
@@ -143,7 +136,7 @@ def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(
     assert bridge.tts.ca_path == ca_path
 
 
-def test_onsite_bridge_rejects_retired_direct_transcription() -> None:
+def test_onsite_bridge_has_no_retired_direct_transcription_surface() -> None:
     bridge = build_onsite_bridge(
         load_config_from_env(
             {
@@ -162,9 +155,5 @@ def test_onsite_bridge_rejects_retired_direct_transcription() -> None:
         ref_text="reference",
     )
 
-    # When: retired direct transcription is attempted.
-
-    result = bridge.transcribe_endpoint(b"\x12\x34\xab\xcd", sequence=1)
-
-    # Then: it cannot make an ASR request from Orchestrator.
-    assert result is None
+    assert not hasattr(bridge, "ingest_mic_rtp")
+    assert not hasattr(bridge, "transcribe_endpoint")

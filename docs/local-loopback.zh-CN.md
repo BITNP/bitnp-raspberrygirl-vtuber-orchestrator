@@ -24,10 +24,13 @@ ORCHESTRATOR_TRANSPORT_ADVERTISED_HOST=127.0.0.1
 ORCHESTRATOR_TRANSPORT_ADVERTISED_CONTROL_PORT=8443
 ORCHESTRATOR_TRANSPORT_ADVERTISED_RTP_PORT=5004
 ORCHESTRATOR_TRANSPORT_ALLOW_LOOPBACK_WS=true
+ORCHESTRATOR_PPT_DECK_CATALOG=
 TRUSTED_LAN_TOKEN=
 ORCHESTRATOR_CONTROL_TLS_CERT_PATH=
 ORCHESTRATOR_CONTROL_TLS_KEY_PATH=
 ```
+
+此三进程回环链路没有 Frontend，因此保持 `ORCHESTRATOR_PPT_DECK_CATALOG` 为空；若要验证演示操作，必须同时启动并注册 Frontend，再填入由该 Frontend 受控解析的 deck ID，不能填写本机路径。
 
 Mic `.env`：
 
@@ -74,7 +77,7 @@ uv run --env-file .env mic-stream
 
 先让 Sound 完成 sink 注册，再启动 Mic。Mic 收到 `mic.input.ready` 后才开始采集并发送 ASR/evidence control 事件；Mic 不发送 RTP。若进程在启动前失败，按下表检查配置：
 
-正常的静音或无有效语音片段不会由 Mic 发送 `asr.final`，因此不会发起 Gate、LLM 或 TTS。
+正常的静音或无有效语音片段不会由 Mic 发送 `asr.final`，因此不会发起 Brain 或 TTS。
 
 | 错误 | 原因与处理 |
 | --- | --- |
