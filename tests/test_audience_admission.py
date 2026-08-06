@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from orchestrator.brain_contracts import (
     AudienceInput,
@@ -245,5 +245,60 @@ def test_candidates_are_serialized_before_brain_with_voice_priority() -> None:
 
         assert all(outcome.accepted for outcome in outcomes)
         assert brain.calls == [1, 3, 2]
+
+    asyncio.run(scenario())
+
+
+def test_playback_policy_is_frozen_at_enqueue_and_cannot_be_overridden() -> None:
+    async def scenario() -> None:
+        runtime = _runtime(
+            _Brain(ResponseProposal(BrainDecision.ACCEPT, "错误接受", None))
+        )
+        runtime.clock = lambda: 5_000
+        runtime._playback_intervals.append(  # pyright: ignore[reportPrivateUsage]
+            (3_500, 4_500)
+        )
+        coordinator = runtime.async_response_coordinator
+        assert coordinator is not None
+
+        outcome = await runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+            coordinator,
+            replace(_input(1, AudienceSource.ASR), text="我在听请继续讲"),
+            _correlation(1),
+            lambda _proposal, _snapshot: asyncio.sleep(
+                0,
+                result=RuntimeOutcome(accepted=True, correlation=_correlation(1)),
+            ),
+        )
+
+        assert not outcome.accepted
+        assert runtime.observables.rejections[-1].reason == (
+            "brain_playback_policy_violated"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_explicit_interruption_can_be_accepted_during_playback_policy() -> None:
+    async def scenario() -> None:
+        runtime = _runtime(_Brain(ResponseProposal(BrainDecision.ACCEPT, "好的", None)))
+        runtime.clock = lambda: 5_000
+        runtime._playback_intervals.append(  # pyright: ignore[reportPrivateUsage]
+            (3_500, 4_500)
+        )
+        coordinator = runtime.async_response_coordinator
+        assert coordinator is not None
+
+        outcome = await runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+            coordinator,
+            replace(_input(1, AudienceSource.ASR), text="停一下"),
+            _correlation(1),
+            lambda _proposal, _snapshot: asyncio.sleep(
+                0,
+                result=RuntimeOutcome(accepted=True, correlation=_correlation(1)),
+            ),
+        )
+
+        assert outcome.accepted
 
     asyncio.run(scenario())

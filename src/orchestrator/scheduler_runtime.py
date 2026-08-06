@@ -21,7 +21,10 @@ from orchestrator.brain_contracts import (
     TaskSnapshot,
     ToolRequest,
 )
-from orchestrator.brain_runtime import is_deterministic_asr_echo
+from orchestrator.brain_runtime import (
+    is_deterministic_asr_echo,
+    is_explicit_asr_interruption,
+)
 from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.context_compactor import AsyncContextCompactor
 from orchestrator.control_ingress import (
@@ -916,6 +919,11 @@ class SessionRuntime:
             return self._reject(correlation, "deterministic_asr_echo")
         result = asyncio.get_running_loop().create_future()
         expected_revision = self.scheduler.snapshot.revision
+        local_received_at_ms = self.clock()
+        was_playing_1000ms_ago = (
+            audience_input.source is BrainAudienceSource.ASR
+            and self._was_playing_at(local_received_at_ms - 1_000)
+        )
         pending = _PendingAudienceAdmission(
             audience_input.source,
             correlation,
@@ -924,6 +932,7 @@ class SessionRuntime:
                 audience_input,
                 correlation,
                 expected_revision,
+                was_playing_1000ms_ago,
                 admission,
                 admission_valid,
             ),
@@ -964,6 +973,7 @@ class SessionRuntime:
         audience_input: BrainAudienceInput,
         correlation: EventCorrelation,
         expected_revision: int,
+        was_playing_1000ms_ago: bool,
         admission: Callable[
             [ResponseProposal, BrainStateSnapshot],
             Coroutine[None, None, RuntimeOutcome],
@@ -972,7 +982,11 @@ class SessionRuntime:
     ) -> RuntimeOutcome:
         """Run one serialized candidate and revalidate it before turn creation."""
         try:
-            snapshot = self._candidate_brain_snapshot(audience_input, correlation)
+            snapshot = self._candidate_brain_snapshot(
+                audience_input,
+                correlation,
+                was_playing_1000ms_ago=was_playing_1000ms_ago,
+            )
             candidate_task = asyncio.create_task(
                 self._evaluate_brain_candidate(coordinator, snapshot),
                 name=f"brain-candidate-{correlation.trace_id}",
@@ -1010,6 +1024,19 @@ class SessionRuntime:
         )
         if initial.decision is BrainDecision.DISCARD:
             return self._reject(correlation, "brain_discarded")
+        if (
+            snapshot.input.source is BrainAudienceSource.ASR
+            and snapshot.was_playing_1000ms_ago
+            and not is_explicit_asr_interruption(snapshot.input)
+        ):
+            _LOGGER.debug(
+                "brain_playback_policy_rejected trace=%s session=%s seq=%s text=%r",
+                correlation.trace_id,
+                correlation.session_id,
+                correlation.sequence,
+                snapshot.input.text,
+            )
+            return self._reject(correlation, "brain_playback_policy_violated")
         if (
             initial.operation is not None
             and coordinator.tool_request(initial, snapshot) is None
@@ -1053,6 +1080,8 @@ class SessionRuntime:
         self,
         audience_input: BrainAudienceInput,
         correlation: EventCorrelation,
+        *,
+        was_playing_1000ms_ago: bool,
     ) -> BrainStateSnapshot:
         composition = self.interaction_ingress.data.context.compose(
             _BRAIN_CONTEXT_MODEL, _BRAIN_CONTEXT_POLICY
@@ -1114,7 +1143,7 @@ class SessionRuntime:
                 None if identity is None else identity.preferred_name
             ),
             speaker_confidence=None if identity is None else identity.confidence,
-            was_playing_1000ms_ago=self._was_playing_at(self.clock() - 1_000),
+            was_playing_1000ms_ago=was_playing_1000ms_ago,
         )
 
     def _was_playing_at(self, timestamp_ms: int) -> bool:

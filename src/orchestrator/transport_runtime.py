@@ -160,6 +160,17 @@ class _PendingPresentation:
     future: asyncio.Future[bool]
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingMicAsrFinal:
+    connection: ControlConnection
+    state: _ControlPeerState
+    runtime: SessionRuntime
+    event: ASRAudienceEvent
+    stream: StreamKey
+    correlation: EventCorrelation
+    input_epoch: int
+
+
 @final
 class TransportRuntime:
     def __init__(
@@ -222,6 +233,8 @@ class TransportRuntime:
         self._agent_tts_tasks: set[asyncio.Task[None]] = set()
 
         self._preoutput_agent_tts: dict[tuple[str, str], asyncio.Task[None]] = {}
+
+        self._audience_input_tasks: dict[asyncio.Task[None], str] = {}
 
         self._session_runtime: SessionRuntime | None = None
 
@@ -546,6 +559,8 @@ class TransportRuntime:
 
             self._flush_driver = None
 
+        await self._cancel_audience_input_tasks()
+
         agent_tts_tasks = tuple(self._agent_tts_tasks)
         for task in agent_tts_tasks:
             _ = task.cancel()
@@ -745,34 +760,19 @@ class TransportRuntime:
                             SessionId(control_event.session_id),
                             EventSequence(control_event.correlation.seq),
                         )
-                        outcome = await runtime.receive_asr_final_async(
-                            event,
-                            correlation,
-                            admission_valid=self._mic_admission_guard(
+                        stream = StreamKey(
+                            control_event.session_id, control_event.stream_id
+                        )
+                        self._schedule_mic_asr_final(
+                            _PendingMicAsrFinal(
                                 connection,
                                 state,
                                 runtime,
-                                StreamKey(
-                                    control_event.session_id,
-                                    control_event.stream_id,
-                                ),
+                                event,
+                                stream,
+                                correlation,
                                 int(control_event.cancellation_epoch),
-                            ),
-                        )
-                        self._schedule_agent_tts(
-                            runtime,
-                            outcome,
-                            StreamKey(
-                                control_event.session_id, control_event.stream_id
-                            ),
-                            correlation,
-                        )
-                        _LOGGER.debug(
-                            "mic_asr_final_processed session=%s segment=%s accepted=%s turn=%s",  # noqa: E501
-                            control_event.session_id,
-                            control_event.segment_id,
-                            outcome.accepted,
-                            outcome.turn_id,
+                            )
                         )
                         continue
 
@@ -900,6 +900,9 @@ class TransportRuntime:
             if key[0] == session_id:
                 _ = task.cancel()
                 _ = self._preoutput_agent_tts.pop(key, None)
+        for task, owner_session in tuple(self._audience_input_tasks.items()):
+            if owner_session == session_id:
+                _ = task.cancel()
         if runtime is None:
             return
         if runtime is self._session_runtime:
@@ -911,6 +914,59 @@ class TransportRuntime:
         )
         _ = runtime.end_session(correlation)
         _LOGGER.debug("session_torn_down session=%s reason=%s", session_id, reason)
+
+    def _schedule_mic_asr_final(self, pending: _PendingMicAsrFinal) -> None:
+        """Enqueue Brain admission without blocking the control receive loop."""
+        task = asyncio.create_task(
+            self._process_mic_asr_final(pending),
+            name=(
+                f"mic-asr-final-{pending.correlation.trace_id}-"
+                f"{pending.correlation.sequence}"
+            ),
+        )
+        self._audience_input_tasks[task] = str(pending.correlation.session_id)
+        task.add_done_callback(self._release_audience_input_task)
+
+    def _release_audience_input_task(self, task: asyncio.Task[None]) -> None:
+        _ = self._audience_input_tasks.pop(task, None)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            _LOGGER.error(
+                "audience_input_task_failed",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    async def _process_mic_asr_final(self, pending: _PendingMicAsrFinal) -> None:
+        outcome = await pending.runtime.receive_asr_final_async(
+            pending.event,
+            pending.correlation,
+            admission_valid=self._mic_admission_guard(
+                pending.connection,
+                pending.state,
+                pending.runtime,
+                pending.stream,
+                pending.input_epoch,
+            ),
+        )
+        self._schedule_agent_tts(
+            pending.runtime, outcome, pending.stream, pending.correlation
+        )
+        _LOGGER.debug(
+            "mic_asr_final_processed session=%s segment=%s accepted=%s turn=%s",
+            pending.correlation.session_id,
+            pending.event.segment_id,
+            outcome.accepted,
+            outcome.turn_id,
+        )
+
+    async def _cancel_audience_input_tasks(self) -> None:
+        tasks = tuple(self._audience_input_tasks)
+        for task in tasks:
+            _ = task.cancel()
+        if tasks:
+            _ = await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _dispatch_presentation(
         self,

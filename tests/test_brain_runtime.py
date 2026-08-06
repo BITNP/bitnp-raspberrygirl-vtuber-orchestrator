@@ -18,6 +18,7 @@ from orchestrator.brain_runtime import (
     McpIntentRegistration,
     build_async_response_coordinator,
     is_deterministic_asr_echo,
+    is_explicit_asr_interruption,
 )
 from orchestrator.ids import SessionId
 from orchestrator.llm import (
@@ -108,6 +109,21 @@ def test_deterministic_echo_applies_only_to_asr() -> None:
     assert is_deterministic_asr_echo(_snapshot().input, "这里介绍产品功能", ())
     comment = replace(_snapshot().input, source=AudienceSource.COMMENT)
     assert not is_deterministic_asr_echo(comment, "这里介绍产品功能", ())
+
+
+@pytest.mark.parametrize(
+    "text", ["停一下", "等等，让我说", "不对，你说错了", "换个话题"]
+)
+def test_explicit_asr_interruption_is_narrowly_recognized(text: str) -> None:
+    assert is_explicit_asr_interruption(replace(_snapshot().input, text=text))
+
+
+def test_ordinary_asr_and_comments_are_not_explicit_interruptions() -> None:
+    ordinary = replace(_snapshot().input, text="我在听，请继续讲")
+    assert not is_explicit_asr_interruption(ordinary)
+    assert not is_explicit_asr_interruption(
+        replace(ordinary, source=AudienceSource.COMMENT, text="停一下")
+    )
 
 
 def test_maintenance_calls_remain_independent() -> None:

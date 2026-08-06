@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Protocol, final, override
 
@@ -188,6 +189,29 @@ def is_deterministic_asr_echo(
         entry for entry in recent_turn_context if entry.lstrip().startswith("智能体")
     )
     return any(candidate in _normalize_echo_text(reference) for reference in references)
+
+
+_EXPLICIT_INTERRUPTION_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"(?:^停(?:吧|啊|下)?$|停止|暂停|停一下|停下来|打住|别说|不要说|先别说|安静|闭嘴)",
+        r"(?:等一下|等一等|等等|稍等|先等|让我说|听我说|打断一下)",
+        r"(?:不对|错了|说错了|纠正一下|更正一下)",
+        r"(?:换个话题|换一个话题|换话题|说点别的|聊点别的|别讲这个|不要讲这个|跳过这个)",
+        r"(?:\bstop\b|\bpause\b|\bhold on\b|\bwait\b)",
+    )
+)
+
+
+def is_explicit_asr_interruption(audience_input: AudienceInput) -> bool:
+    """Recognize only an explicit spoken interruption for the playback fence."""
+    if audience_input.source.value != "asr":
+        return False
+    candidate = "".join(audience_input.text.split()).casefold()
+    return any(
+        pattern.search(candidate) is not None
+        for pattern in _EXPLICIT_INTERRUPTION_PATTERNS
+    )
 
 
 def _normalize_echo_text(text: str) -> str:
