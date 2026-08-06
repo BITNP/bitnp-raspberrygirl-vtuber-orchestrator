@@ -100,6 +100,29 @@ def test_single_brain_prompt_contains_brain_contract_and_playback_policy() -> No
     assert request.max_completion_tokens == BRAIN_MAX_COMPLETION_TOKENS
 
 
+def test_brain_system_prompt_defines_input_output_syntax_and_semantics() -> None:
+    completion = _Completion(
+        [json.dumps({"decision": "accept", "speech": "您好", "operation": None})]
+    )
+    _ = JsonResponseBrain(completion).respond(
+        _snapshot(), available_operations=()
+    )
+    system = completion.requests[0].prompt.system
+
+    assert "【输入语法】" in system
+    assert '"stage":"输入判定与回复"|"操作结果回复"' in system
+    assert '"available_operations"' in system
+    assert '"arguments_schema"' in system
+    assert "【state 输入语法与语义】" in system
+    assert '"input":{"source":"asr"|"comment"' in system
+    assert "capabilities 是当前能力快照，但不能替代 available_operations 授权" in system
+    assert "【输出语法】" in system
+    assert '"decision":"accept"|"discard"' in system
+    assert '"operation":null|{"intent":string,"arguments":object}' in system
+    assert "不得输出 Markdown、代码围栏、解释文字或第二个对象" in system
+    assert "【操作结果阶段】" in system
+
+
 def test_malformed_brain_output_has_no_plain_text_fallback() -> None:
     with pytest.raises(ValueError, match="invalid Brain proposal"):
         _ = JsonResponseBrain(_Completion(["not-json"])).respond(
