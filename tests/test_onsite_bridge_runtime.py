@@ -383,10 +383,13 @@ async def _response_streaming_proof() -> None:
     timeline: list[str] = []
     started = False
     output_ready = asyncio.Event()
+    first_output_times: list[float] = []
 
     async def output(
         _stream: StreamKey, _epoch: CancellationEpoch, packet: bytes
     ) -> None:
+        if not first_output_times:
+            first_output_times.append(asyncio.get_running_loop().time())
         packets.append(packet)
         timeline.append("output")
         output_ready.set()
@@ -412,7 +415,7 @@ async def _response_streaming_proof() -> None:
     # still blocked before the chunk that reaches the one-second watermark.
 
     _ = await run_blocking_provider(tts.first_chunk_ready.wait)
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.25)
 
     # Then: no output is committed from the undersized startup buffer.
 
@@ -436,6 +439,9 @@ async def _response_streaming_proof() -> None:
     assert await run_blocking_provider(tts.third_chunk_requested.wait, 0.2)
 
     assert await task is True
+    finished_at = asyncio.get_running_loop().time()
+    assert len(first_output_times) == 1
+    assert finished_at - first_output_times[0] >= 0.95
     assert len(packets) == 51
 
 

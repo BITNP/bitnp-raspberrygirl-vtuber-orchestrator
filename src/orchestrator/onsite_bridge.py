@@ -285,7 +285,7 @@ class OnsiteExplainerBridge:
         output_epoch: CancellationEpoch | None = None
         committed = False
         loop = asyncio.get_running_loop()
-        deadline = loop.time()
+        deadline: float | None = None
 
         async def emit(packets: tuple[bytes, ...]) -> bool:
             nonlocal committed, deadline
@@ -293,6 +293,10 @@ class OnsiteExplainerBridge:
                 return True
             if output_epoch is None:
                 return False
+            now = loop.time()
+            # TTS startup buffering and later provider stalls are not RTP media
+            # time.  Never repay either wait by bursting delayed packets.
+            deadline = now if deadline is None else max(deadline, now)
             for _index, packet in enumerate(packets):
                 await self.output(stream, output_epoch, packet)
                 if not committed:
