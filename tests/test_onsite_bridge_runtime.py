@@ -132,6 +132,7 @@ class _Tts:
 class _StreamingTts:
     first_chunk_ready: threading.Event = field(default_factory=threading.Event)
     release_second_chunk: threading.Event = field(default_factory=threading.Event)
+    third_chunk_requested: threading.Event = field(default_factory=threading.Event)
 
     capability: str = "streaming_sse"
 
@@ -149,6 +150,8 @@ class _StreamingTts:
         yield Pcm16leChunk(b"\x10\x20" * 320)
         _ = self.release_second_chunk.wait(timeout=1.0)
         yield Pcm16leChunk(b"\x30\x40" * 15_680)
+        self.third_chunk_requested.set()
+        yield Pcm16leChunk(b"\x50\x60" * 320)
 
     def synthesize(
         self,
@@ -430,8 +433,10 @@ async def _response_streaming_proof() -> None:
     assert 1 <= len(packets) < 50
     assert timeline[:2] == ["output", "started"]
     assert task.done() is False
+    assert await run_blocking_provider(tts.third_chunk_requested.wait, 0.2)
 
     assert await task is True
+    assert len(packets) == 51
 
 
 async def _short_response_streaming_proof() -> None:

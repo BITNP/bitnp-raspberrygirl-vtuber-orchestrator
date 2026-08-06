@@ -61,6 +61,7 @@ type ResponseOutputStarted = Callable[[], bool]
 
 
 _STREAMING_TTS_STARTUP_PCM_BYTES: Final = 16_000 * 2
+_STREAMING_TTS_CHUNK_QUEUE_CAPACITY: Final = 8
 
 
 async def _discard_output(
@@ -305,16 +306,57 @@ class OnsiteExplainerBridge:
             return True
 
         buffered = bytearray()
-        pending_next: asyncio.Task[Pcm16leChunk | None] | None = None
+        received_chunks: asyncio.Queue[Pcm16leChunk | Exception | None] = (
+            asyncio.Queue(maxsize=_STREAMING_TTS_CHUNK_QUEUE_CAPACITY)
+        )
+
+        async def receive_chunks() -> None:
+            pending_next: asyncio.Task[Pcm16leChunk | None] | None = None
+            chunk_index = 0
+            previous_arrival = loop.time()
+            try:
+                while not cancellation.cancelled:
+                    pending_next = asyncio.create_task(
+                        run_blocking_provider(next, synthesis, None)
+                    )
+                    try:
+                        chunk = await asyncio.shield(pending_next)
+                    except asyncio.CancelledError:
+                        if not pending_next.done():
+                            with suppress(asyncio.CancelledError, OSError, ValueError):
+                                _ = await asyncio.shield(pending_next)
+                        raise
+                    pending_next = None
+                    if chunk is None:
+                        await received_chunks.put(None)
+                        return
+                    now = loop.time()
+                    _LOGGER.debug(
+                        "onsite_tts_chunk_received session=%s stream=%s turn=%s chunk=%d pcm_bytes=%d gap_ms=%.1f",  # noqa: E501
+                        stream.session_id,
+                        stream.stream_id,
+                        turn_id,
+                        chunk_index,
+                        len(chunk.data),
+                        (now - previous_arrival) * 1_000,
+                    )
+                    previous_arrival = now
+                    chunk_index += 1
+                    await received_chunks.put(chunk)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001
+                await received_chunks.put(error)
+
+        receiver_task = asyncio.create_task(receive_chunks())
         try:
             while not cancellation.cancelled:
-                pending_next = asyncio.create_task(
-                    run_blocking_provider(next, synthesis, None)
-                )
-                chunk = await asyncio.shield(pending_next)
-                pending_next = None
-                if chunk is None:
+                item = await received_chunks.get()
+                if isinstance(item, Exception):
+                    raise item
+                if item is None:
                     break
+                chunk = item
                 buffered.extend(chunk.data)
                 if packetizer is None:
                     if len(buffered) < _STREAMING_TTS_STARTUP_PCM_BYTES:
@@ -333,6 +375,7 @@ class OnsiteExplainerBridge:
                     return False
             if cancellation.cancelled:
                 return False
+            await receiver_task
             if packetizer is None:
                 if not buffered:
                     return False
@@ -349,11 +392,13 @@ class OnsiteExplainerBridge:
                 return False
         except asyncio.CancelledError:
             _ = cancellation.cancel(reason="response_tts_cancelled")
-            if pending_next is not None and not pending_next.done():
-                with suppress(asyncio.CancelledError, OSError, ValueError):
-                    _ = await asyncio.shield(pending_next)
             raise
         finally:
+            if not receiver_task.done():
+                _ = cancellation.cancel(reason="response_tts_stopped")
+                _ = receiver_task.cancel()
+            with suppress(asyncio.CancelledError, OSError, ValueError):
+                _ = await asyncio.shield(receiver_task)
             close = cast(
                 "Callable[[], object] | None", getattr(synthesis, "close", None)
             )
