@@ -148,7 +148,7 @@ class _StreamingTts:
         self.first_chunk_ready.set()
         yield Pcm16leChunk(b"\x10\x20" * 320)
         _ = self.release_second_chunk.wait(timeout=1.0)
-        yield Pcm16leChunk(b"\x30\x40" * 320)
+        yield Pcm16leChunk(b"\x30\x40" * 15_680)
 
     def synthesize(
         self,
@@ -162,6 +162,35 @@ class _StreamingTts:
         _ = (text, voice, ref_audio, ref_text, cancellation)
         message = "streaming_sse must not fall back to full-clip synthesis"
         raise AssertionError(message)
+
+
+@dataclass(frozen=True, slots=True)
+class _ShortStreamingTts:
+    capability: str = "streaming_sse"
+
+    def stream_pcm16le(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> Iterator[Pcm16leChunk]:
+        _ = (text, voice, ref_audio, ref_text, cancellation)
+        yield Pcm16leChunk(b"\x10\x20" * 320)
+
+    def synthesize(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> SynthesizedAudio:
+        _ = (text, voice, ref_audio, ref_text, cancellation)
+        raise AssertionError
 
 
 @dataclass(slots=True)
@@ -304,9 +333,13 @@ def test_response_tts_replaces_only_after_sound_flush_ack() -> None:
     asyncio.run(_response_output_epoch_proof())
 
 
-def test_response_tts_streams_first_rtp_frame_before_sse_completes() -> None:
+def test_response_tts_waits_for_one_second_startup_watermark() -> None:
 
     asyncio.run(_response_streaming_proof())
+
+
+def test_response_tts_plays_short_stream_when_it_ends_below_watermark() -> None:
+    asyncio.run(_short_response_streaming_proof())
 
 
 def test_response_tts_cancellation_waits_for_active_generator_next() -> None:
@@ -373,23 +406,64 @@ async def _response_streaming_proof() -> None:
     )
 
     # When: the first full 20 ms PCM frame has arrived but the SSE response is
-    # still blocked before its second chunk.
+    # still blocked before the chunk that reaches the one-second watermark.
 
     _ = await run_blocking_provider(tts.first_chunk_ready.wait)
-    async with asyncio.timeout(1.0):
-        _ = await output_ready.wait()
+    await asyncio.sleep(0.05)
 
-    # Then: TTS commits only after the first RTP frame reaches the output
-    # adapter, so a timeline/context callback cannot precede actual audio.
+    # Then: no output is committed from the undersized startup buffer.
 
-    assert started is True
-    assert len(packets) == 1
-    assert timeline == ["output", "started"]
+    assert output_ready.is_set() is False
+    assert started is False
+    assert packets == []
+    assert timeline == []
     assert task.done() is False
 
     tts.release_second_chunk.set()
+    async with asyncio.timeout(1.0):
+        _ = await output_ready.wait()
+
+    # Once exactly one second is buffered, commit only after its first RTP
+    # frame reaches the output adapter.
+
+    assert started is True
+    assert 1 <= len(packets) < 50
+    assert timeline[:2] == ["output", "started"]
+    assert task.done() is False
 
     assert await task is True
+
+
+async def _short_response_streaming_proof() -> None:
+    bridge = _bridge(_DelayedAsr())
+    bridge.tts = _ShortStreamingTts()
+    packets: list[bytes] = []
+    finished: list[CancellationEpoch] = []
+
+    async def output(
+        _stream: StreamKey, _epoch: CancellationEpoch, packet: bytes
+    ) -> None:
+        packets.append(packet)
+
+    async def output_finished(
+        _stream: StreamKey, epoch: CancellationEpoch
+    ) -> None:
+        finished.append(epoch)
+
+    bridge.set_output_callback(output)
+    bridge.set_output_finished_callback(output_finished)
+
+    emitted = await bridge.speak_response(
+        StreamKey("session-short", "stream-short"),
+        "short reply",
+        CancellationEpoch(0),
+        "turn-short",
+        lambda: True,
+    )
+
+    assert emitted is True
+    assert len(packets) == 1
+    assert finished == [CancellationEpoch(0)]
 
 
 async def _response_output_epoch_proof() -> None:

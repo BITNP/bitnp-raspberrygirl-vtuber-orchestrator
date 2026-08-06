@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from orchestrator.llm import CancellationToken
 from orchestrator.media_adapters import (
@@ -58,6 +58,9 @@ type OnsiteReplacement = Callable[
 ]
 
 type ResponseOutputStarted = Callable[[], bool]
+
+
+_STREAMING_TTS_STARTUP_PCM_BYTES: Final = 16_000 * 2
 
 
 async def _discard_output(
@@ -276,7 +279,7 @@ class OnsiteExplainerBridge:
         cancellation: CancellationToken,
         output_started: ResponseOutputStarted,
     ) -> bool:
-        """Start RTP playback as soon as SSE has produced one valid frame."""
+        """Start RTP after one second of PCM is ready, or when a short stream ends."""
         packetizer: TtsPcmRtpPacketizer | None = None
         output_epoch: CancellationEpoch | None = None
         committed = False
@@ -313,15 +316,17 @@ class OnsiteExplainerBridge:
                 if chunk is None:
                     break
                 buffered.extend(chunk.data)
-                if len(buffered) < L16_FRAME_BYTES:
-                    continue
                 if packetizer is None:
+                    if len(buffered) < _STREAMING_TTS_STARTUP_PCM_BYTES:
+                        continue
                     output_epoch = await self.prepare_response_output(
                         stream, epoch, turn_id
                     )
                     if output_epoch is None:
                         return False
                     packetizer = TtsPcmRtpPacketizer(stream, output_epoch)
+                elif len(buffered) < L16_FRAME_BYTES:
+                    continue
                 packets = packetizer.push(Pcm16leChunk(bytes(buffered)))
                 buffered.clear()
                 if not await emit(packets):
