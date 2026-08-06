@@ -284,7 +284,7 @@ def build_llm_request(
     return LLMRequest(
         prompt=LLMPrompt(system=fields.system, user=fields.user),
         workload=LLMWorkload.BRAIN,
-        reasoning=ReasoningMode.ENABLED,
+        reasoning=ReasoningMode.DISABLED,
         max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
     )
 

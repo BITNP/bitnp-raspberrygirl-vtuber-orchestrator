@@ -182,7 +182,7 @@ def _brain_request(
     return LLMRequest(
         LLMPrompt(_RESPONSE_SYSTEM, _untrusted_json(payload)),
         workload=LLMWorkload.BRAIN,
-        reasoning=ReasoningMode.ENABLED,
+        reasoning=ReasoningMode.DISABLED,
         max_completion_tokens=BRAIN_MAX_COMPLETION_TOKENS,
         temperature=0.2,
     )

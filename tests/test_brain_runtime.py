@@ -97,6 +97,7 @@ def test_single_brain_prompt_contains_brain_contract_and_playback_policy() -> No
     assert "was_playing_1000ms_ago" in request.prompt.user
     assert "该规则不适用于 comment" in request.prompt.system
     assert request.workload is LLMWorkload.BRAIN
+    assert request.reasoning is ReasoningMode.DISABLED
     assert request.max_completion_tokens == BRAIN_MAX_COMPLETION_TOKENS
 
 

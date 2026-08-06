@@ -6,6 +6,7 @@ from orchestrator.llm import (
     LLMFinal,
     MockLLMAdapter,
     OpenAICompatibleAdapter,
+    ReasoningMode,
     build_llm_request,
 )
 from orchestrator.modes import (
@@ -46,6 +47,8 @@ def test_mock_llm_streams_deterministic_chunks_and_final_answer() -> None:
     )
 
     adapter = MockLLMAdapter(answer_chunks=("Bounded ", "queues"))
+
+    assert request.reasoning is ReasoningMode.DISABLED
 
     # When: the deterministic local adapter streams the answer.
 
