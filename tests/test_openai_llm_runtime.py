@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from typing import cast
 
 import httpx
@@ -23,12 +24,26 @@ def _request(
     return LLMRequest(LLMPrompt("系统", "用户"), workload, reasoning, tokens)
 
 
-def test_async_runtime_routes_brain_model_and_json_contract() -> None:
+def test_async_runtime_routes_brain_model_and_logs_complete_http_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     captured: list[dict[str, object]] = []
+    response_payload = {
+        "id": "completion-1",
+        "choices": [
+            {
+                "message": {
+                    "reasoning_content": "完整隐藏思考内容",
+                    "content": "{}",
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 321, "completion_tokens": 45},
+    }
 
     async def handler(request: httpx.Request) -> httpx.Response:
         captured.append(cast("dict[str, object]", json.loads(request.content)))
-        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+        return httpx.Response(200, json=response_payload)
 
     async def run() -> str:
         runtime = AsyncOpenAICompatibleLLMRuntime(
@@ -52,11 +67,16 @@ def test_async_runtime_routes_brain_model_and_json_contract() -> None:
         finally:
             await runtime.aclose()
 
+    caplog.set_level(logging.DEBUG, logger="orchestrator.openai_llm_runtime")
     assert asyncio.run(run()) == "{}"
     assert captured[0]["model"] == "brain"
     assert captured[0]["stream"] is False
     assert captured[0]["thinking"] == {"type": "enabled"}
     assert captured[0]["response_format"] == {"type": "json_object"}
+    assert "llm_json_http_response" in caplog.text
+    assert "完整隐藏思考内容" in caplog.text
+    assert '"prompt_tokens":321' in caplog.text
+    assert '"completion_tokens":45' in caplog.text
 
 
 def test_async_runtime_routes_maintenance_without_reasoning() -> None:

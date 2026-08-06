@@ -189,8 +189,15 @@ class AsyncOpenAICompatibleLLMRuntime:
                 headers={"Authorization": f"Bearer {self.api_key}"},
             )
             _ = response.raise_for_status()
+            response_text = response.text
+            _LOGGER.debug(
+                "llm_json_http_response model=%s schema=%s body=%r",
+                model,
+                schema_name,
+                response_text,
+            )
             try:
-                payload = parse_json_value(response.text)
+                payload = parse_json_value(response_text)
             except JsonBoundaryError as error:
                 raise ProviderResponseError(
                     stage="llm", reason="missing_final"
