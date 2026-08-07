@@ -35,9 +35,9 @@ def test_comment_ingress_and_action_rejection_enter_reducer() -> None:
         ActionProposal("inject_external_call", CommandId("action-1"))
     )
 
-    allowed = reducer.reduce_action(ActionProposal("wave", CommandId("action-2")))
+    allowed = reducer.reduce_action(ActionProposal("hello", CommandId("action-2")))
 
-    replayed = reducer.reduce_action(ActionProposal("wave", CommandId("action-2")))
+    replayed = reducer.reduce_action(ActionProposal("hello", CommandId("action-2")))
 
     # Then: the comment opens a correlated turn but the action emits no effect.
 
@@ -247,7 +247,7 @@ def _reducer(
             session_id=SessionId("session-1"),
             turn_id_prefix="turn",
         ),
-        actions=ActionCapabilityRegistry(frozenset({"wave"})),
+        actions=ActionCapabilityRegistry(frozenset({"hello"})),
         mcp_capabilities=frozenset() if mcp_capabilities is None else mcp_capabilities,
     )
 

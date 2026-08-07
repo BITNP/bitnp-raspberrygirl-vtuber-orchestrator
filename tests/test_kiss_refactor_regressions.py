@@ -191,22 +191,22 @@ def test_output_fence_releases_only_exact_finished_lease_and_advances_epoch() ->
 
 
 def test_action_reducer_allows_one_allowlisted_command_and_rejects_replay() -> None:
-    # Given: a reducer that permits only the finite wave avatar action.
+    # Given: a reducer that permits only the finite hello avatar action.
     reducer = SessionInteractionReducer(
         scheduler=SessionScheduler(
             session_id=SessionId("session-1"), turn_id_prefix="turn"
         ),
-        actions=ActionCapabilityRegistry(frozenset({"wave"})),
+        actions=ActionCapabilityRegistry(frozenset({"hello"})),
         mcp_capabilities=frozenset(),
     )
-    proposal = ActionProposal("wave", CommandId("wave-1"))
+    proposal = ActionProposal("hello", CommandId("hello-1"))
 
     # When: the same allowlisted command is proposed twice.
     dispatched = reducer.reduce_action(proposal)
     replayed = reducer.reduce_action(proposal)
 
     # Then: exactly one typed action becomes dispatchable.
-    assert dispatched == InteractionAccepted(command_id=CommandId("wave-1"))
+    assert dispatched == InteractionAccepted(command_id=CommandId("hello-1"))
     assert replayed == InteractionRejection(InteractionRejectionReason.DUPLICATE)
 
 

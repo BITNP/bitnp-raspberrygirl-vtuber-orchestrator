@@ -15,6 +15,23 @@ JsonValue: TypeAlias = (
 
 JsonObject: TypeAlias = dict[str, JsonValue]
 
+ROOT = Path(__file__).resolve().parents[1]
+VALID_FIXTURE = ROOT / "schemas/fixtures/valid/protocol-events.json"
+INVALID_FIXTURES = (
+    ROOT / "schemas/fixtures/invalid/cue_end_before_start.json",
+    ROOT / "schemas/fixtures/invalid/scene_page_zero.json",
+)
+FRONTEND_EVENT_TYPES = frozenset(
+    {
+        "vtuber.caption.command",
+        "vtuber.action.command",
+        "vtuber.scene.command",
+        "presentation.load.command",
+        "presentation.play.command",
+        "presentation.navigate.command",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class State:
@@ -75,7 +92,7 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
             return state, True
 
         case "vtuber.caption.command":
-            text, segment = data.get("text"), event.get("segment_id")
+            text = data.get("text")
 
             return (
                 (
@@ -83,19 +100,18 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
                         text,
                         state.action,
                         state.scene,
-                        state.segments | {segment},
+                        state.segments,
                     ),
                     True,
                 )
-                if isinstance(text, str)
-                and text
-                and isinstance(segment, str)
-                and segment
+                if isinstance(text, str) and text
                 else (state, False)
             )
 
         case "vtuber.action.command":
-            action, segment = data.get("action"), event.get("segment_id")
+            action = data.get("action")
+
+            start_at_ms, end_at_ms = data.get("start_at_ms"), data.get("end_at_ms")
 
             return (
                 (
@@ -103,13 +119,15 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
                     True,
                 )
                 if isinstance(action, str)
-                and action in {"idle", "breathe", "dance", "explain_point", "speak"}
-                and segment in state.segments
+                and action in {"act_cute", "emphasis", "hello"}
+                and isinstance(start_at_ms, int)
+                and isinstance(end_at_ms, int)
+                and 0 <= start_at_ms < end_at_ms
                 else (state, False)
             )
 
         case "vtuber.scene.command":
-            scene = data.get("scene")
+            scene, page = data.get("scene"), data.get("page")
 
             return (
                 (
@@ -124,7 +142,9 @@ def apply(state: State, event: JsonObject) -> tuple[State, bool]:
                     ),
                     True,
                 )
-                if isinstance(scene, str) and scene
+                if scene in {"stage_default", "lecture_slide_focus"}
+                and isinstance(page, int)
+                and page > 0
                 else (state, False)
             )
 
@@ -206,6 +226,11 @@ def main() -> int:
 
     client = (frontend / "scripts/vtuber_control_client.gd").read_text(encoding="utf-8")
 
+    if 'run/main_scene="res://main.tscn"' not in project:
+        print("main.tscn is not the Frontend entry scene")
+
+        return 1
+
     if (
         "run/orchestrator_ws_url" not in project
         or "application/run/orchestrator_ws_url" not in client
@@ -236,9 +261,26 @@ def main() -> int:
 
         return 1
 
+    if any(
+        contract not in client
+        for contract in (
+            '"act_cute": Vector2(0.0, 0.0)',
+            '"emphasis": Vector2(1.0, 0.0)',
+            '"hello": Vector2(0.0, 1.0)',
+            '"parameters/OneShot/request"',
+            '"parameters/OneShot 2/request"',
+        )
+    ):
+        print("Frontend AnimationTree action contract is missing")
+
+        return 1
+
     state = State()
 
-    for event in events(frontend / "tests/fixtures/vtuber_control_commands.json"):
+    for event in events(VALID_FIXTURE):
+        if event.get("event_type") not in FRONTEND_EVENT_TYPES:
+            continue
+
         state, accepted = apply(state, event)
 
         if not accepted:
@@ -246,13 +288,19 @@ def main() -> int:
 
             return 1
 
-    for event in events(frontend / "tests/fixtures/vtuber_control_invalid.json"):
-        _, accepted = apply(state, event)
+    for fixture in INVALID_FIXTURES:
+        invalid_events = events(fixture)
+        if not invalid_events:
+            value: JsonValue = json.loads(fixture.read_text(encoding="utf-8"))
+            invalid_events = [value] if isinstance(value, dict) else []
 
-        if accepted:
-            print("invalid fixture accepted")
+        for event in invalid_events:
+            _, accepted = apply(state, event)
 
-            return 1
+            if accepted:
+                print("invalid fixture accepted")
+
+                return 1
 
     print("vtuber fallback contract passed")
 

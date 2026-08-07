@@ -112,8 +112,8 @@ def test_final_response_cannot_request_another_operation() -> None:
 
 def test_speech_cues_are_separated_from_tts_text() -> None:
     result = parse_inline_cues(
-        '欢迎<action name="wave"/>大家<expression name="happy"/>!',
-        allowed_actions=frozenset({"wave"}),
+        '欢迎<action name="hello"/>大家<expression name="happy"/>!',
+        allowed_actions=frozenset({"hello"}),
         allowed_expressions=frozenset({"happy"}),
     )
     assert result.spoken_text == "欢迎大家!"

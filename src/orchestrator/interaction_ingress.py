@@ -66,7 +66,7 @@ class SessionInteractionIngress:
             reducer=SessionInteractionReducer(
                 scheduler=scheduler,
                 actions=ActionCapabilityRegistry(
-                    frozenset({"breathe", "dance", "explain_point", "speak"})
+                    frozenset({"act_cute", "emphasis", "hello"})
                 ),
                 mcp_capabilities=frozenset({McpCapability.PRESENTATION_DECK}),
             ),

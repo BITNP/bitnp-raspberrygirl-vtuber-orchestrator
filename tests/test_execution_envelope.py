@@ -11,7 +11,7 @@ def _envelope() -> ExecutionEnvelope:
         revision=StateRevision(3),
         cancellation_epoch=7,
         deadline_ms=100,
-        allowed_actions=frozenset({"wave"}),
+        allowed_actions=frozenset({"hello"}),
         allowed_expressions=frozenset({"happy"}),
     )
 

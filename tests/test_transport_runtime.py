@@ -1154,7 +1154,7 @@ def _action_command(session_id: str, trace_id: str, sequence: int) -> str:
     return _envelope(
         "action.command",
         "orchestrator",
-        {"command_id": "action-transport", "action": "speak"},
+        {"command_id": "action-transport", "action": "act_cute"},
         session_id=session_id,
         trace_id=trace_id,
         sequence=sequence,

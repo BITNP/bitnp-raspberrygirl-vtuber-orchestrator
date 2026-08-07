@@ -1085,9 +1085,7 @@ class SessionRuntime:
             return self._reject(correlation, "brain_operation_rejected")
         compiled = parse_inline_cues(
             initial.speech,
-            allowed_actions=frozenset(
-                {"breathe", "dance", "explain_point", "speak", "wave", "nod"}
-            ),
+            allowed_actions=frozenset({"act_cute", "emphasis", "hello"}),
             allowed_expressions=frozenset(),
         )
         if compiled.rejected_cues or not compiled.spoken_text.strip():
@@ -1249,9 +1247,7 @@ class SessionRuntime:
             revision=self.scheduler.snapshot.revision,
             cancellation_epoch=int(self.cancellation_epoch),
             deadline_ms=self.clock() + self.response_task_timeout_ms,
-            allowed_actions=frozenset(
-                {"breathe", "dance", "explain_point", "speak", "wave", "nod"}
-            ),
+            allowed_actions=frozenset({"act_cute", "emphasis", "hello"}),
             allowed_expressions=frozenset(),
             replacement=self.turn_coordinator.state.pending_interrupt,
         )

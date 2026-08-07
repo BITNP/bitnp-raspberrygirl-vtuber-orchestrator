@@ -17,7 +17,7 @@ def test_caption_timeline_keeps_validated_markers() -> None:
             send,
             CaptionTimelineCommand(
                 timeline_id="timeline-1",
-                marked_text='欢迎<action name="wave"/>大家',
+                marked_text='欢迎<action name="hello"/>大家',
                 audio_stream_id="agent-turn-1",
                 cancellation_epoch=2,
                 start_rtp_timestamp=96000,
@@ -31,7 +31,7 @@ def test_caption_timeline_keeps_validated_markers() -> None:
     assert isinstance(envelope, dict)
     assert envelope["event_type"] == "vtuber.caption.timeline.command"
     assert isinstance(envelope["data"], dict)
-    assert envelope["data"]["marked_text"] == '欢迎<action name="wave"/>大家'
+    assert envelope["data"]["marked_text"] == '欢迎<action name="hello"/>大家'
 
 
 def test_caption_timeline_cancel_keeps_media_correlation() -> None:
