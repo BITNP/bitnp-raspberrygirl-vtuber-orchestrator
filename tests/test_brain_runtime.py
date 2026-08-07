@@ -124,6 +124,23 @@ def test_brain_system_prompt_defines_input_output_syntax_and_semantics() -> None
     assert "【操作结果阶段】" in system
 
 
+def test_brain_system_prompt_defines_allowed_inline_actions() -> None:
+    completion = _Completion(
+        [json.dumps({"decision": "accept", "speech": "您好", "operation": None})]
+    )
+    _ = JsonResponseBrain(completion).respond(
+        _snapshot(), available_operations=()
+    )
+    system = completion.requests[0].prompt.system
+
+    assert "【动作标记】" in system
+    assert '<action name="hello"/>' in system
+    assert '<action name="act_cute"/>' in system
+    assert '<action name="emphasis"/>' in system
+    assert "当前没有允许的 expression 标记" in system
+    assert "动作标记只是 speech 时间线提示，不是 operation" in system
+
+
 def test_malformed_brain_output_has_no_plain_text_fallback() -> None:
     with pytest.raises(ValueError, match="invalid Brain proposal"):
         _ = JsonResponseBrain(_Completion(["not-json"])).respond(
