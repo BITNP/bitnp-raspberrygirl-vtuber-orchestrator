@@ -274,7 +274,6 @@ def test_audio_cpp_streaming_uses_sse_shape_and_resamples_pcm(
                 + json.dumps(
                     {
                         "type": "speech.audio.delta",
-                        "response_format": "pcm",
                         "audio": encoded,
                     }
                 ),

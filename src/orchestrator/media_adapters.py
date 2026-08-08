@@ -681,7 +681,10 @@ class AudioCppTTSAdapter:
                     data = _sse_data(line)
                     if data is None:
                         continue
-                    chunk = _normalize_tts_sse(data)
+                    chunk = _normalize_tts_sse(
+                        data,
+                        allow_missing_response_format=True,
+                    )
                     if chunk is None:
                         done = True
                         break
@@ -819,7 +822,11 @@ def _log_audio_cpp_tts_request(speech: AudioCppSpeechRequest) -> None:
     )
 
 
-def _normalize_tts_sse(data: str) -> bytes | None:
+def _normalize_tts_sse(
+    data: str,
+    *,
+    allow_missing_response_format: bool = False,
+) -> bytes | None:
     """Return a PCM delta, ``None`` for done, or raise for a typed error."""
     try:
         payload = parse_json_value(data)
@@ -830,7 +837,11 @@ def _normalize_tts_sse(data: str) -> bytes | None:
     match payload.get("type"):
         case "speech.audio.delta":
             encoded = payload.get("audio")
-            if payload.get("response_format") != "pcm" or not isinstance(encoded, str):
+            response_format = payload.get("response_format")
+            format_is_valid = response_format == "pcm" or (
+                allow_missing_response_format and response_format is None
+            )
+            if not format_is_valid or not isinstance(encoded, str):
                 raise ProviderResponseError(stage="tts", reason="event")
             try:
                 return base64.b64decode(encoded, validate=True)
