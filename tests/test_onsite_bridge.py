@@ -4,7 +4,7 @@ import pytest
 
 from orchestrator import onsite_bridge
 from orchestrator.config import load_config_from_env
-from orchestrator.llm import VllmOmniTTSAdapter
+from orchestrator.llm import AudioCppTTSAdapter, VllmOmniTTSAdapter
 from orchestrator.onsite_bridge import OnsiteBridgeConfigError, build_onsite_bridge
 from orchestrator.openai_llm_runtime import AsyncOpenAICompatibleLLMRuntime
 
@@ -157,3 +157,24 @@ def test_onsite_bridge_has_no_retired_direct_transcription_surface() -> None:
 
     assert not hasattr(bridge, "ingest_mic_rtp")
     assert not hasattr(bridge, "transcribe_endpoint")
+
+
+def test_build_onsite_bridge_supports_audio_cpp_model_default_voice() -> None:
+    config = load_config_from_env(
+        {
+            "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
+            "ORCHESTRATOR_LLM_ENDPOINT": "https://llm.example.test/v1",
+            "ORCHESTRATOR_LLM_MODEL": "onsite-model",
+            "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
+            "ORCHESTRATOR_TTS_PROVIDER": "audio_cpp",
+            "ORCHESTRATOR_TTS_ENDPOINT": "http://127.0.0.1:8080/v1",
+            "ORCHESTRATOR_TTS_MODEL": "pocket-tts",
+        }
+    )
+
+    bridge = build_onsite_bridge(config, voice="", ref_audio="", ref_text="")
+
+    assert isinstance(bridge.tts, AudioCppTTSAdapter)
+    assert bridge.tts.endpoint == "http://127.0.0.1:8080/v1"
+    assert bridge.tts.capability == "final_only"

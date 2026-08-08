@@ -88,12 +88,27 @@ class VllmOmniSpeechPayload(TypedDict):
 
 
 class VllmOmniExtensionParameters(TypedDict):
-
     task_type: Literal["Base"]
 
     ref_audio: str
 
     ref_text: str
+
+
+class AudioCppSpeechPayload(TypedDict):
+    model: str
+
+    input: str
+
+    response_format: NotRequired[Literal["wav", "pcm"]]
+
+    stream_format: NotRequired[Literal["sse"]]
+
+    voice: NotRequired[str]
+
+    voice_ref: NotRequired[str]
+
+    reference_text: NotRequired[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +120,15 @@ class HttpSpeechRequest:
     json: VllmOmniSpeechPayload
 
     extra_body: VllmOmniExtensionParameters
+
+
+@dataclass(frozen=True, slots=True)
+class AudioCppSpeechRequest:
+    method: Literal["POST"]
+
+    url: str
+
+    json: AudioCppSpeechPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,9 +515,8 @@ class VllmOmniTTSAdapter:
                         if converted:
                             yield Pcm16leChunk(converted)
                     if (
-                        (cancellation is None or not cancellation.cancelled)
-                        and not done
-                    ):
+                        cancellation is None or not cancellation.cancelled
+                    ) and not done:
                         raise ProviderResponseError(stage="tts", reason="missing_done")
                 finally:
                     response_release()
@@ -530,6 +553,170 @@ class VllmOmniTTSAdapter:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class AudioCppTTSAdapter:
+    """audio.cpp OpenAI-compatible speech adapter.
+
+    Non-streaming models return a complete WAV. Models configured by audio.cpp
+    with ``mode: streaming`` may instead expose OpenAI-shaped PCM SSE events.
+    """
+
+    endpoint: str
+
+    model: str
+
+    api_key: str | None = None
+
+    ca_path: Path | None = None
+
+    timeout_seconds: float = 120.0
+
+    capability: Literal["final_only", "streaming_sse"] = "final_only"
+
+    def __post_init__(self) -> None:
+        _require_endpoint_and_model(self.endpoint, self.model)
+
+    def build_speech_request(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        streaming: bool = False,
+    ) -> AudioCppSpeechRequest:
+        payload: AudioCppSpeechPayload = {
+            "model": self.model.strip(),
+            "input": text,
+            "response_format": "pcm" if streaming else "wav",
+        }
+        if streaming:
+            payload["stream_format"] = "sse"
+        if voice.strip() != "":
+            payload["voice"] = voice.strip()
+        if ref_audio.strip() != "":
+            payload["voice_ref"] = _portable_reference_audio(ref_audio)
+        if ref_text.strip() != "":
+            payload["reference_text"] = ref_text
+        return AudioCppSpeechRequest(
+            method="POST",
+            url=f"{self.endpoint.rstrip('/')}/audio/speech",
+            json=payload,
+        )
+
+    def synthesize(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> SynthesizedAudio:
+        speech = self.build_speech_request(
+            text=text,
+            voice=voice,
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+        )
+        _log_audio_cpp_tts_request(speech)
+        client = self._client()
+        release = _bind_cancellation(cancellation, client.close)
+        try:
+            response = client.post(
+                speech.url,
+                json=speech.json,
+                headers=self._headers(accept="audio/wav"),
+            )
+            _ = response.raise_for_status()
+            if cancellation is not None and cancellation.cancelled:
+                return SynthesizedAudio(data=b"", media_type="application/octet-stream")
+            data = response.content
+            _LOGGER.debug(
+                "tts_response provider=audio_cpp transport=http media_type=%s %s",
+                "audio/wav",
+                binary_summary(data),
+            )
+            return SynthesizedAudio(data=data, media_type="audio/wav")
+        except httpx.HTTPError as error:
+            if cancellation is not None and cancellation.cancelled:
+                return SynthesizedAudio(data=b"", media_type="application/octet-stream")
+            raise _tts_provider_error(error) from error
+        finally:
+            release()
+            client.close()
+
+    def stream_pcm16le(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> Iterator[Pcm16leChunk]:
+        speech = self.build_speech_request(
+            text=text,
+            voice=voice,
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+            streaming=True,
+        )
+        _log_audio_cpp_tts_request(speech)
+        client = self._client()
+        release = _bind_cancellation(cancellation, client.close)
+        try:
+            with client.stream(
+                "POST",
+                speech.url,
+                json=speech.json,
+                headers=self._headers(accept="text/event-stream"),
+            ) as response:
+                _ = response.raise_for_status()
+                done = False
+                resampler = _Pcm24khzTo16khzResampler()
+                for line in response.iter_lines():
+                    if cancellation is not None and cancellation.cancelled:
+                        return
+                    data = _sse_data(line)
+                    if data is None:
+                        continue
+                    chunk = _normalize_tts_sse(data)
+                    if chunk is None:
+                        done = True
+                        break
+                    converted = resampler.push(chunk)
+                    if converted:
+                        yield Pcm16leChunk(converted)
+                if (cancellation is None or not cancellation.cancelled) and not done:
+                    raise ProviderResponseError(stage="tts", reason="missing_done")
+        except httpx.HTTPError as error:
+            if cancellation is not None and cancellation.cancelled:
+                return
+            raise _tts_provider_error(error) from error
+        finally:
+            release()
+            client.close()
+
+    def _client(self) -> httpx.Client:
+        verify: bool | ssl.SSLContext = (
+            True
+            if self.ca_path is None
+            else ssl.create_default_context(cafile=self.ca_path)
+        )
+        return httpx.Client(
+            verify=verify,
+            timeout=self.timeout_seconds,
+            trust_env=False,
+        )
+
+    def _headers(self, *, accept: str) -> dict[str, str]:
+        headers = {"Accept": accept}
+        if self.api_key is not None and self.api_key.strip() != "":
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+
 def _require_endpoint_and_model(endpoint: str, model: str) -> None:
     if endpoint.strip() == "":
         raise MediaAdapterConfigError(field_name="endpoint")
@@ -562,6 +749,10 @@ def _asr_provider_error(
 def _tts_provider_error(error: APIError | httpx.HTTPError) -> ProviderResponseError:
     if isinstance(error, APIStatusError):
         return ProviderResponseError(stage="tts", reason=f"status_{error.status_code}")
+    if isinstance(error, httpx.HTTPStatusError):
+        return ProviderResponseError(
+            stage="tts", reason=f"status_{error.response.status_code}"
+        )
     if isinstance(error, (APITimeoutError, httpx.TimeoutException)):
         return ProviderResponseError(stage="tts", reason="read")
     if isinstance(error, APIConnectionError):
@@ -608,6 +799,23 @@ def _log_tts_request(speech: HttpSpeechRequest) -> None:
         speech.json["input"],
         reference_audio_summary(speech.extra_body["ref_audio"]),
         speech.extra_body["ref_text"],
+    )
+
+
+def _log_audio_cpp_tts_request(speech: AudioCppSpeechRequest) -> None:
+    """Log text and request shape without recording reference audio bytes."""
+    voice_ref = speech.json.get("voice_ref")
+    message = "tts_request provider=audio_cpp url=%s model=%s mode=%s input=%r"
+    message += " voice=%r voice_ref=(%s) reference_text=%r"
+    _LOGGER.debug(
+        message,
+        speech.url,
+        speech.json["model"],
+        "streaming_sse" if speech.json.get("stream_format") == "sse" else "final_only",
+        speech.json["input"],
+        speech.json.get("voice"),
+        "default" if voice_ref is None else reference_audio_summary(voice_ref),
+        speech.json.get("reference_text"),
     )
 
 

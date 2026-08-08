@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import base64
@@ -6,13 +5,17 @@ import json
 import logging
 import ssl
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Self, final
 
 import pytest
 
 from orchestrator import media_adapters
 from orchestrator.config import load_config_from_env
-from orchestrator.llm import OpenAICompatibleASRAdapter, VllmOmniTTSAdapter
+from orchestrator.llm import (
+    AudioCppTTSAdapter,
+    OpenAICompatibleASRAdapter,
+    VllmOmniTTSAdapter,
+)
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 
 if TYPE_CHECKING:
@@ -29,7 +32,6 @@ def ca_path(tmp_path: Path) -> Path:
 
 def test_default_mock_media_providers_need_no_credentials_or_network() -> None:
     # Given: the normal replay environment has no provider configuration.
-
 
     config = load_config_from_env({})
 
@@ -52,7 +54,6 @@ def test_default_mock_media_providers_need_no_credentials_or_network() -> None:
 
 def test_openai_compatible_asr_normalizes_final_at_orchestrator_boundary() -> None:
     # Given: a provider-shaped final transcription from a configured local endpoint.
-
 
     adapter = OpenAICompatibleASRAdapter(
         endpoint="http://127.0.0.1:8000/v1",
@@ -82,7 +83,6 @@ def test_openai_compatible_asr_treats_blank_final_as_no_transcription(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: a configured provider returns its normal empty final for a silent endpoint.
-
 
     adapter = OpenAICompatibleASRAdapter(
         endpoint="http://127.0.0.1:8000/v1",
@@ -126,7 +126,6 @@ def test_openai_compatible_asr_treats_blank_final_as_no_transcription(
 def test_vllm_omni_builds_opt_in_fake_local_speech_request() -> None:
     # Given: an explicitly configured fake-local vLLM-Omni surface and clone reference.
 
-
     adapter = VllmOmniTTSAdapter(
         endpoint="http://127.0.0.1:8001/v1",
         model="vllm-omni",
@@ -155,9 +154,170 @@ def test_vllm_omni_builds_opt_in_fake_local_speech_request() -> None:
     }
 
 
+def test_audio_cpp_builds_non_streaming_request_using_model_default_voice() -> None:
+    adapter = AudioCppTTSAdapter(
+        endpoint="http://127.0.0.1:8080/v1",
+        model="pocket-tts",
+    )
+
+    request = adapter.build_speech_request(
+        text="你好",
+        voice="",
+        ref_audio="",
+        ref_text="",
+    )
+
+    assert request.url == "http://127.0.0.1:8080/v1/audio/speech"
+    assert request.json == {
+        "model": "pocket-tts",
+        "input": "你好",
+        "response_format": "wav",
+    }
+
+
+def test_audio_cpp_maps_request_voice_overrides_to_documented_fields() -> None:
+    request = AudioCppTTSAdapter(
+        endpoint="http://127.0.0.1:8080/v1",
+        model="voxcpm2",
+    ).build_speech_request(
+        text="讲解",
+        voice="preset-a",
+        ref_audio="https://media.example.test/reference.wav",
+        ref_text="参考文本",
+    )
+
+    assert request.json == {
+        "model": "voxcpm2",
+        "input": "讲解",
+        "response_format": "wav",
+        "voice": "preset-a",
+        "voice_ref": "https://media.example.test/reference.wav",
+        "reference_text": "参考文本",
+    }
+
+
+def test_audio_cpp_final_only_requests_wav_without_streaming_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = AudioCppTTSAdapter(
+        endpoint="http://127.0.0.1:8080/v1",
+        model="pocket-tts",
+    )
+    calls: list[dict[str, object]] = []
+
+    @final
+    class Response:
+        content: bytes = b"RIFFaudio-cpp-wav"
+
+        def raise_for_status(self) -> None:
+            return
+
+    @final
+    class Client:
+        def post(self, _url: str, **kwargs: object) -> Response:
+            calls.append(kwargs)
+            return Response()
+
+        def close(self) -> None:
+            return
+
+    def build_client(_adapter: AudioCppTTSAdapter) -> Client:
+        return Client()
+
+    monkeypatch.setattr(AudioCppTTSAdapter, "_client", build_client)
+
+    result = adapter.synthesize(
+        text="你好",
+        voice="",
+        ref_audio="",
+        ref_text="",
+    )
+
+    assert result.data == b"RIFFaudio-cpp-wav"
+    assert calls == [
+        {
+            "json": {
+                "model": "pocket-tts",
+                "input": "你好",
+                "response_format": "wav",
+            },
+            "headers": {"Accept": "audio/wav"},
+        }
+    ]
+
+
+def test_audio_cpp_streaming_uses_sse_shape_and_resamples_pcm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = AudioCppTTSAdapter(
+        endpoint="http://127.0.0.1:8080/v1",
+        model="voxcpm2-stream",
+        capability="streaming_sse",
+    )
+    calls: list[dict[str, object]] = []
+    encoded = base64.b64encode(b"\x10\x20" * 480).decode()
+
+    @final
+    class Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return
+
+        def iter_lines(self) -> list[str]:
+            return [
+                "data: "
+                + json.dumps(
+                    {
+                        "type": "speech.audio.delta",
+                        "response_format": "pcm",
+                        "audio": encoded,
+                    }
+                ),
+                'data: {"type":"speech.audio.done"}',
+                "data: [DONE]",
+            ]
+
+    @final
+    class Client:
+        def stream(self, method: str, url: str, **kwargs: object) -> Response:
+            calls.append({"method": method, "url": url, **kwargs})
+            return Response()
+
+        def close(self) -> None:
+            return
+
+    def build_client(_adapter: AudioCppTTSAdapter) -> Client:
+        return Client()
+
+    monkeypatch.setattr(AudioCppTTSAdapter, "_client", build_client)
+
+    chunks = tuple(
+        adapter.stream_pcm16le(
+            text="讲解",
+            voice="",
+            ref_audio="",
+            ref_text="",
+        )
+    )
+
+    assert len(chunks) == 1
+    assert len(chunks[0].data) == 640
+    assert calls[0]["json"] == {
+        "model": "voxcpm2-stream",
+        "input": "讲解",
+        "response_format": "pcm",
+        "stream_format": "sse",
+    }
+    assert calls[0]["headers"] == {"Accept": "text/event-stream"}
+
+
 def test_vllm_omni_encodes_local_reference_path_as_data_url(tmp_path: Path) -> None:
     # Given: the local Qwen server cannot read Orchestrator-local reference files.
-
 
     reference = tmp_path / "raspberry.wav"
     _ = reference.write_bytes(b"RIFFreference-wav")
@@ -182,7 +342,6 @@ def test_vllm_omni_encodes_local_reference_path_as_data_url(tmp_path: Path) -> N
 def test_vllm_omni_encodes_file_uri_reference_as_data_url(tmp_path: Path) -> None:
     # Given: a deployment config uses a file URI for the local reference WAV.
 
-
     reference = tmp_path / "raspberry.wav"
     _ = reference.write_bytes(b"RIFFreference-uri-wav")
 
@@ -205,7 +364,6 @@ def test_vllm_omni_encodes_file_uri_reference_as_data_url(tmp_path: Path) -> Non
 
 def test_vllm_omni_preserves_existing_reference_data_url() -> None:
     # Given: the reference audio is already provider-portable.
-
 
     ref_audio = _data_url(b"RIFFalready-portable")
 
@@ -240,9 +398,7 @@ def test_tts_logs_only_summaries_for_reference_audio_and_response(
         return SimpleNamespace(content=response_payload)
 
     client = SimpleNamespace(
-        audio=SimpleNamespace(
-            speech=SimpleNamespace(create=create_speech)
-        ),
+        audio=SimpleNamespace(speech=SimpleNamespace(create=create_speech)),
         close=lambda: None,
     )
 
@@ -316,6 +472,7 @@ def test_tts_sse_uses_unbuffered_openai_streaming_response(
         ),
         close=lambda: None,
     )
+
     def build_client(_adapter: VllmOmniTTSAdapter) -> SimpleNamespace:
         return client
 
@@ -343,7 +500,6 @@ def test_media_adapters_retain_configured_ca_path_for_provider_requests(
     ca_path: Path,
 ) -> None:
     # Given: configured OpenAI-compatible ASR and vLLM-Omni TTS providers.
-
 
     asr = OpenAICompatibleASRAdapter(
         endpoint="https://asr.example.test/v1",
@@ -375,17 +531,20 @@ def test_media_adapters_retain_configured_ca_path_for_provider_requests(
         ),
         (VllmOmniTTSAdapter, " ", "vllm-omni"),
         (VllmOmniTTSAdapter, "http://127.0.0.1:8001/v1", " "),
+        (AudioCppTTSAdapter, " ", "pocket-tts"),
+        (AudioCppTTSAdapter, "http://127.0.0.1:8080/v1", " "),
     ],
 )
 def test_media_provider_rejects_blank_endpoint_or_model_before_network(
-    adapter_factory: type[OpenAICompatibleASRAdapter | VllmOmniTTSAdapter],
+    adapter_factory: type[
+        AudioCppTTSAdapter | OpenAICompatibleASRAdapter | VllmOmniTTSAdapter
+    ],
     endpoint: str,
     model: str,
 ) -> None:
     # Given: malformed explicit provider configuration.
 
     # When / Then: construction fails before any request method can be reached.
-
 
     with pytest.raises(ValueError, match=r"endpoint|model"):
         _ = adapter_factory(endpoint=endpoint, model=model)

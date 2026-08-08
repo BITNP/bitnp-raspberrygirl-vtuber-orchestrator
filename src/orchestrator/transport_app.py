@@ -74,9 +74,9 @@ async def run_transport() -> None:
             ambiguity_margin=getattr(transport_config, "voice_ambiguity_margin", 0.05),
         )
         if presentation_decks:
-            session_runtime.agent_capabilities = (
-                session_runtime.agent_capabilities | {"presentation.deck"}
-            )
+            session_runtime.agent_capabilities = session_runtime.agent_capabilities | {
+                "presentation.deck"
+            }
         if brain_completion is not None:
             session_runtime.async_response_coordinator = (
                 build_async_response_coordinator(
@@ -122,10 +122,10 @@ async def run_transport() -> None:
 
 
 def _onsite_bridge_enabled(config: OrchestratorConfig) -> bool:
-    return (
-        config.llm_provider == "openai_compatible"
-        and config.tts_provider == "vllm_omni"
-    )
+    return config.llm_provider == "openai_compatible" and config.tts_provider in {
+        "vllm_omni",
+        "audio_cpp",
+    }
 
 
 def main() -> None:

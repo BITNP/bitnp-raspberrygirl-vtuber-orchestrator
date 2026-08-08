@@ -3,7 +3,11 @@ from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import Final, Literal, Protocol, Self, TypedDict, override
 
-from orchestrator.media_adapters import OpenAICompatibleASRAdapter, VllmOmniTTSAdapter
+from orchestrator.media_adapters import (
+    AudioCppTTSAdapter,
+    OpenAICompatibleASRAdapter,
+    VllmOmniTTSAdapter,
+)
 from orchestrator.modes import AnswerCandidate
 from orchestrator.prompt_composition import PromptSnapshot, compose_prompt
 from orchestrator.provider_streaming import ProviderCancellationHandle
@@ -14,7 +18,7 @@ from orchestrator.state_snapshots import (
     TaskStateSnapshot,
 )
 
-__all__ = ["OpenAICompatibleASRAdapter", "VllmOmniTTSAdapter"]
+__all__ = ["AudioCppTTSAdapter", "OpenAICompatibleASRAdapter", "VllmOmniTTSAdapter"]
 
 
 DEFAULT_TEMPERATURE: Final = 0.2
