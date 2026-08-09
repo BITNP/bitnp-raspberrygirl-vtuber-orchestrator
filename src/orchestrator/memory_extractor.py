@@ -27,18 +27,27 @@ class MemoryCandidate:
 
 
 def parse_memory_candidate(raw: str) -> MemoryCandidate | None:
-    """Accept one ordinary preference candidate; malformed output is discarded."""
+    """Accept one explicit durable-memory candidate; discard is not a candidate."""
     try:
         value = parse_json_value(raw)
     except JsonBoundaryError:
         return None
-    if not isinstance(value, dict) or set(value) != {"key", "value", "confidence"}:
+    if not isinstance(value, dict) or set(value) != {
+        "decision",
+        "key",
+        "value",
+        "confidence",
+    }:
         return None
+    decision = value.get("decision")
     key = value.get("key")
     candidate_value = value.get("value")
     confidence = value.get("confidence")
+    if decision == "discard":
+        return None
     if (
-        not isinstance(key, str)
+        decision != "remember"
+        or not isinstance(key, str)
         or not key.strip()
         or len(key) > _MAX_KEY_CHARS
         or not isinstance(candidate_value, str)

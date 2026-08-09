@@ -206,7 +206,7 @@ class MutableMemory:
         return tuple(self._conflict_audit)
 
     def reduce(self, proposal: MemoryProposal) -> MemoryCommitResult:
-        rejection = self._rejection(proposal)
+        rejection = self.validate(proposal)
 
         if rejection is not None:
             return MemoryCommitRejected(rejection)
@@ -235,6 +235,10 @@ class MutableMemory:
         )
 
         return MemoryCommitAccepted(self.snapshot)
+
+    def validate(self, proposal: MemoryProposal) -> MemoryCommitRejection | None:
+        """Validate a proposal without mutating the session memory revision."""
+        return self._rejection(proposal)
 
     def delete(self, key: MemoryKey) -> MutableMemorySnapshot:
         _ = self._entries.pop(key, None)

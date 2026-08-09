@@ -90,7 +90,7 @@ _RESPONSE_SYSTEM = _inline_prompt(
 )
 
 _MEMORY_EXTRACT_SYSTEM = _inline_prompt(
-    """你是低优先级记忆候选提取器。仅从已经确认的用户输入与智能体净回复中提取一个稳定、非敏感的普通偏好；没有合适内容时返回空对象。不得推断身份、健康、财务、政治、联系方式或其他敏感信息。只输出 JSON；如有候选，顶层必须只有 key、value、confidence，confidence 为 0 到 100 的整数。"""
+    """你是低优先级记忆候选提取器。仅根据已经确认的本轮用户输入提取一个明确、稳定、非敏感且对后续对话有用的信息；允许长期目标、持续兴趣、普通偏好和用户主动给出的称呼。智能体回复只用于理解上下文，不能单独作为证据。不要保存一次性指令、短暂状态、含糊识别文本或智能体的推测；不得推断或保存健康、财务、政治、联系方式、凭据、生物特征或其他敏感信息。只输出 JSON，顶层必须且只能有 decision、key、value、confidence。存在合适候选时 decision 为 remember，key 使用简短稳定的 snake_case 名称，value 使用忠实简洁的中文，用户明确陈述时 confidence 应为 95；证据不足时不要猜测，decision 为 discard，key 和 value 均为 ""，confidence 为 0。"""
 )
 
 _CONTEXT_COMPACTION_SYSTEM = _inline_prompt(
@@ -653,8 +653,9 @@ _RESPONSE_SCHEMA: dict[str, object] = {
 _MEMORY_CANDIDATE_SCHEMA: dict[str, object] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["key", "value", "confidence"],
+    "required": ["decision", "key", "value", "confidence"],
     "properties": {
+        "decision": {"type": "string", "enum": ["remember", "discard"]},
         "key": {"type": "string", "maxLength": 128},
         "value": {"type": "string", "maxLength": 512},
         "confidence": {"type": "integer", "minimum": 0, "maximum": 100},

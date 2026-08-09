@@ -218,7 +218,7 @@ def test_ordinary_asr_and_comments_are_not_explicit_interruptions() -> None:
 
 def test_maintenance_calls_remain_independent() -> None:
     memory_completion = _AsyncCompletion(
-        ['{"key":"drink","value":"绿茶","confidence":95}']
+        ['{"decision":"remember","key":"drink","value":"绿茶","confidence":95}']
     )
     _ = asyncio.run(
         AsyncJsonMemoryCandidateExtractor(memory_completion).extract(
@@ -230,6 +230,8 @@ def test_maintenance_calls_remain_independent() -> None:
         memory_completion.requests[0].max_completion_tokens
         == MAINTENANCE_MAX_COMPLETION_TOKENS
     )
+    assert "长期目标" in memory_completion.requests[0].prompt.system
+    assert "decision 为 discard" in memory_completion.requests[0].prompt.system
 
     compact_completion = _AsyncCompletion(['{"summary":"摘要"}'])
     composition = ContextComposition(

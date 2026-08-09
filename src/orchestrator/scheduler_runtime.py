@@ -67,6 +67,7 @@ from orchestrator.mcp_adapters import (
 )
 from orchestrator.memory import (
     MemoryCategory,
+    MemoryCommitAccepted,
     MemoryProposal,
     MemoryProvenance,
     MemorySource,
@@ -210,6 +211,9 @@ _PREBRAIN_REJECTION_LOG = "audience_prebrain_rejected trace=%s session=%s seq=%s
 _OPERATION_REQUEST_LOG = "operation_request trace=%s session=%s turn=%s segment=%s kind=%s name=%s arguments=%r"  # noqa: E501
 _OPERATION_OBSERVATION_LOG = "operation_observation trace=%s session=%s turn=%s segment=%s kind=%s name=%s observation=%r"  # noqa: E501
 _TTS_FIRST_FRAME_LOG = "tts_first_frame_admitted trace=%s session=%s turn=%s segment=%s task=%s speech=%r"  # noqa: E501
+_MEMORY_REJECTED_LOG = "memory_candidate_rejected trace=%s session=%s turn=%s segment=%s task=%s key=%r value=%r confidence=%d reason=%s"  # noqa: E501
+_MEMORY_INVARIANT_LOG = "memory_candidate_commit_invariant_failed trace=%s session=%s turn=%s segment=%s task=%s key=%r value=%r confidence=%d"  # noqa: E501
+_MEMORY_COMMITTED_LOG = "memory_candidate_committed trace=%s session=%s turn=%s segment=%s task=%s revision=%d key=%r value=%r confidence=%d"  # noqa: E501
 
 _DEFAULT_AGENT_CAPABILITIES = frozenset(
     {
@@ -1810,6 +1814,37 @@ class SessionRuntime:
         record = self.task_registry.task(task_id)
         if record is None:
             return
+        proposal = MemoryProposal(
+            key=candidate.key,
+            value=candidate.value,
+            category=MemoryCategory.ORDINARY_PREFERENCE,
+            confidence=candidate.confidence,
+            base_revision=memory_revision,
+            provenance=MemoryProvenance(
+                source=MemorySource.AGENT_PROPOSAL,
+                trace_id=correlation.trace_id,
+                session_id=pending.provenance.session_id,
+                turn_id=pending.provenance.turn_id,
+                evidence_id=f"memory-extract:{pending.provenance.source_id}:{task_id}",
+            ),
+        )
+        rejection = self.interaction_ingress.data.memory.validate(proposal)
+        if rejection is not None:
+            reason = f"memory_candidate_{rejection.value}"
+            _ = self.task_registry.fail(task_id, reason=reason)
+            _LOGGER.debug(
+                _MEMORY_REJECTED_LOG,
+                correlation.trace_id,
+                pending.provenance.session_id,
+                pending.provenance.turn_id,
+                pending.provenance.segment_id,
+                task_id,
+                candidate.key,
+                candidate.value,
+                candidate.confidence,
+                rejection.value,
+            )
+            return
         accepted = self.reduce_task(
             TaskResult(
                 task_id,
@@ -1824,23 +1859,31 @@ class SessionRuntime:
         )
         if not accepted.accepted:
             return
-        _ = self.interaction_ingress.data.reduce_memory(
-            MemoryProposal(
-                key=candidate.key,
-                value=candidate.value,
-                category=MemoryCategory.ORDINARY_PREFERENCE,
-                confidence=candidate.confidence,
-                base_revision=memory_revision,
-                provenance=MemoryProvenance(
-                    source=MemorySource.AGENT_PROPOSAL,
-                    trace_id=correlation.trace_id,
-                    session_id=pending.provenance.session_id,
-                    turn_id=pending.provenance.turn_id,
-                    evidence_id=(
-                        f"memory-extract:{pending.provenance.source_id}:{task_id}"
-                    ),
-                ),
+        commit = self.interaction_ingress.data.reduce_memory(proposal)
+        if not isinstance(commit, MemoryCommitAccepted):
+            _LOGGER.error(
+                _MEMORY_INVARIANT_LOG,
+                correlation.trace_id,
+                pending.provenance.session_id,
+                pending.provenance.turn_id,
+                pending.provenance.segment_id,
+                task_id,
+                candidate.key,
+                candidate.value,
+                candidate.confidence,
             )
+            return
+        _LOGGER.debug(
+            _MEMORY_COMMITTED_LOG,
+            correlation.trace_id,
+            pending.provenance.session_id,
+            pending.provenance.turn_id,
+            pending.provenance.segment_id,
+            task_id,
+            commit.snapshot.revision,
+            candidate.key,
+            candidate.value,
+            candidate.confidence,
         )
 
     def take_started_timeline(
