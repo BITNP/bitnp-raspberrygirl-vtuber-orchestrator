@@ -10,7 +10,7 @@ from orchestrator.config import load_fake_config
 from orchestrator.ids import SessionId
 from orchestrator.json_boundary import parse_json_value
 from orchestrator.observability import OnsiteObservability
-from orchestrator.scheduler_reflex import SchedulerOutputFence
+from orchestrator.scheduler_reflex import OutputLease, SchedulerOutputFence
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import SessionScheduler
 from orchestrator.streaming_contracts import (
@@ -222,11 +222,12 @@ async def _matching_ack_proof() -> None:
 
     await asyncio.sleep(0)
 
-    admission = asyncio.create_task(runtime.admit_replacement(flush))
+    admission = asyncio.create_task(runtime.admit_replacement(replacement, flush))
     await _acknowledge_replacement_command(sink)
     admitted = await admission
 
     mismatched = await runtime.admit_replacement(
+        replacement,
         StreamFlush(
             stream=flush.stream,
             turn_id=flush.turn_id,
@@ -259,21 +260,29 @@ async def _matching_ack_proof() -> None:
         if _envelope_value(message)["event_type"] == "media.stream.flush"
     )
 
-    replacement = _envelope_value(sink.sent[-1])
+    replacement_envelope = _envelope_value(sink.sent[-1])
 
-    replacement_data = replacement["data"]
+    replacement_data = replacement_envelope["data"]
 
     assert isinstance(replacement_data, dict)
 
     assert _correlation(flush_envelope) == ("trace-source-001", "session-001", 29)
 
-    assert _correlation(replacement) == ("trace-source-001", "session-001", 29)
+    assert _correlation(replacement_envelope) == (
+        "trace-source-001",
+        "session-001",
+        29,
+    )
 
     assert (
-        replacement["turn_id"],
-        replacement["segment_id"],
+        replacement_envelope["turn_id"],
+        replacement_envelope["segment_id"],
         replacement_data["cancellation_epoch"],
-    ) == (str(flush.turn_id), str(flush.segment_id), int(flush.cancellation_epoch))
+    ) == (
+        str(replacement.turn_id),
+        str(replacement.segment_id),
+        int(replacement.cancellation_epoch),
+    )
 
     assert observability.records[-1].stage == "flush_ack"
 
@@ -292,6 +301,11 @@ async def _matching_ack_proof() -> None:
         str(flush.segment_id),
         int(flush.cancellation_epoch),
     )
+
+    await sink.incoming.put(_finished_state(replacement))
+    await asyncio.sleep(0)
+
+    assert fence.has_active_lease(stream) is False
 
     await _close_runtime(runtime, source, sink, tasks)
 
@@ -333,7 +347,7 @@ async def _rejection_proof() -> None:
 
     assert _event_types(sink.sent).count("media.stream.flush") == 2
 
-    assert await runtime.admit_replacement(flush) is False
+    assert await runtime.admit_replacement(_replacement(flush), flush) is False
 
     assert [failure.reason for failure in runtime.flush_failures] == ["timeout"]
 
@@ -508,6 +522,17 @@ def _flush() -> StreamFlush:
     )
 
 
+def _replacement(flush: StreamFlush) -> OutputLease:
+    return OutputLease(
+        stream=flush.stream,
+        turn_id=TurnId("turn-replacement"),
+        segment_id=SegmentId("segment-replacement"),
+        cancellation_epoch=flush.cancellation_epoch,
+        generation=int(flush.cancellation_epoch),
+        target_generated_ssrc=GeneratedSsrc(0x8765_4321),
+    )
+
+
 def _source_registration() -> str:
 
     return _envelope(
@@ -561,6 +586,28 @@ def _acknowledgement(flush: StreamFlush, *, session_id: str = "session-001") -> 
                 "request_id": str(flush.request_id),
                 "target_generated_ssrc": int(flush.target_generated_ssrc),
                 "disposition": "APPLIED",
+            },
+            trace_id="trace-source-001",
+            seq=29,
+        )
+    )
+
+
+def _finished_state(replacement: OutputLease) -> str:
+    return _envelope(
+        _EnvelopeFields(
+            event_type="media.stream.state",
+            source="sound",
+            turn_id=str(replacement.turn_id),
+            segment_id=str(replacement.segment_id),
+            data={
+                "command_id": (
+                    f"rtp-{replacement.stream.stream_id}-"
+                    f"{int(replacement.cancellation_epoch)}"
+                ),
+                "stream_id": replacement.stream.stream_id,
+                "state": "finished",
+                "cancellation_epoch": int(replacement.cancellation_epoch),
             },
             trace_id="trace-source-001",
             seq=29,

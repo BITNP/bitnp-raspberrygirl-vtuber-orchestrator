@@ -141,7 +141,7 @@ class RtpHub:
         ) = None
 
         self._replacement_admit_callback: (
-            Callable[[StreamFlush], Awaitable[bool]] | None
+            Callable[[OutputLease, StreamFlush], Awaitable[bool]] | None
         ) = None
 
         # Production replacement exchanges are owned by SessionRuntime tasks.
@@ -196,7 +196,7 @@ class RtpHub:
     def set_replacement_callbacks(
         self,
         request_flush: Callable[[StreamFlush], Awaitable[None]],
-        admit_replacement: Callable[[StreamFlush], Awaitable[bool]],
+        admit_replacement: Callable[[OutputLease, StreamFlush], Awaitable[bool]],
     ) -> None:
         self._replacement_flush_callback = request_flush
         self._replacement_admit_callback = admit_replacement
@@ -330,7 +330,7 @@ class RtpHub:
                         ),
                     )
                     result = await self._admit_replacement_if_current(
-                        stream, flush, task_id
+                        stream, replacement, flush, task_id
                     )
                     if result is None and output_fence.commit_replacement(
                         stream, replacement.cancellation_epoch
@@ -353,12 +353,16 @@ class RtpHub:
         return None
 
     async def _admit_replacement_if_current(
-        self, stream: StreamKey, flush: StreamFlush, task_id: TaskId | None
+        self,
+        stream: StreamKey,
+        replacement: OutputLease,
+        flush: StreamFlush,
+        task_id: TaskId | None,
     ) -> str | None:
         if not self._replacement_task_current(stream, task_id):
             return "sound_flush_stale_before_admission"
         admit = self._replacement_admit_callback
-        if admit is None or not await admit(flush):
+        if admit is None or not await admit(replacement, flush):
             return "sound_flush_admission_rejected"
         if not self._complete_replacement_task(stream, task_id):
             return "sound_flush_result_rejected"

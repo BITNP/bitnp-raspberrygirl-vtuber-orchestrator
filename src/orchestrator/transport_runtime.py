@@ -70,6 +70,8 @@ from orchestrator.transport_hub import (
 
 _LOGGER = logging.getLogger(__name__)
 
+_PLAYBACK_FINISH_REDUCED_LOG = "playback_finish_reduced session=%s stream=%s turn=%s epoch=%d phase=%s outcome=%s"  # noqa: E501
+
 if TYPE_CHECKING:
     from websockets.http11 import Request, Response
 
@@ -462,8 +464,10 @@ class TransportRuntime:
     async def advance_flush_admission(self) -> None:
         await self._control_dispatch.advance_flush_admission()
 
-    async def admit_replacement(self, flush: StreamFlush) -> bool:
-        return await self._control_dispatch.admit_replacement(flush)
+    async def admit_replacement(
+        self, replacement: OutputLease, flush: StreamFlush
+    ) -> bool:
+        return await self._control_dispatch.admit_replacement(replacement, flush)
 
     async def begin_onsite_replacement(
         self, stream: StreamKey, segment_id: SegmentId
@@ -527,8 +531,23 @@ class TransportRuntime:
         """Advance the logical turn only after Sound released its exact lease."""
         session_runtime = self._runtime_for_session(stream.session_id)
         if session_runtime is None:
+            _LOGGER.debug(
+                "playback_finish_reduced session=%s stream=%s outcome=session_missing",
+                stream.session_id,
+                stream.stream_id,
+            )
             return
-        _ = session_runtime.response_playback_finished()
+        accepted = session_runtime.response_playback_finished()
+        state = session_runtime.response_turn_state
+        _LOGGER.debug(
+            _PLAYBACK_FINISH_REDUCED_LOG,
+            stream.session_id,
+            stream.stream_id,
+            state.turn_id,
+            state.epoch,
+            state.phase,
+            "accepted" if accepted else "rejected",
+        )
 
     @property
     def flush_failures(self) -> tuple[FlushFailure, ...]:

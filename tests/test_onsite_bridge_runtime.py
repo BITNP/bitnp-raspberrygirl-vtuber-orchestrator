@@ -13,7 +13,7 @@ from orchestrator.media_adapters import SynthesizedAudio
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.response_coordinator import run_blocking_provider
-from orchestrator.scheduler_reflex import SchedulerOutputFence
+from orchestrator.scheduler_reflex import OutputLease, SchedulerOutputFence
 from orchestrator.sessions import SessionScheduler
 from orchestrator.streaming_contracts import (
     CancellationEpoch,
@@ -574,7 +574,7 @@ async def _response_output_epoch_proof() -> None:
     async def acknowledge_flush(flush: StreamFlush) -> None:
         assert fence.acknowledge(FlushAcknowledgement.from_flush(flush))
 
-    async def admit_flush(_flush: StreamFlush) -> bool:
+    async def admit_flush(_replacement: OutputLease, _flush: StreamFlush) -> bool:
         return True
 
     hub.set_replacement_callbacks(acknowledge_flush, admit_flush)

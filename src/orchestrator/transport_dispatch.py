@@ -38,6 +38,8 @@ from orchestrator.transport_control import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from orchestrator.scheduler_reflex import OutputLease
+
 _CODEC = {
     "format": "L16",
     "clock_rate_hz": 16_000,
@@ -46,6 +48,10 @@ _CODEC = {
     "samples_per_frame": 320,
 }
 _LOGGER = logging.getLogger(__name__)
+
+_STREAM_STATE_REJECTED_LOG = "control_stream_state_rejected session=%s stream=%s state=%s command=%s epoch=%s expected=%s outcome=lease_mismatch"  # noqa: E501
+_PLAYBACK_FINISH_FENCED_LOG = "playback_finish_fenced session=%s stream=%s turn=%s segment=%s epoch=%s outcome=%s"  # noqa: E501
+_STREAM_END_SKIPPED_LOG = "control_stream_end_skipped session=%s stream=%s epoch=%d expected=%s outcome=stale"  # noqa: E501
 
 
 class ControlPeer(Protocol):
@@ -140,6 +146,25 @@ class TransportControlDispatch:
         """Receive only physically verified playback completion events."""
         self._playback_finished_callback = callback
 
+    def _accept_stream_state_lease(self, event: StreamState) -> bool:
+        stream = StreamKey(event.session_id, event.stream_id)
+        expected_lease = self._leases.get(stream)
+        accepted = event.cancellation_epoch is not None and expected_lease == (
+            event.command_id,
+            int(event.cancellation_epoch),
+        )
+        if not accepted:
+            _LOGGER.debug(
+                _STREAM_STATE_REJECTED_LOG,
+                event.session_id,
+                event.stream_id,
+                event.state,
+                event.command_id,
+                event.cancellation_epoch,
+                expected_lease,
+            )
+        return accepted
+
     async def register(  # noqa: C901, PLR0911, PLR0912
         self, raw_message: str, peer_ip: str, connection: ControlPeer
     ) -> None:
@@ -157,14 +182,10 @@ class TransportControlDispatch:
                 or event.input_epoch != self._hub.input_epoch(evidence_stream)
             ):
                 return
-        if isinstance(event, StreamState):
-            stream = StreamKey(event.session_id, event.stream_id)
-            if (
-                event.cancellation_epoch is None
-                or self._leases.get(stream)
-                != (event.command_id, int(event.cancellation_epoch))
-            ):
-                return
+        if isinstance(event, StreamState) and not self._accept_stream_state_lease(
+            event
+        ):
+            return
 
         self._hub.register_control(event, peer_ip, owner)
 
@@ -283,6 +304,15 @@ class TransportControlDispatch:
             segment_id=segment_id,
             cancellation_epoch=cancellation_epoch,
         )
+        _LOGGER.debug(
+            _PLAYBACK_FINISH_FENCED_LOG,
+            stream.session_id,
+            stream.stream_id,
+            turn_id,
+            segment_id,
+            cancellation_epoch,
+            "accepted" if finished else "rejected",
+        )
         if finished:
             callback = self._playback_finished_callback
             if callback is not None:
@@ -311,8 +341,14 @@ class TransportControlDispatch:
 
         await self._deliver_flushes()
 
-    async def admit_replacement(self, flush: StreamFlush) -> bool:
-        if not self._flush_admission.admitted(flush):
+    async def admit_replacement(
+        self, replacement: OutputLease, flush: StreamFlush
+    ) -> bool:
+        if (
+            replacement.stream != flush.stream
+            or replacement.cancellation_epoch != flush.cancellation_epoch
+            or not self._flush_admission.admitted(flush)
+        ):
             return False
 
         sink = self._sinks.get(flush.stream)
@@ -327,7 +363,9 @@ class TransportControlDispatch:
                 self._hub.output_ssrc(flush.stream, int(flush.cancellation_epoch)),
                 self._rtp_sender_endpoint,
                 self._hub.correlation(flush.stream),
-                flush,
+                epoch=int(replacement.cancellation_epoch),
+                turn_id=replacement.turn_id,
+                segment_id=replacement.segment_id,
             )
         )
         self._leases[flush.stream] = (
@@ -350,6 +388,16 @@ class TransportControlDispatch:
         correlation = self._hub.correlation(stream)
         if sink is None or correlation is None:
             return
+        command = (_media_command_id(stream, epoch), epoch)
+        if self._leases.get(stream) != command:
+            _LOGGER.debug(
+                _STREAM_END_SKIPPED_LOG,
+                stream.session_id,
+                stream.stream_id,
+                epoch,
+                self._leases.get(stream),
+            )
+            return
         await sink.connection.send(
             _stream_end_envelope(
                 stream,
@@ -358,7 +406,6 @@ class TransportControlDispatch:
                 correlation,
             )
         )
-        self._leases[stream] = (_media_command_id(stream, epoch), epoch)
         _LOGGER.debug(
             "control_sent event=media.stream.end session=%s stream=%s epoch=%d",
             stream.session_id,
@@ -504,6 +551,7 @@ class TransportControlDispatch:
                 self._hub.output_ssrc(stream),
                 self._rtp_sender_endpoint,
                 correlation,
+                epoch=0,
             )
         )
         self._leases[stream] = (_media_command_id(stream, 0), 0)
@@ -615,26 +663,23 @@ def _stream_command_envelope(  # noqa: PLR0913
     ssrc: int,
     rtp_sender_endpoint: tuple[str, int],
     correlation: EnvelopeCorrelation | None,
-    flush: StreamFlush | None = None,
-    epoch: int | None = None,
+    *,
+    epoch: int,
+    turn_id: TurnId | None = None,
+    segment_id: SegmentId | None = None,
 ) -> str:
     if correlation is None:
         message = "stream correlation is required"
 
         raise RuntimeError(message)
 
-    cancellation_epoch = (
-        int(flush.cancellation_epoch)
-        if flush is not None
-        else (0 if epoch is None else epoch)
-    )
     data: dict[str, object] = {
-        "command_id": _media_command_id(stream, cancellation_epoch),
+        "command_id": _media_command_id(stream, epoch),
         "stream_id": stream.stream_id,
         "start_rtp_timestamp": 96_000,
         "ssrc": ssrc,
         "codec": _CODEC,
-        "cancellation_epoch": cancellation_epoch,
+        "cancellation_epoch": epoch,
         "rtp_sender_endpoint": {
             "host": rtp_sender_endpoint[0],
             "port": rtp_sender_endpoint[1],
@@ -644,8 +689,8 @@ def _stream_command_envelope(  # noqa: PLR0913
     return _envelope(
         event_type="media.stream.command",
         correlation=correlation,
-        turn_id=str(flush.turn_id) if flush is not None else None,
-        segment_id=str(flush.segment_id) if flush is not None else None,
+        turn_id=None if turn_id is None else str(turn_id),
+        segment_id=None if segment_id is None else str(segment_id),
         data=data,
     )
 

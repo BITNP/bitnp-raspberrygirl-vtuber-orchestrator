@@ -449,6 +449,48 @@ def test_output_announcement_waits_for_sound_ready_before_admitting_rtp() -> Non
     asyncio.run(verify_ready_gate())
 
 
+def test_stale_stream_end_cannot_replace_current_transport_lease() -> None:
+    async def verify_stale_end() -> None:
+        hub = RtpHub()
+        dispatcher = TransportControlDispatch(hub)
+        source = RecordingControlPeer()
+        sink = RecordingControlPeer()
+        stream = StreamKey(SESSION_ID, STREAM_ID)
+
+        await dispatcher.register(_sink_registration(), SINK_PEER[0], sink)
+        await dispatcher.register(_source_registration(), SOURCE_PEER[0], source)
+
+        first = asyncio.create_task(dispatcher.announce_output(stream, 0))
+        await asyncio.sleep(0)
+        await dispatcher.register(_sink_ready(), SINK_PEER[0], sink)
+        await first
+
+        replacement = asyncio.create_task(dispatcher.announce_output(stream, 1))
+        await asyncio.sleep(0)
+        await dispatcher.register(_sink_ready(), SINK_PEER[0], sink)
+        await replacement
+
+        await dispatcher.finish_generated_stream(stream, 0)
+        await dispatcher.finish_generated_stream(stream, 1)
+
+        event_types = [
+            message["event_type"]
+            for raw_message in sink.messages
+            if isinstance(message := parse_json_value(raw_message), dict)
+        ]
+        assert event_types.count("media.stream.end") == 1
+        final_message = parse_json_value(sink.messages[-1])
+        assert isinstance(final_message, dict)
+        assert final_message["data"] == {
+            "command_id": f"rtp-{STREAM_ID}-1",
+            "stream_id": STREAM_ID,
+            "cancellation_epoch": 1,
+            "ssrc": hub.output_ssrc(stream, 1),
+        }
+
+    asyncio.run(verify_stale_end())
+
+
 def test_finished_playback_never_requires_mic_epoch_advance() -> None:
     route = _RouteWithoutEpochAdvance()
     dispatcher = TransportControlDispatch(route)
