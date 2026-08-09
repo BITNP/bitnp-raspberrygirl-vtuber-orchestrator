@@ -77,16 +77,13 @@ TRUSTED_LAN_TOKEN=<comments-role-token>
 {
   "orchestrator_ws_url": "ws://orchestrator.lan:8443/control",
   "orchestrator_tls_ca_path": "",
-  "orchestrator_session_id": "session-onsite-001"
+  "orchestrator_session_id": "session-onsite-001",
+  "orchestrator_control_token": "<frontend-role-token>",
+  "allow_insecure_ws": true
 }
 ```
 
-进程环境：
-
-```dotenv
-FRONTEND_ALLOW_LOOPBACK_WS=true
-ORCHESTRATOR_FRONTEND_CONTROL_TOKEN=<frontend-role-token>
-```
+Frontend 的 URL、CA、session、明文开关和角色 token 全部从此文件读取。包含实际 token 的部署文件必须位于版本控制之外并限制读取权限；`BITNP_FRONTEND_CONFIG_PATH` 仅用于指定该文件的位置。
 
 ## 启动与验证
 
@@ -105,6 +102,6 @@ Mic 收到 `mic.input.ready` 后才开始采集。Mic 不发送 RTP；Orchestrat
 | `config field is blank: ORCHESTRATOR_MIC_CONTROL_TOKEN` | 明文模式仍要求五个独立角色 token；补齐 Orchestrator token。 |
 | `ORCHESTRATOR_WS_URL: must use WSS unless trusted-LAN insecure WS is explicitly enabled` | 在对应客户端设置 `MIC_`、`SOUND_` 或 `COMMENTS_ALLOW_LOOPBACK_WS=true`。 |
 | WebSocket `HTTP 401` | 客户端 `TRUSTED_LAN_TOKEN` 与 Orchestrator 对应角色 token 不匹配。 |
-| Frontend `unsafe_credential_transport` | 设置 `FRONTEND_ALLOW_LOOPBACK_WS=true`，并提供 Frontend 专属 token。 |
+| Frontend `unsafe_credential_transport` | 在 `frontend-config.json` 设置 `allow_insecure_ws: true`，并填写 Frontend 专属 token。 |
 
 切回安全部署时，把所有 `*_ALLOW_LOOPBACK_WS` 设为 `false`，使用 `wss://`、TLS certificate/key 和 CA bundle。角色 token 在两种模式下都不能省略或复用。
