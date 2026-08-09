@@ -65,7 +65,7 @@ def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
 
     bridge = build_onsite_bridge(
         config,
-        voice="raspberry",
+        voice="",
         ref_audio="file:///voice.wav",
         ref_text="reference",
     )
@@ -77,6 +77,38 @@ def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
     assert bridge.llm.reasoning_dialect == "deepseek"
     assert bridge.llm.brain_model == "brain-model"
     assert bridge.llm.maintenance_model == "maintenance-model"
+    assert bridge.voice == ""
+
+
+@pytest.mark.parametrize(
+    ("ref_audio", "ref_text"),
+    [("", "reference"), ("file:///voice.wav", "")],
+)
+def test_build_onsite_bridge_requires_complete_vllm_voice_clone_reference(
+    ref_audio: str, ref_text: str
+) -> None:
+    config = load_config_from_env(
+        {
+            "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
+            "ORCHESTRATOR_LLM_ENDPOINT": "https://llm.example.test/v1",
+            "ORCHESTRATOR_LLM_MODEL": "onsite-model",
+            "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
+            "ORCHESTRATOR_TTS_PROVIDER": "vllm_omni",
+            "ORCHESTRATOR_TTS_ENDPOINT": "https://tts.example.test/v1",
+            "ORCHESTRATOR_TTS_MODEL": "tts-model",
+        }
+    )
+
+    with pytest.raises(OnsiteBridgeConfigError) as error:
+        _ = build_onsite_bridge(
+            config,
+            voice="",
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+        )
+
+    assert error.value.field_name == "voice_reference"
 
 
 def test_build_onsite_bridge_propagates_ca_path_to_http_provider_adapters(

@@ -453,7 +453,7 @@ def build_onsite_bridge(
         raise OnsiteBridgeConfigError(field_name="llm_provider_or_llm_configuration")
 
     if config.tts_provider == "vllm_omni" and (
-        voice.strip() == "" or ref_audio.strip() == "" or ref_text.strip() == ""
+        ref_audio.strip() == "" or ref_text.strip() == ""
     ):
         raise OnsiteBridgeConfigError(field_name="voice_reference")
 
