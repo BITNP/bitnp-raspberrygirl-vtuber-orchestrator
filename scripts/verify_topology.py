@@ -249,7 +249,12 @@ def _environment_errors(environments: dict[str, dict[str, str]]) -> list[str]:
 
     rtp_port = orchestrator.get("ORCHESTRATOR_TRANSPORT_ADVERTISED_RTP_PORT", "")
 
-    expected_url = _control_url(host, control_port)
+    insecure_ws = (
+        orchestrator.get("ORCHESTRATOR_TRANSPORT_ALLOW_LOOPBACK_WS", "false").lower()
+        == "true"
+    )
+
+    expected_url = _control_url(host, control_port, insecure_ws)
 
     found: list[str] = []
 
@@ -263,24 +268,33 @@ def _environment_errors(environments: dict[str, dict[str, str]]) -> list[str]:
 
     if mic.get("ORCHESTRATOR_WS_URL") != expected_url:
         found.append(
-            "mic: control endpoint must be the advertised Orchestrator WSS URL"
+            "mic: control endpoint must be the advertised Orchestrator URL"
         )
 
     if sound.get("ORCHESTRATOR_WS_URL") != expected_url:
         found.append(
-            "sound: control endpoint must be the advertised Orchestrator WSS URL"
+            "sound: control endpoint must be the advertised Orchestrator URL"
         )
 
     if comments.get("ORCHESTRATOR_WS_URL") != expected_url:
         found.append(
-            "comments: control endpoint must be the advertised Orchestrator WSS URL"
+            "comments: control endpoint must be the advertised Orchestrator URL"
         )
 
-    found.extend(
-        f"{service}: ORCHESTRATOR_TLS_CA_PATH must name a PEM CA bundle"
-        for service, values in environments.items()
-        if values.get("ORCHESTRATOR_TLS_CA_PATH", "") == ""
-    )
+    if insecure_ws:
+        for service, values, flag in (
+            ("mic", mic, "MIC_ALLOW_LOOPBACK_WS"),
+            ("sound", sound, "SOUND_ALLOW_LOOPBACK_WS"),
+            ("comments", comments, "COMMENTS_ALLOW_LOOPBACK_WS"),
+        ):
+            if values.get(flag, "false").lower() != "true":
+                found.append(f"{service}: {flag} must be true for trusted-LAN WS")
+    else:
+        found.extend(
+            f"{service}: ORCHESTRATOR_TLS_CA_PATH must name a PEM CA bundle"
+            for service, values in environments.items()
+            if values.get("ORCHESTRATOR_TLS_CA_PATH", "") == ""
+        )
 
     mic_session_id = mic.get("BITNP_SESSION_ID", "")
 
@@ -299,13 +313,17 @@ def _environment_errors(environments: dict[str, dict[str, str]]) -> list[str]:
     return found
 
 
-def _control_url(host: str, port: str) -> str:
+def _control_url(host: str, port: str, insecure_ws: bool) -> str:
     if host == "" or port == "":
         return ""
 
-    authority = host if port == "443" else f"{host}:{port}"
+    default_port = "80" if insecure_ws else "443"
 
-    return f"wss://{authority}/control"
+    authority = host if port == default_port else f"{host}:{port}"
+
+    scheme = "ws" if insecure_ws else "wss"
+
+    return f"{scheme}://{authority}/control"
 
 
 def _systemd_errors(systemd_root: Path) -> list[str]:

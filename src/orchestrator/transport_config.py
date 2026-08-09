@@ -54,8 +54,6 @@ DEFAULT_ADVERTISED_CONTROL_PORT: Final = "443"
 
 DEFAULT_ADVERTISED_RTP_PORT: Final = "5004"
 
-LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "::1", "localhost"})
-
 MAX_UDP_PORT: Final = 65_535
 AES_256_KEY_BYTES: Final = 32
 
@@ -105,7 +103,7 @@ class TransportConfig:
 
 
 def load_transport_config_from_env(env: Mapping[str, str]) -> TransportConfig:
-    loopback_ws = _parse_loopback_ws(env.get(LOOPBACK_WS_KEY))
+    insecure_ws = _parse_insecure_ws(env.get(LOOPBACK_WS_KEY))
 
     control_bind_host = _require_text(
         env.get(CONTROL_BIND_HOST_KEY, DEFAULT_CONTROL_BIND_HOST), CONTROL_BIND_HOST_KEY
@@ -117,14 +115,7 @@ def load_transport_config_from_env(env: Mapping[str, str]) -> TransportConfig:
 
     advertised_host = _require_text(env.get(ADVERTISED_HOST_KEY), ADVERTISED_HOST_KEY)
 
-    if loopback_ws:
-        _require_loopback_host(control_bind_host, CONTROL_BIND_HOST_KEY)
-
-        _require_loopback_host(udp_bind_host, RTP_BIND_HOST_KEY)
-
-        _require_loopback_host(advertised_host, ADVERTISED_HOST_KEY)
-
-    role_tokens = _parse_role_tokens(env, loopback_ws)
+    role_tokens = _parse_role_tokens(env)
 
     return TransportConfig(
         control_bind_host=control_bind_host,
@@ -145,13 +136,13 @@ def load_transport_config_from_env(env: Mapping[str, str]) -> TransportConfig:
             env.get(ADVERTISED_RTP_PORT_KEY, DEFAULT_ADVERTISED_RTP_PORT),
             ADVERTISED_RTP_PORT_KEY,
         ),
-        control_scheme="ws" if loopback_ws else "wss",
+        control_scheme="ws" if insecure_ws else "wss",
         control_token=None,
         tls_cert_path=_parse_tls_path(
-            env.get(TLS_CERT_PATH_KEY), TLS_CERT_PATH_KEY, loopback_ws
+            env.get(TLS_CERT_PATH_KEY), TLS_CERT_PATH_KEY, insecure_ws
         ),
         tls_key_path=_parse_tls_path(
-            env.get(TLS_KEY_PATH_KEY), TLS_KEY_PATH_KEY, loopback_ws
+            env.get(TLS_KEY_PATH_KEY), TLS_KEY_PATH_KEY, insecure_ws
         ),
         role_tokens=role_tokens,
         max_sessions=_parse_positive_int(
@@ -202,7 +193,7 @@ def _parse_probability(value: str | None, field_name: str, default: float) -> fl
     return parsed
 
 
-def _parse_loopback_ws(value: str | None) -> bool:
+def _parse_insecure_ws(value: str | None) -> bool:
     match "false" if value is None else value.strip().lower():
         case "false":
             return False
@@ -235,14 +226,7 @@ def _parse_port(value: str | None, field_name: str) -> int:
     return port
 
 
-def _require_loopback_host(host: str, field_name: str) -> None:
-    if host.lower() not in LOOPBACK_HOSTS:
-        raise ConfigParseError(field_name=field_name)
-
-
-def _parse_role_tokens(env: Mapping[str, str], loopback_ws: bool) -> RoleTokens:
-    if loopback_ws:
-        return RoleTokens()
+def _parse_role_tokens(env: Mapping[str, str]) -> RoleTokens:
     values = {
         key: TrustedLanToken(_require_text(env.get(key), key))
         for key in (
@@ -266,9 +250,9 @@ def _parse_role_tokens(env: Mapping[str, str], loopback_ws: bool) -> RoleTokens:
 
 
 def _parse_tls_path(
-    value: str | None, field_name: str, loopback_ws: bool
+    value: str | None, field_name: str, insecure_ws: bool
 ) -> Path | None:
-    if loopback_ws:
+    if insecure_ws:
         return None
 
     return Path(_require_text(value, field_name))

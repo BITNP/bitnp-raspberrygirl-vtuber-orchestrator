@@ -28,6 +28,10 @@ MISSING_CA_PATH_DEPLOYMENT: Final = (
     ROOT / "tests" / "fixtures" / "deployment" / "missing_ca_path"
 )
 
+TRUSTED_LAN_DEPLOYMENT: Final = (
+    ROOT / "tests" / "fixtures" / "deployment" / "trusted_lan"
+)
+
 
 def test_deployment_validator_rejects_direct_peer_endpoint(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -101,6 +105,17 @@ def test_deployment_validator_accepts_sanitized_fixture(
 
     assert exit_code == 0
 
+    assert "deployment topology accepted" in output
+
+
+def test_deployment_validator_accepts_authenticated_trusted_lan_ws(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    exit_code, output = _run(
+        monkeypatch, capsys, "--deployment-root", str(TRUSTED_LAN_DEPLOYMENT)
+    )
+
+    assert exit_code == 0
     assert "deployment topology accepted" in output
 
 
