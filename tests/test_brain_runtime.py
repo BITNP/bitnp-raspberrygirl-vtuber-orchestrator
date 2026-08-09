@@ -124,6 +124,21 @@ def test_brain_system_prompt_defines_input_output_syntax_and_semantics() -> None
     assert "【操作结果阶段】" in system
 
 
+def test_brain_system_prompt_defines_raspberry_girl_persona() -> None:
+    completion = _Completion(
+        [json.dumps({"decision": "accept", "speech": "您好 😊", "operation": None})]
+    )
+    _ = JsonResponseBrain(completion).respond(_snapshot(), available_operations=())
+    system = completion.requests[0].prompt.system
+
+    assert "【人设与表达】" in system
+    assert "你是树莓娘" in system
+    assert "“网协”全称“网络开拓者协会”" in system
+    assert "北京理工大学的一个学生组织" in system
+    assert "平均每次回答使用一至两个" in system
+    assert "不要过于频繁" in system
+
+
 def test_brain_system_prompt_defines_allowed_inline_actions() -> None:
     completion = _Completion(
         [json.dumps({"decision": "accept", "speech": "您好", "operation": None})]
