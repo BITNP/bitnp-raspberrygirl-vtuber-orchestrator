@@ -1,12 +1,12 @@
 import asyncio
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from orchestrator.brain_contracts import (
     AudienceInput,
     AudienceSource,
     BrainStateSnapshot,
 )
-from orchestrator.ids import SessionId, TraceId
+from orchestrator.ids import SessionId, TraceId, TurnId
 from orchestrator.intent_router import IntentRouter
 from orchestrator.response_contracts import BrainDecision, ResponseProposal
 from orchestrator.response_coordinator import AsyncResponseCoordinator
@@ -18,7 +18,14 @@ from orchestrator.sessions import (
     SchedulerEvent,
     StartTurn,
 )
-from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
+from orchestrator.task_registry import (
+    IdempotencyKey,
+    SchedulerTaskConfig,
+    TaskDeadlineMs,
+    TaskId,
+    TaskKind,
+    TaskRequest,
+)
 
 
 @dataclass
@@ -26,6 +33,7 @@ class _Brain:
     proposal: ResponseProposal
     started: asyncio.Event | None = None
     release: asyncio.Event | None = None
+    snapshots: list[BrainStateSnapshot] = field(default_factory=list)
 
     async def respond(
         self,
@@ -34,7 +42,8 @@ class _Brain:
         available_operations: tuple[dict[str, object], ...],
         observation: str | None = None,
     ) -> ResponseProposal:
-        _ = snapshot, available_operations, observation
+        _ = available_operations, observation
+        self.snapshots.append(snapshot)
         if self.started is not None:
             _ = self.started.set()
         if self.release is not None:
@@ -120,6 +129,42 @@ def test_discard_candidate_does_not_create_turn_or_advance_epoch() -> None:
         assert not outcome.accepted
         assert runtime.scheduler.snapshot.revision == revision
         assert runtime.cancellation_epoch == epoch
+
+    asyncio.run(scenario())
+
+
+def test_candidate_snapshot_omits_succeeded_tasks() -> None:
+    async def scenario() -> None:
+        brain = _Brain(ResponseProposal(BrainDecision.ACCEPT, "回答", None))
+        runtime = _runtime(brain)
+        for task_id in ("succeeded-task", "active-task"):
+            request = TaskRequest(
+                task_id=TaskId(task_id),
+                session_id=SessionId("session-1"),
+                turn_id=TurnId("turn-existing"),
+                parent_task_id=None,
+                deadline_ms=TaskDeadlineMs(runtime.clock() + 30_000),
+                snapshot_revision=runtime.scheduler.snapshot.revision,
+                idempotency_key=IdempotencyKey(task_id),
+                kind=TaskKind.INTERACTIVE,
+            )
+            _ = runtime.task_registry.register(request)
+        _ = runtime.task_registry.complete(TaskId("succeeded-task"))
+
+        coordinator = runtime.async_response_coordinator
+        assert coordinator is not None
+        outcome = await runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+            coordinator,
+            _input(1),
+            _correlation(1),
+            lambda _proposal, _snapshot: asyncio.sleep(
+                0,
+                result=RuntimeOutcome(accepted=True, correlation=_correlation(1)),
+            ),
+        )
+
+        assert outcome.accepted
+        assert [task.task_id for task in brain.snapshots[0].tasks] == ["active-task"]
 
     asyncio.run(scenario())
 

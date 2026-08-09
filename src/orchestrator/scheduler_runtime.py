@@ -1175,6 +1175,7 @@ class SessionRuntime:
                     cancellation_reason=record.cancellation_reason,
                 )
                 for record in self.task_registry.records
+                if record.state is not TaskState.SUCCEEDED
             ),
             context_revision=int(context.generation),
             memory_revision=int(memory.revision),
