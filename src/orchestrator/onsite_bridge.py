@@ -6,6 +6,7 @@ import wave
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from threading import Lock
 from time import perf_counter
 from typing import TYPE_CHECKING, Final, cast
 
@@ -314,6 +315,23 @@ class OnsiteExplainerBridge:
         received_chunks: asyncio.Queue[Pcm16leChunk | Exception | None] = asyncio.Queue(
             maxsize=_STREAMING_TTS_CHUNK_QUEUE_CAPACITY
         )
+        synthesis_lock = Lock()
+
+        def next_chunk() -> Pcm16leChunk | None:
+            with synthesis_lock:
+                return next(synthesis, None)
+
+        def close_synthesis() -> None:
+            close = cast(
+                "Callable[[], object] | None", getattr(synthesis, "close", None)
+            )
+            if close is None:
+                return
+            # A cancelled asyncio task cannot stop a worker thread already inside
+            # ``next``. Serialize close with iteration so generator teardown never
+            # races the provider's active SSE read in that thread.
+            with synthesis_lock:
+                _ = close()
 
         async def receive_chunks() -> None:
             pending_next: asyncio.Task[Pcm16leChunk | None] | None = None
@@ -322,7 +340,7 @@ class OnsiteExplainerBridge:
             try:
                 while not cancellation.cancelled:
                     pending_next = asyncio.create_task(
-                        run_blocking_provider(next, synthesis, None)
+                        run_blocking_provider(next_chunk)
                     )
                     try:
                         chunk = await asyncio.shield(pending_next)
@@ -404,11 +422,7 @@ class OnsiteExplainerBridge:
                 _ = receiver_task.cancel()
             with suppress(asyncio.CancelledError, OSError, ValueError):
                 _ = await asyncio.shield(receiver_task)
-            close = cast(
-                "Callable[[], object] | None", getattr(synthesis, "close", None)
-            )
-            if close is not None:
-                _ = await run_blocking_provider(close)
+            await run_blocking_provider(close_synthesis)
         if not committed or output_epoch is None:
             return False
         await self.output_finished(stream, output_epoch)
