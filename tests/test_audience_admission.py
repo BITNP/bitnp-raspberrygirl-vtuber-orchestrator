@@ -8,6 +8,7 @@ from orchestrator.brain_contracts import (
 )
 from orchestrator.ids import SessionId, TraceId, TurnId
 from orchestrator.intent_router import IntentRouter
+from orchestrator.interactions import CommentProposal
 from orchestrator.response_contracts import BrainDecision, ResponseProposal
 from orchestrator.response_coordinator import AsyncResponseCoordinator
 from orchestrator.runtime_contracts import RuntimeOutcome
@@ -77,7 +78,7 @@ class _OrderedBrain:
         return ResponseProposal(BrainDecision.ACCEPT, "回答", None)
 
 
-def _runtime(brain: _Brain) -> SessionRuntime:
+def _runtime(brain: _Brain | _OrderedBrain) -> SessionRuntime:
     runtime = SessionRuntime.create(
         session_id=SessionId("session-1"),
         turn_id_prefix="turn",
@@ -404,5 +405,27 @@ def test_asr_clarification_reply_cannot_create_turn() -> None:
         assert runtime.observables.rejections[-1].reason == (
             "brain_asr_clarification_rejected"
         )
+
+    asyncio.run(scenario())
+
+
+def test_queued_comments_use_revision_at_evaluation_after_prior_turn_commits() -> None:
+    async def scenario() -> None:
+        started, release = asyncio.Event(), asyncio.Event()
+        brain = _OrderedBrain(started, release, [])
+        runtime = _runtime(brain)
+        first = asyncio.create_task(
+            runtime.receive_comment_async(CommentProposal("介绍产品", _correlation(1)))
+        )
+        _ = await started.wait()
+        second = asyncio.create_task(
+            runtime.receive_comment_async(CommentProposal("介绍价格", _correlation(2)))
+        )
+        await asyncio.sleep(0)
+        release.set()
+        outcomes = await asyncio.gather(first, second)
+        assert brain.calls == [1, 2]
+        assert all(outcome.accepted for outcome in outcomes)
+        assert outcomes[0].turn_id != outcomes[1].turn_id
 
     asyncio.run(scenario())

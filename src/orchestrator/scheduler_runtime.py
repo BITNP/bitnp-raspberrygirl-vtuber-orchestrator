@@ -964,7 +964,6 @@ class SessionRuntime:
             self._pending_correlations.discard(correlation)
             return self._reject(correlation, prebrain_rejection)
         result = asyncio.get_running_loop().create_future()
-        expected_revision = self.scheduler.snapshot.revision
         local_received_at_ms = self.clock()
         was_playing_1000ms_ago = (
             audience_input.source is BrainAudienceSource.ASR
@@ -977,7 +976,6 @@ class SessionRuntime:
                 coordinator,
                 audience_input,
                 correlation,
-                expected_revision,
                 was_playing_1000ms_ago,
                 admission,
                 admission_valid,
@@ -1018,7 +1016,6 @@ class SessionRuntime:
         coordinator: AsyncResponseCoordinator,
         audience_input: BrainAudienceInput,
         correlation: EventCorrelation,
-        expected_revision: int,
         was_playing_1000ms_ago: bool,
         admission: Callable[
             [ResponseProposal, BrainStateSnapshot],
@@ -1098,7 +1095,7 @@ class SessionRuntime:
             self._ended
             or str(correlation.session_id) != str(self.scheduler.snapshot.session_id)
             or correlation in self._correlations
-            or self.scheduler.snapshot.revision != expected_revision
+            or self.scheduler.snapshot.revision != snapshot.revision
             or not admission_valid()
         ):
             return self._reject(correlation, "audience_admission_stale")

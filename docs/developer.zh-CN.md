@@ -131,3 +131,5 @@ uv run mic-stream
 ```
 
 该链路由 Mic 产生 ASR final，Orchestrator 经单一 Brain 和 TTS 后将生成的 L16 RTP 交给 Sound。它不会转发原始 Mic RTP，Frontend 不参与该音频部署。
+
+受众队列中的输入在出队并构建 Brain 快照时确定 revision，前序输入正常提交不会使排队输入失效。Brain 调用期间若 revision 改变，或连接所有权、会话、重放校验失效，仍拒绝该结果。
