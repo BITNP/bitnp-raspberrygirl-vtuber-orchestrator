@@ -30,7 +30,6 @@ from orchestrator.control_ingress import (
 )
 from orchestrator.control_roles import (
     MAX_CONTROL_FRAME_BYTES,
-    ROLE_SOURCES,
     SESSION_ADMISSION_EVENTS,
     PeerRole,
     role_allows,
@@ -623,10 +622,6 @@ class TransportRuntime:
 
         authorization = _connection_authorization(connection)
         role = self._config.role_tokens.resolve(authorization)
-        legacy_authenticated = (
-            self._config.control_token is not None
-            and authorization == f"Bearer {self._config.control_token}"
-        )
         state = _ControlPeerState(role, id(connection), peer_ip)
         self._control_peers[id(connection)] = state
 
@@ -656,10 +651,6 @@ class TransportRuntime:
                             peer_ip,
                         )
                         continue
-                    if state.role is None and (
-                        self._config.control_scheme == "ws" or legacy_authenticated
-                    ):
-                        state.role = _role_for_source(source)
                     if state.role is None or not role_allows(
                         state.role, source, event_type
                     ):
@@ -1293,14 +1284,7 @@ async def _listen_control(
     def authorize(connection: ControlConnection, request: Request) -> Response | None:
         authorization = request.headers.get("Authorization")
 
-        if (
-            config.role_tokens.resolve(authorization) is not None
-            or (config.control_scheme == "ws" and authorization is None)
-            or (
-                config.control_token is not None
-                and authorization == f"Bearer {config.control_token}"
-            )
-        ):
+        if config.role_tokens.resolve(authorization) is not None:
             return None
 
         return connection.respond(HTTPStatus.UNAUTHORIZED, "Unauthorized\n")
@@ -1362,7 +1346,7 @@ def _session_has_active_work(runtime: SessionRuntime) -> bool:
 
 
 def _comment_ingress_config(config: TransportConfig) -> CommentIngressConfig:
-    token = config.control_token
+    token = config.role_tokens.comments
 
     credential = (
         None
@@ -1408,17 +1392,6 @@ def _control_envelope(raw_message: str) -> dict[str, JsonValue] | None:
     except JsonBoundaryError:
         return None
     return value if isinstance(value, dict) else None
-
-
-def _role_for_source(source: object) -> PeerRole | None:
-    return next(
-        (
-            role
-            for role, expected_source in ROLE_SOURCES.items()
-            if source == expected_source
-        ),
-        None,
-    )
 
 
 def _ssl_context(config: TransportConfig) -> ssl.SSLContext | None:

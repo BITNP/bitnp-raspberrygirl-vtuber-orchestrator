@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast, override
 
 import pytest
+from websockets.datastructures import Headers
+from websockets.http11 import Request, Response
 
+from orchestrator import transport_runtime
 from orchestrator.brain_contracts import (
     AudienceInput,
     AudienceSource,
@@ -16,6 +19,7 @@ from orchestrator.brain_contracts import (
 from orchestrator.caption_timeline import CaptionTimelineCommand
 from orchestrator.config import TrustedLanToken
 from orchestrator.control_ingress import PresentationResultControl
+from orchestrator.control_roles import RoleTokens
 from orchestrator.execution_envelope import ExecutionEnvelope
 from orchestrator.ids import ConnectionId, SessionId, TraceId
 from orchestrator.ids import SegmentId as AgentSegmentId
@@ -74,8 +78,6 @@ from orchestrator.transport_runtime import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
     from http import HTTPStatus
-
-    from websockets.http11 import Response
 
     from orchestrator.json_boundary import JsonValue
 
@@ -786,7 +788,10 @@ def test_control_connection_rejects_comments_without_response_coordinator() -> N
 
     foreign = _audience_comment("foreign-session", "trace-foreign", 8)
 
-    connection = _ControlConnection((valid, valid, "{", "not-control", foreign))
+    connection = _ControlConnection(
+        (valid, valid, "{", "not-control", foreign),
+        authorization="Bearer test-comments",
+    )
 
     # When: valid, replayed, malformed, non-media, and foreign frames share one loop.
 
@@ -1091,7 +1096,7 @@ def test_control_connection_rejects_mixed_roles_on_one_authenticated_connection(
 
     asyncio.run(runtime.handle_control(connection))
 
-    # Then: the first source binds the connection role and other roles are rejected.
+    # Then: the credential binds the connection role and other roles are rejected.
 
     assert session_runtime.interaction_ingress.reducer.presentation_state is None
 
@@ -1358,6 +1363,11 @@ def _loopback_config() -> TransportConfig:
         None,
         None,
         None,
+        role_tokens=RoleTokens(
+            mic=TrustedLanToken("test-mic"),
+            sound=TrustedLanToken("test-sound"),
+            comments=TrustedLanToken("test-comments"),
+        ),
     )
 
 
@@ -1372,9 +1382,10 @@ def _token_config() -> TransportConfig:
         8765,
         5004,
         "wss",
-        TrustedLanToken("transport-test-token"),
         None,
         None,
+        None,
+        role_tokens=RoleTokens(comments=TrustedLanToken("transport-test-token")),
     )
 
 
@@ -1396,3 +1407,88 @@ def _fake_control_listener(server: FakeControlServer) -> ControlListener:
         return server
 
     return listen
+
+
+@pytest.mark.parametrize("authorization", [None, "Bearer wrong", "Bearer legacy"])
+def test_ws_handshake_rejects_missing_invalid_and_legacy_credentials(
+    monkeypatch: pytest.MonkeyPatch, authorization: str | None
+) -> None:
+
+    config = replace(
+        _loopback_config(),
+        control_token=TrustedLanToken("legacy"),
+        role_tokens=RoleTokens(mic=TrustedLanToken("mic-test")),
+    )
+    responses: list[int] = []
+
+    class Peer(_ControlConnection):
+        @override
+        def respond(self, status: HTTPStatus, text: str) -> Response:
+
+            responses.append(int(status))
+            return Response(int(status), text, Headers())
+
+    async def serve(*args: object, **kwargs: object) -> FakeControlServer:
+        _ = args
+        authorize = cast(
+            "Callable[[_ControlConnection, Request], Response | None]",
+            kwargs["process_request"],
+        )
+        headers = Headers()
+        if authorization is not None:
+            headers["Authorization"] = authorization
+        assert authorize(Peer(()), Request("/", headers)) is not None
+        assert (
+            authorize(
+                Peer(()), Request("/", Headers({"Authorization": "Bearer mic-test"}))
+            )
+            is None
+        )
+        return FakeControlServer()
+
+    monkeypatch.setattr(transport_runtime, "serve", serve)
+
+    async def scenario() -> None:
+        runtime = TransportRuntime(
+            config, datagram_listener=_fake_datagram_listener(FakeDatagramTransport())
+        )
+        await runtime.start()
+        await runtime.close()
+
+    asyncio.run(scenario())
+    assert responses == [401]
+
+
+@pytest.mark.parametrize(
+    "authorization", [None, "Bearer wrong", "Bearer legacy", "Bearer test-comments"]
+)
+def test_control_handler_never_infers_mic_role_from_source(
+    authorization: str | None,
+) -> None:
+    async def scenario() -> None:
+        runtime = TransportRuntime(
+            replace(_loopback_config(), control_token=TrustedLanToken("legacy"))
+        )
+        runtime.set_session_runtime(
+            SessionRuntime.create(
+                session_id=SessionId(SESSION_ID),
+                turn_id_prefix="turn",
+                task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+            )
+        )
+        peer = _ControlConnection(
+            (_source_registration(),), authorization=authorization
+        )
+        await runtime.handle_control(peer)
+        assert peer.sent == []
+        authenticated = _ControlConnection(
+            (_source_registration(),), authorization="Bearer test-mic"
+        )
+        await runtime.handle_control(authenticated)
+        assert any(
+            json.loads(message)["event_type"] == "mic.input.ready"
+            for message in authenticated.sent
+        )
+        await runtime.close()
+
+    asyncio.run(scenario())

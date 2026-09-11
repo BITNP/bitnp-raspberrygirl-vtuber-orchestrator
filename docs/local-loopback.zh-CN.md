@@ -105,3 +105,5 @@ Mic 收到 `mic.input.ready` 后才开始采集。Mic 不发送 RTP；Orchestrat
 | Frontend `unsafe_credential_transport` | 在 `frontend-config.json` 设置 `allow_insecure_ws: true`，并填写 Frontend 专属 token。 |
 
 切回安全部署时，把所有 `*_ALLOW_LOOPBACK_WS` 设为 `false`，使用 `wss://`、TLS certificate/key 和 CA bundle。角色 token 在两种模式下都不能省略或复用。
+
+明文 WS 仅放宽传输加密要求，不放宽认证：握手与消息处理都必须验证角色专属 bearer token。缺失、错误或旧共享 token 均被拒绝，客户端自报的 `source` 不能授予角色。

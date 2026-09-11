@@ -6,6 +6,8 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from orchestrator.config import TrustedLanToken
+from orchestrator.control_roles import RoleTokens
 from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_runtime import ControlHandler, TransportRuntime
 
@@ -52,6 +54,8 @@ class _LiveControlConnection:
     message: str
 
     peer_ip: str
+
+    authorization: str
 
     opened: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -116,17 +120,19 @@ async def _disconnect_route_proof() -> None:
     await runtime.start()
 
     source = _LiveControlConnection(
-        _source_registration("stream-001"), "127.0.0.1"
+        _source_registration("stream-001"), "127.0.0.1", "Bearer test-mic"
     )
 
-    sink = _LiveControlConnection(_sink_registration("stream-001", 5006), "127.0.0.1")
+    sink = _LiveControlConnection(
+        _sink_registration("stream-001", 5006), "127.0.0.1", "Bearer test-sound"
+    )
 
     retained_source = _LiveControlConnection(
-        _source_registration("stream-002"), "127.0.0.1"
+        _source_registration("stream-002"), "127.0.0.1", "Bearer test-mic"
     )
 
     retained_sink = _LiveControlConnection(
-        _sink_registration("stream-002", 5007), "127.0.0.1"
+        _sink_registration("stream-002", 5007), "127.0.0.1", "Bearer test-sound"
     )
 
     source_task = asyncio.create_task(runtime.handle_control(source))
@@ -253,6 +259,11 @@ def _loopback_config() -> TransportConfig:
         None,
         None,
         None,
+        role_tokens=RoleTokens(
+            mic=TrustedLanToken("test-mic"),
+            sound=TrustedLanToken("test-sound"),
+            comments=TrustedLanToken("test-comments"),
+        ),
     )
 
 

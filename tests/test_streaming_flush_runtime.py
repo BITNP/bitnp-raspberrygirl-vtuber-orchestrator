@@ -6,7 +6,8 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from orchestrator.config import load_fake_config
+from orchestrator.config import TrustedLanToken, load_fake_config
+from orchestrator.control_roles import RoleTokens
 from orchestrator.ids import SessionId
 from orchestrator.json_boundary import parse_json_value
 from orchestrator.observability import OnsiteObservability
@@ -79,6 +80,8 @@ class _ControlServer:
 class _WssConnection:
 
     peer_ip: str
+
+    authorization: str
 
     incoming: asyncio.Queue[str | None] = field(default_factory=asyncio.Queue)
 
@@ -466,9 +469,9 @@ async def _registered_runtime(
 
     await runtime.start()
 
-    source = _WssConnection(peer_ip="192.0.2.10")
+    source = _WssConnection(peer_ip="192.0.2.10", authorization="Bearer test-mic")
 
-    sink = _WssConnection(peer_ip="192.0.2.11")
+    sink = _WssConnection(peer_ip="192.0.2.11", authorization="Bearer test-sound")
 
     source_task = asyncio.create_task(runtime.handle_control(source))
 
@@ -741,6 +744,11 @@ def _config() -> TransportConfig:
         None,
         None,
         None,
+        role_tokens=RoleTokens(
+            mic=TrustedLanToken("test-mic"),
+            sound=TrustedLanToken("test-sound"),
+            comments=TrustedLanToken("test-comments"),
+        ),
     )
 
 
