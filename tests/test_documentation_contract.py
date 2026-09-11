@@ -94,6 +94,7 @@ def test_documentation_tree_and_protocol_ownership_contract() -> None:
                 "raspberry_girl.tscn",
                 "tests/protocol_smoke.gd",
                 "tests/fixtures/frontend_test_ca.pem",
+                "tests/fixtures/runtime-config.json",
             "tests/fixtures/vtuber_control_commands.json",
             "tests/fixtures/vtuber_control_invalid.json",
         }
