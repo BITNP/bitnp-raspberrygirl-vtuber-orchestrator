@@ -7,6 +7,7 @@ import ssl
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, final
 
+import httpx
 import pytest
 
 from orchestrator import media_adapters
@@ -18,6 +19,7 @@ from orchestrator.llm import (
     VllmOmniTTSAdapter,
 )
 from orchestrator.pipeline_contracts import ASRAudienceEvent
+from orchestrator.provider_streaming import ProviderResponseError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -270,6 +272,56 @@ def test_aliyun_cosyvoice_streams_native_sse_pcm_without_openai_path(
             },
         }
     ]
+
+
+def test_aliyun_cosyvoice_logs_bounded_sse_error_detail(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    error_body = (
+        "id:1\n"
+        "event:result\n"
+        ":HTTP_STATUS/400\n"
+        'data:{"request_id":"request-test","code":"InvalidParameter",'
+        '"message":"[cosyvoice:]Engine return error code: 418"}\n\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert b"ref_audio" not in request.content
+        assert b"ref_text" not in request.content
+        return httpx.Response(
+            400,
+            headers={"Content-Type": "text/event-stream; charset=utf-8"},
+            text=error_body,
+        )
+
+    def build_client(_adapter: AliyunCosyVoiceTTSAdapter) -> httpx.Client:
+        return httpx.Client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(AliyunCosyVoiceTTSAdapter, "_client", build_client)
+    adapter = AliyunCosyVoiceTTSAdapter(
+        endpoint="https://workspace.example.test/SpeechSynthesizer",
+        model="cosyvoice-v3.5-flash",
+        api_key="test-api-key",
+        capability="streaming_sse",
+    )
+
+    with (
+        caplog.at_level(logging.ERROR, logger="orchestrator.media_adapters"),
+        pytest.raises(ProviderResponseError, match="status_400"),
+    ):
+        _ = tuple(
+            adapter.stream_pcm16le(
+                text="测试。",
+                voice="longanhuan_v3",
+                ref_audio="should-not-be-sent",
+                ref_text="should-not-be-sent",
+            )
+        )
+
+    assert "InvalidParameter" in caplog.text
+    assert "Engine return error code: 418" in caplog.text
+    assert "test-api-key" not in caplog.text
 
 
 def test_aliyun_cosyvoice_final_only_downloads_wav_without_forwarding_api_key(

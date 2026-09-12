@@ -52,6 +52,11 @@ _ALIYUN_STREAM_RESPONSE_LOG = (
     f"{_ALIYUN_STREAM_RESPONSE_LOG_PREFIX} media_type=audio/pcm %s"
 )
 _ALIYUN_REQUEST_LOG = "tts_request provider=aliyun_cosyvoice url=%s request=%r"
+_ALIYUN_ERROR_LOG = (
+    "tts_response_error provider=aliyun_cosyvoice status=%d detail=%s"
+)
+_MAX_ALIYUN_ERROR_BYTES = 4_096
+_MAX_ALIYUN_ERROR_CHARS = 512
 
 
 @dataclass(frozen=True, slots=True)
@@ -663,7 +668,7 @@ class AliyunCosyVoiceTTSAdapter:
                 json=speech.json,
                 headers=self._headers(streaming=False),
             )
-            _ = response.raise_for_status()
+            _raise_aliyun_for_status(response)
             if cancellation is not None and cancellation.cancelled:
                 return SynthesizedAudio(data=b"", media_type="application/octet-stream")
             audio_url = _aliyun_audio_url(response.text)
@@ -710,7 +715,7 @@ class AliyunCosyVoiceTTSAdapter:
                 json=speech.json,
                 headers=self._headers(streaming=True),
             ) as response:
-                _ = response.raise_for_status()
+                _raise_aliyun_for_status(response)
                 for line in response.iter_lines():
                     if cancellation is not None and cancellation.cancelled:
                         return
@@ -1044,6 +1049,57 @@ def _aliyun_optional_audio_url(payload: str) -> str | None:
     ):
         raise ProviderResponseError(stage="tts", reason="audio_url")
     return audio_url
+
+
+def _raise_aliyun_for_status(response: httpx.Response) -> None:
+    try:
+        _ = response.raise_for_status()
+    except httpx.HTTPStatusError:
+        detail = _aliyun_error_detail(_read_bounded_response(response))
+        _LOGGER.exception(_ALIYUN_ERROR_LOG, response.status_code, detail)
+        raise
+
+
+def _read_bounded_response(response: httpx.Response) -> bytes:
+    result = bytearray()
+    for chunk in response.iter_bytes():
+        remaining = _MAX_ALIYUN_ERROR_BYTES - len(result)
+        if remaining <= 0:
+            break
+        result.extend(chunk[:remaining])
+        if len(chunk) > remaining:
+            break
+    return bytes(result)
+
+
+def _aliyun_error_detail(body: bytes) -> str:
+    text = body.decode("utf-8", errors="replace")
+    candidates = [
+        data
+        for line in text.splitlines()
+        if (data := _aliyun_sse_data(line)) is not None
+    ]
+    candidates.append(text)
+    for candidate in candidates:
+        try:
+            value = parse_json_value(candidate)
+        except JsonBoundaryError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        code = value.get("code")
+        message = value.get("message")
+        if isinstance(code, str) or isinstance(message, str):
+            normalized_code = code if isinstance(code, str) else ""
+            normalized_message = message if isinstance(message, str) else ""
+            return _bounded_error_text(
+                f"code={normalized_code!r} message={normalized_message!r}"
+            )
+    return _bounded_error_text(f"body={' '.join(text.split())!r}")
+
+
+def _bounded_error_text(value: str) -> str:
+    return value[:_MAX_ALIYUN_ERROR_CHARS]
 
 
 def _aliyun_audio_url(payload: str) -> str:
