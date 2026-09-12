@@ -26,6 +26,16 @@ uv run pytest
 
 真实 LLM 部署必须配置 OpenAI-compatible Chat Completions endpoint、模型和所需凭据，并通过 `ORCHESTRATOR_LLM_REASONING_DIALECT` 明确选择 `deepseek`、`openai` 或 `none` 请求方言。`none` 不发送思考参数。Brain、记忆提取与上下文压缩默认均关闭思考；Brain 与 maintenance 可分别指定模型，未指定时使用 `ORCHESTRATOR_LLM_MODEL`。
 
+### Brain 场景与行为指令
+
+部署者可以通过 `ORCHESTRATOR_LLM_BRAIN_BEHAVIOR_INSTRUCTION` 调整 Brain 的角色表现、当前场景、措辞风格和行为偏好，例如互动、直播或产品演示。该值在启动时读取，去除首尾空白后最多 8000 个字符；未配置或只含空白时使用内置的亲切、自然、有活力风格。
+
+```dotenv
+ORCHESTRATOR_LLM_BRAIN_BEHAVIOR_INSTRUCTION=当前是产品发布会演示场景。回答先给结论，再用一句话解释；遇到适合展示的内容时可提议当前允许的演示操作。
+```
+
+这项配置是可信的部署级 system 指令，只作用于 Brain 回复，不作用于记忆提取和上下文压缩。树莓娘身份、非可信材料边界、输入输出 JSON 契约、接受/丢弃规则、操作授权、动作标记语法和操作结果规则始终由程序附加，不能通过该配置替换。实际操作仍只可能来自当轮 `available_operations`，并继续经过本地 schema、能力、版本、取消代次和前置条件校验。配置修改后需要重启。
+
 ### LLM 生成参数
 
 以下后缀加上 `ORCHESTRATOR_LLM_` 构成全局环境变量；也可使用

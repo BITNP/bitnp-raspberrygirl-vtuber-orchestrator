@@ -35,6 +35,10 @@ LLM_BRAIN_MODEL_KEY: Final = "ORCHESTRATOR_LLM_BRAIN_MODEL"
 
 LLM_MAINTENANCE_MODEL_KEY: Final = "ORCHESTRATOR_LLM_MAINTENANCE_MODEL"
 
+LLM_BRAIN_BEHAVIOR_INSTRUCTION_KEY: Final = (
+    "ORCHESTRATOR_LLM_BRAIN_BEHAVIOR_INSTRUCTION"
+)
+
 ASR_PROVIDER_KEY: Final = "ORCHESTRATOR_ASR_PROVIDER"
 
 ASR_ENDPOINT_KEY: Final = "ORCHESTRATOR_ASR_ENDPOINT"
@@ -67,6 +71,7 @@ PPT_DECK_CATALOG_KEY: Final = "ORCHESTRATOR_PPT_DECK_CATALOG"
 
 _DECK_ID_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _MAX_PPT_DECKS: Final = 32
+_MAX_BRAIN_BEHAVIOR_INSTRUCTION_CHARS: Final = 8_000
 
 LlmProvider = Literal["mock", "openai_compatible"]
 
@@ -118,6 +123,8 @@ class OrchestratorConfigInput:
 
     llm_maintenance_model: str | None = None
 
+    llm_brain_behavior_instruction: str | None = None
+
     llm_generation: LLMGenerationConfig = field(default_factory=LLMGenerationConfig)
 
     asr_provider: AsrProvider = DEFAULT_ASR_PROVIDER
@@ -168,6 +175,8 @@ class OrchestratorConfig:
     llm_brain_model: str | None = None
 
     llm_maintenance_model: str | None = None
+
+    llm_brain_behavior_instruction: str | None = None
 
     llm_generation: LLMGenerationConfig = field(default_factory=LLMGenerationConfig)
 
@@ -230,6 +239,14 @@ class OrchestratorConfig:
             for deck_id in config.ppt_deck_catalog
         ):
             raise ConfigParseError(field_name=PPT_DECK_CATALOG_KEY)
+        brain_behavior_instruction = _normalize_optional(
+            config.llm_brain_behavior_instruction
+        )
+        if (
+            brain_behavior_instruction is not None
+            and len(brain_behavior_instruction) > _MAX_BRAIN_BEHAVIOR_INSTRUCTION_CHARS
+        ):
+            raise ConfigParseError(field_name=LLM_BRAIN_BEHAVIOR_INSTRUCTION_KEY)
 
         return cls(
             service_name=config.service_name.strip(),
@@ -244,6 +261,7 @@ class OrchestratorConfig:
             llm_reasoning_dialect=config.llm_reasoning_dialect,
             llm_brain_model=_normalize_optional(config.llm_brain_model),
             llm_maintenance_model=_normalize_optional(config.llm_maintenance_model),
+            llm_brain_behavior_instruction=brain_behavior_instruction,
             asr_provider=config.asr_provider,
             asr_endpoint=_normalize_optional(config.asr_endpoint),
             asr_model=_normalize_optional(config.asr_model),
@@ -291,6 +309,9 @@ def load_config_from_env(env: Mapping[str, str] | None = None) -> OrchestratorCo
             ),
             llm_brain_model=source.get(LLM_BRAIN_MODEL_KEY),
             llm_maintenance_model=source.get(LLM_MAINTENANCE_MODEL_KEY),
+            llm_brain_behavior_instruction=source.get(
+                LLM_BRAIN_BEHAVIOR_INSTRUCTION_KEY
+            ),
             llm_generation=_parse_llm_generation(source),
             asr_provider=_parse_asr_provider(source.get(ASR_PROVIDER_KEY)),
             asr_endpoint=source.get(ASR_ENDPOINT_KEY),

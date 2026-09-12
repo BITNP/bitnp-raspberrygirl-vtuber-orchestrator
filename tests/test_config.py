@@ -53,6 +53,30 @@ def test_real_llm_parses_brain_and_maintenance_routes() -> None:
     assert config.llm_maintenance_model is None
 
 
+def test_brain_behavior_instruction_is_optional_and_bounded() -> None:
+    default = load_config_from_env({})
+    configured = load_config_from_env(
+        {
+            "ORCHESTRATOR_LLM_BRAIN_BEHAVIOR_INSTRUCTION": (
+                "  当前是直播互动场景。\n回答应简短,并主动回应评论区。  "
+            )
+        }
+    )
+
+    assert default.llm_brain_behavior_instruction is None
+    assert configured.llm_brain_behavior_instruction == (
+        "当前是直播互动场景。\n回答应简短,并主动回应评论区。"
+    )
+
+    with pytest.raises(
+        ConfigParseError,
+        match="ORCHESTRATOR_LLM_BRAIN_BEHAVIOR_INSTRUCTION",
+    ):
+        _ = load_config_from_env(
+            {"ORCHESTRATOR_LLM_BRAIN_BEHAVIOR_INSTRUCTION": "场" * 8_001}
+        )
+
+
 def test_ppt_deck_catalog_is_bounded_and_controlled() -> None:
     config = load_config_from_env(
         {"ORCHESTRATOR_PPT_DECK_CATALOG": "launch-deck,product.v2"}

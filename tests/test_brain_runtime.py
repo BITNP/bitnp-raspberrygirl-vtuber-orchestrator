@@ -129,7 +129,8 @@ def test_brain_system_prompt_defines_raspberry_girl_persona() -> None:
     _ = JsonResponseBrain(completion).respond(_snapshot(), available_operations=())
     system = completion.requests[0].prompt.system
 
-    assert "【人设与表达】" in system
+    assert "【身份设定】" in system
+    assert "【部署场景与行为】" in system
     assert "你是树莓娘" in system
     assert "由北京理工大学网络开拓者协会自主设计的虚拟形象" in system
     assert "北京理工大学网络开拓者协会的官方吉祥物" in system
@@ -138,6 +139,25 @@ def test_brain_system_prompt_defines_raspberry_girl_persona() -> None:
     assert "看板娘" not in system
     assert "平均每次回答使用一至两个" in system
     assert "不要过于频繁" in system
+
+
+def test_brain_behavior_can_be_customized_without_replacing_fixed_contract() -> None:
+    completion = _Completion(
+        [json.dumps({"decision": "accept", "speech": "您好", "operation": None})]
+    )
+    custom = "当前是产品发布会演示场景。回答先给结论，再用一句话解释。"
+
+    _ = JsonResponseBrain(completion, behavior_instruction=custom).respond(
+        _snapshot(), available_operations=()
+    )
+    system = completion.requests[0].prompt.system
+
+    assert f"【部署场景与行为】{custom}" in system
+    assert "保持亲切、自然、有活力的表达风格" not in system
+    assert "【不可覆盖契约】" in system
+    assert "【输出语法】" in system
+    assert "【判定规则】" in system
+    assert "你是树莓娘" in system
 
 
 def test_brain_system_prompt_defines_allowed_inline_actions() -> None:

@@ -107,6 +107,7 @@ async def run_transport() -> None:
                     mcp_allowlist=mcp.allowlist if mcp.tools else None,
                     async_mcp_requester=mcp_requester,
                     mcp_intents=mcp_intents,
+                    brain_behavior_instruction=config.llm_brain_behavior_instruction,
                 )
             )
             session_runtime.memory_candidate_extractor = (

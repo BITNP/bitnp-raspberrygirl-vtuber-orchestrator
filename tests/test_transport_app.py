@@ -29,6 +29,8 @@ class _Config:
 
     ppt_deck_catalog: frozenset[str] = frozenset()
 
+    llm_brain_behavior_instruction: str | None = None
+
 
 @dataclass
 class _Bridge: ...
