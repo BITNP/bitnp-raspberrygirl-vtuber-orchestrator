@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast, final
+from typing import TYPE_CHECKING, Protocol, cast, final
+
+from jsonschema import Draft202012Validator
 
 from orchestrator.brain_contracts import BrainStateSnapshot, ToolRequest
 
@@ -43,6 +45,7 @@ class IntentSpec:
     model_label: str = ""
     lane: str = "deliberative"
     timeout_ms: int = 30_000
+    additional_capabilities: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if (
@@ -58,7 +61,10 @@ class IntentSpec:
             raise IntentSpecError
 
     def available(self, snapshot: BrainStateSnapshot) -> bool:
-        return self.required_capability in snapshot.capabilities
+        return (
+            self.required_capability in snapshot.capabilities
+            and self.additional_capabilities.issubset(snapshot.capabilities)
+        )
 
 
 @final
@@ -110,6 +116,7 @@ class IntentRouter:
             spec.tool_kind == request.kind
             and spec.tool_name == request.name
             and spec.required_capability in capabilities
+            and spec.additional_capabilities.issubset(capabilities)
             for spec in self._specs.values()
         )
 
@@ -127,60 +134,14 @@ class IntentRouter:
             )
 
 
+class _SchemaValidator(Protocol):
+    def is_valid(self, instance: object) -> bool: ...
+
+
 def _validate_json_schema(value: object, schema: Mapping[str, object]) -> bool:
-    if not isinstance(value, dict):
-        return False
-    parsed_value = cast("dict[str, object]", cast("object", value))
-    raw_properties = schema.get("properties", {})
-    raw_required = schema.get("required", [])
-    if not isinstance(raw_properties, dict) or not isinstance(raw_required, list):
-        return False
-    properties = cast("dict[str, object]", cast("object", raw_properties))
-    required_values = cast("list[object]", cast("object", raw_required))
-    if not all(isinstance(item, str) for item in required_values):
-        return False
-    required = cast("list[str]", cast("object", required_values))
-    if not set(required).issubset(parsed_value) or not set(parsed_value).issubset(
-        properties
-    ):
-        return False
-    for name, item in parsed_value.items():
-        field_schema = properties.get(name)
-        if not isinstance(field_schema, dict) or not _validate_field(
-            item, cast("dict[str, object]", field_schema)
-        ):
-            return False
-    return True
-
-
-def _validate_field(value: object, schema: Mapping[str, object]) -> bool:
-    match schema.get("type"):
-        case "string":
-            return _validate_string(value, schema)
-        case "integer":
-            if not isinstance(value, int) or isinstance(value, bool):
-                return False
-            minimum = schema.get("minimum")
-            maximum = schema.get("maximum")
-            return (not isinstance(minimum, int) or value >= minimum) and (
-                not isinstance(maximum, int) or value <= maximum
-            )
-        case "boolean":
-            return isinstance(value, bool)
-        case _:
-            return False
-
-
-def _validate_string(value: object, schema: Mapping[str, object]) -> bool:
-    if not isinstance(value, str):
-        return False
-    allowed = schema.get("enum")
-    if isinstance(allowed, list) and value not in allowed:
-        return False
-    minimum = schema.get("minLength", 0)
-    maximum = schema.get("maxLength")
-    return (
-        isinstance(minimum, int)
-        and len(value) >= minimum
-        and (not isinstance(maximum, int) or len(value) <= maximum)
+    validator = cast(
+        "_SchemaValidator", cast("object", Draft202012Validator(dict(schema)))
+    )
+    return isinstance(value, dict) and validator.is_valid(
+        cast("dict[str, object]", value)
     )

@@ -30,3 +30,5 @@ Raspberry Girl 是一个可以听、说、思考和互动的 AI 虚拟角色，�
 - [Sound](../bitnp-raspberrygirl-vtuber-sound/README.md)
 - [Comments](../bitnp-raspberrygirl-vtuber-comments/README.md)
 - [Frontend](../bitnp-raspberrygirl-vtuber-frontend/README.md)
+
+知识库与外部工具的部署配置见 [本地知识库与 MCP](docs/knowledge-mcp.zh-CN.md)。

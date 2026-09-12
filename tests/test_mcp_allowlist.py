@@ -1,4 +1,7 @@
+import asyncio
 from dataclasses import dataclass
+
+import pytest
 
 from orchestrator.brain_contracts import (
     AudienceInput,
@@ -6,9 +9,9 @@ from orchestrator.brain_contracts import (
     BrainStateSnapshot,
     ToolRequest,
 )
-from orchestrator.json_boundary import parse_json_value
 from orchestrator.mcp_allowlist import (
-    AllowlistedMcpToolExecutor,
+    AsyncMcpToolExecutor,
+    McpAllowlistError,
     McpToolAllowance,
     StaticMcpAllowlist,
 )
@@ -20,7 +23,7 @@ class _Requester:
 
     result: dict[str, object] | None = None
 
-    def request(
+    async def request(
         self,
         allowance: McpToolAllowance,
         arguments: dict[str, object],
@@ -29,7 +32,7 @@ class _Requester:
     ) -> dict[str, object] | None:
         self.calls.append((allowance.name, timeout_ms))
         return (
-            {"url": "https://example.test", "echo": arguments}
+            {"content": [{"type": "text", "text": str(arguments)}]}
             if self.result is None
             else self.result
         )
@@ -56,48 +59,53 @@ def test_static_allowlist_executes_only_matching_capability_and_bounds_request()
 ):
     allowance = McpToolAllowance("web", "search", "network.search", 500, 64)
     requester = _Requester([])
-    executor = AllowlistedMcpToolExecutor(StaticMcpAllowlist((allowance,)), requester)
+    executor = AsyncMcpToolExecutor(StaticMcpAllowlist((allowance,)), requester)
     request = ToolRequest("mcp", "web/search", {"query": "树莓女孩"})
 
-    observation = executor.execute(request, _snapshot(frozenset({"mcp:web/search"})))
+    observation = asyncio.run(
+        executor.execute(
+            request, _snapshot(frozenset({"mcp:web/search", "network.search"}))
+        )
+    )
 
     assert observation is not None
-    parsed = parse_json_value(observation)
-    assert isinstance(parsed, dict)
-    assert parsed["source"] == "mcp"
-    assert parsed["server"] == "web"
+    assert observation.startswith(
+        "server_tool=web/search status=success digest=sha256:"
+    )
     assert requester.calls == [("web/search", 500)]
-    assert executor.execute(request, _snapshot(frozenset())) is None
+    assert asyncio.run(executor.execute(request, _snapshot(frozenset()))) is None
     assert requester.calls == [("web/search", 500)]
 
 
 def test_allowlist_rejects_duplicate_entries_and_oversized_requests() -> None:
     allowance = McpToolAllowance("deck", "load", "ppt", 500, 8)
     requester = _Requester([])
-    executor = AllowlistedMcpToolExecutor(StaticMcpAllowlist((allowance,)), requester)
+    executor = AsyncMcpToolExecutor(StaticMcpAllowlist((allowance,)), requester)
 
     assert (
-        executor.execute(
-            ToolRequest("mcp", "deck/load", {"deck": "too-long"}),
-            _snapshot(frozenset({"mcp:deck/load"})),
+        asyncio.run(
+            executor.execute(
+                ToolRequest("mcp", "deck/load", {"deck": "too-long"}),
+                _snapshot(frozenset({"mcp:deck/load", "ppt"})),
+            )
         )
         is None
     )
     assert requester.calls == []
+    with pytest.raises(McpAllowlistError):
+        _ = StaticMcpAllowlist((allowance, allowance))
 
 
 def test_allowlist_bounds_oversized_untrusted_result() -> None:
     allowance = McpToolAllowance("web", "search", "network.search", 500, 64, 8)
     requester = _Requester([], {"content": "远大于观察上限的工具返回"})
-    executor = AllowlistedMcpToolExecutor(StaticMcpAllowlist((allowance,)), requester)
+    executor = AsyncMcpToolExecutor(StaticMcpAllowlist((allowance,)), requester)
 
-    observation = executor.execute(
-        ToolRequest("mcp", "web/search", {"query": "测试"}),
-        _snapshot(frozenset({"mcp:web/search"})),
+    observation = asyncio.run(
+        executor.execute(
+            ToolRequest("mcp", "web/search", {"query": "测试"}),
+            _snapshot(frozenset({"mcp:web/search", "network.search"})),
+        )
     )
 
-    assert observation is not None
-    parsed = parse_json_value(observation)
-    assert isinstance(parsed, dict)
-    assert parsed["result"] is None
-    assert parsed["error"] == "工具返回超过受限大小, 未采用原始内容。"
+    assert observation is None

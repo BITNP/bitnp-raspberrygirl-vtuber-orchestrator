@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "servers": [
+    {
+      "name": "catalog",
+      "url": "https://mcp.example.test/mcp",
+      "token_env": "CATALOG_MCP_TOKEN"
+    }
+  ],
+  "tools": [
+    {
+      "server": "catalog",
+      "tool": "lookup",
+      "capability": "catalog.read",
+      "intent": "mcp.catalog_lookup",
+      "description": "查询外部产品目录中的当前产品信息",
+      "arguments_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["query"],
+        "properties": {
+          "query": {"type": "string", "minLength": 1, "maxLength": 200}
+        }
+      },
+      "timeout_ms": 5000,
+      "max_request_bytes": 4096,
+      "max_response_bytes": 16384
+    }
+  ]
+}

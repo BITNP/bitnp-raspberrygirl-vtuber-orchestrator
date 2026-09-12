@@ -199,6 +199,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
+    { name = "httpx" },
     { name = "jsonschema" },
     { name = "llama-index-core" },
     { name = "openai" },
@@ -216,6 +217,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=50.0.0" },
+    { name = "httpx", specifier = ">=0.28,<0.29" },
     { name = "jsonschema", specifier = "==4.26.0" },
     { name = "llama-index-core", specifier = ">=0.14.23,<0.15" },
     { name = "openai", specifier = ">=2,<3" },

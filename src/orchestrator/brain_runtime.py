@@ -25,8 +25,8 @@ from orchestrator.llm import (
     ReasoningMode,
 )
 from orchestrator.mcp_allowlist import (
-    AllowlistedMcpToolExecutor,
-    McpRequester,
+    AsyncMcpRequester,
+    AsyncMcpToolExecutor,
     StaticMcpAllowlist,
 )
 from orchestrator.response_contracts import (
@@ -36,7 +36,6 @@ from orchestrator.response_contracts import (
 )
 from orchestrator.response_coordinator import (
     AsyncResponseCoordinator,
-    run_blocking_provider,
 )
 
 if TYPE_CHECKING:
@@ -216,9 +215,7 @@ def is_low_information_asr(audience_input: AudienceInput) -> bool:
     return len(_normalize_echo_text(audience_input.text)) <= 1
 
 
-def is_asr_clarification_speech(
-    audience_input: AudienceInput, speech: str
-) -> bool:
+def is_asr_clarification_speech(audience_input: AudienceInput, speech: str) -> bool:
     if audience_input.source.value != "asr":
         return False
     input_text = _normalize_echo_text(audience_input.text)
@@ -355,21 +352,10 @@ class AsyncNoopToolExecutor:
 
 
 @final
-class AsyncAllowlistedMcpToolExecutor:
-    def __init__(self, executor: AllowlistedMcpToolExecutor) -> None:
-        self._executor = executor
-
-    async def execute(
-        self, request: ToolRequest, snapshot: BrainStateSnapshot
-    ) -> str | None:
-        return await run_blocking_provider(self._executor.execute, request, snapshot)
-
-
-@final
 class AsyncCompositeResponseToolExecutor:
     def __init__(
         self,
-        mcp: AsyncAllowlistedMcpToolExecutor | None = None,
+        mcp: AsyncResponseToolExecutor | None = None,
         presentation: AsyncResponseToolExecutor | None = None,
     ) -> None:
         self._mcp = mcp
@@ -399,41 +385,19 @@ def build_async_response_coordinator(  # noqa: PLR0913
     retrieval: VersionedRetrievalProvider | None = None,
     *,
     mcp_allowlist: StaticMcpAllowlist | None = None,
-    mcp_requester: McpRequester | None = None,
+    async_mcp_requester: AsyncMcpRequester | None = None,
     mcp_intents: tuple[McpIntentRegistration, ...] = (),
     presentation_executor: AsyncResponseToolExecutor | None = None,
     presentation_decks: frozenset[str] | None = None,
 ) -> AsyncResponseCoordinator:
     specs: list[IntentSpec] = []
-    mcp: AsyncAllowlistedMcpToolExecutor | None = None
+    mcp: AsyncResponseToolExecutor | None = None
     if mcp_allowlist is not None:
-        if mcp_requester is None:
+        if async_mcp_requester is None:
             raise McpResponseConfigurationError
-        registration_ids = {entry.intent_id for entry in mcp_intents}
-        registrations = {entry.tool_name: entry for entry in mcp_intents}
-        if (
-            len(registration_ids) != len(mcp_intents)
-            or len(registrations) != len(mcp_intents)
-            or frozenset(registrations) != mcp_allowlist.names
-        ):
-            raise McpResponseConfigurationError
-        for allowance_name in sorted(mcp_allowlist.names):
-            registration = registrations[allowance_name]
-            specs.append(
-                IntentSpec(
-                    registration.intent_id,
-                    "mcp",
-                    allowance_name,
-                    f"mcp:{allowance_name}",
-                    registration.argument_schema,
-                    registration.build_runtime_arguments,
-                    model_label=registration.model_label,
-                )
-            )
-        mcp = AsyncAllowlistedMcpToolExecutor(
-            AllowlistedMcpToolExecutor(mcp_allowlist, mcp_requester)
-        )
-    elif mcp_requester is not None or mcp_intents:
+        specs.extend(_mcp_intent_specs(mcp_allowlist, mcp_intents))
+        mcp = AsyncMcpToolExecutor(mcp_allowlist, async_mcp_requester)
+    elif async_mcp_requester is not None or mcp_intents:
         raise McpResponseConfigurationError
     decks: frozenset[str] = (
         frozenset() if presentation_decks is None else presentation_decks
@@ -451,6 +415,40 @@ def build_async_response_coordinator(  # noqa: PLR0913
         AsyncCompositeResponseToolExecutor(mcp, presentation_executor),
         retrieval,
     )
+
+
+def _mcp_intent_specs(
+    mcp_allowlist: StaticMcpAllowlist,
+    mcp_intents: tuple[McpIntentRegistration, ...],
+) -> list[IntentSpec]:
+    specs: list[IntentSpec] = []
+    registration_ids = {entry.intent_id for entry in mcp_intents}
+    registrations = {entry.tool_name: entry for entry in mcp_intents}
+    if (
+        len(registration_ids) != len(mcp_intents)
+        or len(registrations) != len(mcp_intents)
+        or frozenset(registrations) != mcp_allowlist.names
+    ):
+        raise McpResponseConfigurationError
+    for allowance_name in sorted(mcp_allowlist.names):
+        registration = registrations[allowance_name]
+        allowance = mcp_allowlist.resolve(allowance_name)
+        if allowance is None:
+            raise McpResponseConfigurationError
+        specs.append(
+            IntentSpec(
+                registration.intent_id,
+                "mcp",
+                allowance_name,
+                f"mcp:{allowance_name}",
+                registration.argument_schema,
+                registration.build_runtime_arguments,
+                model_label=registration.model_label,
+                timeout_ms=allowance.timeout_ms,
+                additional_capabilities=frozenset({allowance.capability}),
+            )
+        )
+    return specs
 
 
 def _presentation_intent_specs(

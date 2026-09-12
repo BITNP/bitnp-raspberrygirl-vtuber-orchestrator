@@ -1,21 +1,24 @@
-
 import asyncio
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from functools import partial
+from pathlib import Path
 
 import pytest
 
 from orchestrator import transport_app
+from orchestrator.ids import SessionId
 from orchestrator.interaction_ingress import SessionInteractionIngress
+from orchestrator.llm import LLMRequest
+from orchestrator.modes import AnswerCandidate, AudienceInput, AudienceSource
 from orchestrator.observability import OnsiteObservability
+from orchestrator.retrieval import VersionedRetrievalProvider
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import SessionScheduler
 
 
 @dataclass(frozen=True, slots=True)
 class _Config:
-
     session_id_prefix: str
 
     asr_provider: str = "mock"
@@ -28,14 +31,14 @@ class _Config:
 
 
 @dataclass
-class _Bridge:
-    ...
+class _Bridge: ...
 
 
 @dataclass
 class _Runtime:
-
     ingress: SessionInteractionIngress | None = None
+    session_runtimes: list[SessionRuntime] = field(default_factory=list)
+    factory: Callable[[SessionId], SessionRuntime] | None = None
 
     closed: bool = False
 
@@ -50,9 +53,12 @@ class _Runtime:
     def set_session_runtime(self, session_runtime: SessionRuntime) -> None:
 
         self.ingress = session_runtime.interaction_ingress
+        self.session_runtimes.append(session_runtime)
 
-    def set_session_runtime_factory(self, _factory: object) -> None:
-        return
+    def set_session_runtime_factory(
+        self, factory: Callable[[SessionId], SessionRuntime]
+    ) -> None:
+        self.factory = factory
 
     def set_observability(self, _observability: OnsiteObservability) -> None:
 
@@ -100,18 +106,21 @@ def test_transport_composes_one_scheduler_control_ingress_before_listening(
 ) -> None:
     # Given: deterministic configuration and listener stop at the transport entrypoint.
 
-
     schedulers: list[SessionScheduler] = []
 
     original_create = SessionInteractionIngress.create
 
     runtime = _Runtime()
 
-    def capture_scheduler(scheduler: SessionScheduler) -> SessionInteractionIngress:
+    def capture_scheduler(
+        scheduler: SessionScheduler,
+        *,
+        retrieval: VersionedRetrievalProvider | None = None,
+    ) -> SessionInteractionIngress:
 
         schedulers.append(scheduler)
 
-        return original_create(scheduler)
+        return original_create(scheduler, retrieval=retrieval)
 
     monkeypatch.setattr(
         transport_app,
@@ -237,3 +246,69 @@ def test_transport_enables_onsite_bridge_for_llm_tts_provider_config(
     assert runtime.onsite_bridge is bridge
 
     assert runtime.observability_set is True
+
+
+class _KnowledgeCompletion:
+    async def complete_json(
+        self, request: LLMRequest, *, schema_name: str, schema: dict[str, object]
+    ) -> str:
+        _ = request, schema_name, schema
+        return '{"decision":"accept","speech":"产品支持演示","operation":null}'
+
+
+@dataclass
+class _KnowledgeBridge:
+    llm: _KnowledgeCompletion = field(default_factory=_KnowledgeCompletion)
+
+
+def test_production_shares_startup_corpus_and_enables_static_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    corpus = tmp_path / "knowledge"
+    corpus.mkdir()
+    source = corpus / "product.md"
+    _ = source.write_text("展会周六举行", encoding="utf-8")
+    monkeypatch.setenv("ORCHESTRATOR_KNOWLEDGE_DIR", str(corpus))
+    monkeypatch.setenv(
+        "ORCHESTRATOR_MCP_CONFIG",
+        str(Path(__file__).parents[1] / "samples/mcp.example.json"),
+    )
+    monkeypatch.setenv("CATALOG_MCP_TOKEN", "test-token")
+    monkeypatch.setenv("ORCHESTRATOR_STATE_DIR", str(tmp_path / "state"))
+    runtime = _Runtime()
+
+    def build_bridge(
+        _config: object, *, voice: str, ref_audio: str, ref_text: str
+    ) -> _KnowledgeBridge:
+        _ = voice, ref_audio, ref_text
+        return _KnowledgeBridge()
+
+    monkeypatch.setattr(transport_app, "load_config_from_env", _onsite_config)
+    monkeypatch.setattr(
+        transport_app, "load_transport_config_from_env", _test_transport_config
+    )
+    monkeypatch.setattr(transport_app, "build_onsite_bridge", build_bridge)
+    monkeypatch.setattr(
+        transport_app, "TransportRuntime", partial(_test_runtime, runtime)
+    )
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(transport_app.run_transport())
+    first = runtime.session_runtimes[0]
+    _ = source.write_text("展会周日举行", encoding="utf-8")
+    assert runtime.factory is not None
+    second = runtime.factory(SessionId("second-session"))
+    assert (
+        second.interaction_ingress.data.retrieval
+        is first.interaction_ingress.data.retrieval
+    )
+    query = AnswerCandidate(AudienceInput(AudienceSource.COMMENT, "展会", 1))
+    assert (
+        "周六" in second.interaction_ingress.data.retrieval.retrieve(query).refs[0].text
+    )
+    assert {"mcp:catalog/lookup", "catalog.read"}.issubset(second.agent_capabilities)
+    coordinator = second.async_response_coordinator
+    assert coordinator is not None
+    assert coordinator.retrieval is first.interaction_ingress.data.retrieval
+    assert coordinator.router.specs[0].intent_id == "mcp.catalog_lookup"
+    assert second.agent_mcp_allowlist == frozenset({"catalog/lookup"})

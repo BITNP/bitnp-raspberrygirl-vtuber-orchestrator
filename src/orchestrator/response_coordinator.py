@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
@@ -11,14 +12,14 @@ from typing import TYPE_CHECKING, Protocol
 from orchestrator.modes import AnswerCandidate, AudienceInput, AudienceSource
 from orchestrator.response_contracts import BrainDecision, ResponseProposal
 
+_LOGGER = logging.getLogger(__name__)
+
 _BLOCKING_PROVIDER_POOL = ThreadPoolExecutor(
     max_workers=16, thread_name_prefix="bounded-provider"
 )
 
 
-async def run_blocking_provider[R](
-    function: Callable[..., R], *args: object
-) -> R:
+async def run_blocking_provider[R](function: Callable[..., R], *args: object) -> R:
     operation: Callable[[], R] = partial(function, *args)
     future = _BLOCKING_PROVIDER_POOL.submit(operation)
     # Polling is intentional: some supported event-loop/sandbox combinations
@@ -26,6 +27,7 @@ async def run_blocking_provider[R](
     while not future.done():  # noqa: ASYNC110
         await asyncio.sleep(0.001)
     return future.result()
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -73,8 +75,7 @@ class AsyncResponseCoordinator:
         """Retrieve controlled local knowledge before the first Brain call."""
         if self.retrieval is None:
             return ()
-        result = await run_blocking_provider(
-            self.retrieval.retrieve,
+        result = await self.retrieval.retrieve_async(
             AnswerCandidate(
                 AudienceInput(
                     AudienceSource(snapshot.input.source.value),
@@ -83,8 +84,17 @@ class AsyncResponseCoordinator:
                 )
             ),
         )
+        _LOGGER.debug(
+            "knowledge_retrieved trace=%s session=%s seq=%s turn=%s refs=%r outcome=success",  # noqa: E501
+            snapshot.input.trace_id,
+            snapshot.session_id,
+            snapshot.input.sequence,
+            snapshot.turn_id,
+            result.refs,
+        )
         return tuple(
             (
+                f"corpus_id={ref.corpus_id} index_id={ref.index_id} "
                 f"corpus={int(ref.corpus_revision)} index={int(ref.index_revision)} "
                 f"source={ref.ref_id} title={ref.title} excerpt={ref.text[:4000]}"
             )

@@ -90,6 +90,7 @@ from orchestrator.response_coordinator import (
     AsyncResponseCoordinator,
     CoordinatedResponse,
 )
+from orchestrator.retrieval import VersionedRetrievalProvider
 from orchestrator.runtime_contracts import (
     RuntimeDispatch,
     RuntimeObservables,
@@ -178,11 +179,18 @@ def _monotonic_ms() -> int:
 
 def _bounded_observation_summary(observation: str) -> str:
     normalized = " ".join(observation.split())
+    if normalized.startswith("server_tool="):
+        metadata, separator, text = normalized.partition(" text=")
+        return f"{metadata}{separator}{text[:512]}"
     digest = hashlib.sha256(observation.encode("utf-8")).hexdigest()
     return f"status=success digest=sha256:{digest} text={normalized[:512]}"
 
 
 def _tool_observation(request: ToolRequest, output: str | None) -> str:
+    if request.kind == "mcp" and output is not None and output.startswith(
+        f"server_tool={request.name} status=success digest=sha256:"
+    ):
+        return output
     status = "success" if output is not None else "failed"
     text = "操作未成功完成" if output is None else " ".join(output.split())[:512]
     digest_source = "" if output is None else output
@@ -442,6 +450,7 @@ class SessionRuntime:
         agent_capabilities: frozenset[str] | None = None,
         agent_mcp_allowlist: frozenset[str] | None = None,
         response_task_timeout_ms: int = 30_000,
+        retrieval: VersionedRetrievalProvider | None = None,
     ) -> "SessionRuntime":
         if response_task_timeout_ms <= 0:
             field_name = "response_task_timeout_ms"
@@ -451,7 +460,9 @@ class SessionRuntime:
             turn_id_prefix=turn_id_prefix,
         )
 
-        interaction_ingress = SessionInteractionIngress.create(scheduler)
+        interaction_ingress = SessionInteractionIngress.create(
+            scheduler, retrieval=retrieval
+        )
 
         task_registry = TaskRegistry(
             session_id=session_id,
@@ -1645,7 +1656,10 @@ class SessionRuntime:
             self.interaction_ingress.data.consider_context(
                 FinalizedInput(pending.provenance, pending.input_text)
             )
-        if pending.observation is not None:
+        if (
+            pending.observation is not None
+            and " status=success " in pending.observation
+        ):
             self.interaction_ingress.data.consider_context(
                 ToolObservation(
                     ContextProvenance(
@@ -1755,7 +1769,7 @@ class SessionRuntime:
         correlation: EventCorrelation,
     ) -> None:
         extractor = self.memory_candidate_extractor
-        if extractor is None:
+        if extractor is None or pending.observation is not None:
             return
         task_id = TaskId(f"memory-extract-{pending.provenance.turn_id}")
         outcome = self.schedule_task(

@@ -23,8 +23,6 @@ from orchestrator.json_boundary import JsonBoundaryError, parse_json_value
 from orchestrator.memory_store import MarkdownMemoryStore
 from orchestrator.profile_store import JsonVoiceProfileStore
 from orchestrator.retrieval import (
-    ReadonlyCorpusConfig,
-    ReadonlyLlamaIndexProvider,
     RetrievalFixtureProvider,
     VersionedRetrievalProvider,
 )
@@ -46,12 +44,19 @@ class SessionInteractionIngress:
     _consumed_correlations: set[EventCorrelation] = field(default_factory=set)
 
     @classmethod
-    def create(cls, scheduler: SessionScheduler) -> "SessionInteractionIngress":
+    def create(
+        cls,
+        scheduler: SessionScheduler,
+        *,
+        retrieval: VersionedRetrievalProvider | None = None,
+    ) -> "SessionInteractionIngress":
         session_root = session_storage_root(scheduler.snapshot.session_id)
 
         data = SessionDataState.create(
             session_id=scheduler.snapshot.session_id,
-            retrieval=_retrieval_provider(),
+            retrieval=RetrievalFixtureProvider(refs=())
+            if retrieval is None
+            else retrieval,
             memory_store=MarkdownMemoryStore(session_root / "memory.md"),
             profile_persistence=ProfilePersistence(
                 store=JsonVoiceProfileStore(session_root / "voice-profiles.json"),
@@ -137,13 +142,6 @@ class SessionInteractionIngress:
 
 def _state_root() -> Path:
     return Path(environ.get("ORCHESTRATOR_STATE_DIR", ".orchestrator-state"))
-
-
-def _retrieval_provider() -> VersionedRetrievalProvider:
-    directory = environ.get("ORCHESTRATOR_KNOWLEDGE_DIR")
-    if directory is None or directory.strip() == "":
-        return RetrievalFixtureProvider(refs=())
-    return ReadonlyLlamaIndexProvider(ReadonlyCorpusConfig(Path(directory)))
 
 
 def session_storage_root(session_id: SessionId) -> Path:

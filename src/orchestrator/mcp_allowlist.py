@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from hashlib import sha256
-from typing import TYPE_CHECKING, Protocol, final, override
+from typing import TYPE_CHECKING, Protocol, cast, final, override
 
 if TYPE_CHECKING:
     from orchestrator.brain_contracts import BrainStateSnapshot, ToolRequest
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class McpAllowlistError(ValueError):
@@ -59,8 +62,8 @@ class StaticMcpAllowlist:
         return self._entries.get(name)
 
 
-class McpRequester(Protocol):
-    def request(
+class AsyncMcpRequester(Protocol):
+    async def request(
         self,
         allowance: McpToolAllowance,
         arguments: dict[str, object],
@@ -70,66 +73,121 @@ class McpRequester(Protocol):
 
 
 @final
-class AllowlistedMcpToolExecutor:
-    """Executes exactly one statically approved MCP call per Brain request."""
-
-    def __init__(self, allowlist: StaticMcpAllowlist, requester: McpRequester) -> None:
+class AsyncMcpToolExecutor:
+    def __init__(
+        self, allowlist: StaticMcpAllowlist, requester: AsyncMcpRequester
+    ) -> None:
         self._allowlist = allowlist
         self._requester = requester
 
-    def execute(self, request: ToolRequest, snapshot: BrainStateSnapshot) -> str | None:
-        _ = snapshot
-        if request.kind != "mcp":
-            return None
+    async def execute(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> str | None:
         allowance = self._allowlist.resolve(request.name)
-        if allowance is None or f"mcp:{request.name}" not in snapshot.capabilities:
+        if (
+            request.kind != "mcp"
+            or allowance is None
+            or not {
+                f"mcp:{request.name}",
+                allowance.capability,
+            }.issubset(snapshot.capabilities)
+        ):
             return None
-        encoded = json.dumps(request.arguments, ensure_ascii=False).encode()
-        if len(encoded) > allowance.max_request_bytes:
-            return None
+        outcome = "failed"
+        payload: str | None = None
+        observation: str | None = None
         try:
-            result = self._requester.request(
-                allowance, request.arguments, timeout_ms=allowance.timeout_ms
-            )
+            encoded = json.dumps(
+                request.arguments, ensure_ascii=False, allow_nan=False
+            ).encode()
+            if len(encoded) > allowance.max_request_bytes:
+                return None
+            async with asyncio.timeout(allowance.timeout_ms / 1000):
+                result = await self._requester.request(
+                    allowance,
+                    request.arguments,
+                    timeout_ms=allowance.timeout_ms,
+                )
+            observation = _mcp_observation(allowance, result)
+            payload = None if result is None else _mcp_text(result)
+            outcome = "success" if observation is not None else "failed"
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
         except (OSError, TimeoutError, ValueError):
-            return None
-        return self._observation(allowance, result)
+            observation = None
+        finally:
+            self._log_result(request, snapshot, observation, payload, outcome)
+        return observation
 
     @staticmethod
-    def _observation(
-        allowance: McpToolAllowance, result: dict[str, object] | None
-    ) -> str | None:
-        if result is None:
+    def _log_result(
+        request: ToolRequest,
+        snapshot: BrainStateSnapshot,
+        observation: str | None,
+        payload: str | None,
+        outcome: str,
+    ) -> None:
+        _LOGGER.debug(
+            "mcp_result trace=%s session=%s seq=%s turn=%s tool=%s payload=%r observation=%r outcome=%s",  # noqa: E501
+            snapshot.input.trace_id,
+            snapshot.session_id,
+            snapshot.input.sequence,
+            snapshot.turn_id,
+            request.name,
+            payload,
+            observation,
+            outcome,
+        )
+
+
+def _mcp_observation(
+    allowance: McpToolAllowance, result: dict[str, object] | None
+) -> str | None:
+    """Only successful text enters context; binary and resource data stay out."""
+    if result is None or result.get("isError", False) is not False:
+        return None
+    encoded = json.dumps(result, ensure_ascii=False, allow_nan=False).encode()
+    if len(encoded) > allowance.max_response_bytes:
+        return None
+    plain_text = _mcp_text(result)
+    if plain_text is None:
+        return None
+    text = " ".join(plain_text.split())[:512]
+    return (
+        f"server_tool={allowance.name} status=success "
+        f"digest=sha256:{sha256(encoded).hexdigest()} text={text}"
+    )
+
+
+def _mcp_text(result: dict[str, object]) -> str | None:
+    content = result.get("content")
+    if not isinstance(content, list):
+        return None
+    texts: list[str] = []
+    for raw_block in cast("list[object]", content):
+        block = (
+            cast("dict[str, object]", raw_block)
+            if isinstance(raw_block, dict)
+            else None
+        )
+        if not isinstance(block, dict):
             return None
-        try:
-            result_bytes = json.dumps(result, ensure_ascii=False).encode()
-        except (TypeError, ValueError):
-            return None
-        if len(result_bytes) > allowance.max_response_bytes:
-            return json.dumps(
-                {
-                    "source": "mcp",
-                    "server": allowance.server,
-                    "tool": allowance.tool,
-                    "observed_at": datetime.now(UTC).isoformat(),
-                    "result": None,
-                    "error": "工具返回超过受限大小, 未采用原始内容。",
-                },
-                ensure_ascii=False,
+        if block.get("type") == "text" and isinstance(block.get("text"), str):
+            texts.append(str(block["text"]))
+        else:
+            binary = json.dumps(block, ensure_ascii=False).encode()
+            digest = sha256(binary).hexdigest()
+            kind = block.get("type", "unknown")
+            content_type = block.get("mimeType", "unknown")
+            texts.append(
+                " ".join(
+                    (
+                        f"非文本结果 kind={kind} content_type={content_type}",
+                        f"bytes={len(binary)} digest=sha256:{digest}",
+                    )
+                )
             )
-        normalized = " ".join(
-            json.dumps(result, ensure_ascii=False, separators=(",", ":")).split()
-        )
-        digest = sha256(result_bytes).hexdigest()
-        return json.dumps(
-            {
-                "source": "mcp",
-                "server": allowance.server,
-                "tool": allowance.tool,
-                "status": "success",
-                "digest": f"sha256:{digest}",
-                "observed_at": datetime.now(UTC).isoformat(),
-                "text": normalized[:512],
-            },
-            ensure_ascii=False,
-        )
+    if "structuredContent" in result:
+        texts.append(json.dumps(result["structuredContent"], ensure_ascii=False))
+    return "\n".join(texts)

@@ -79,7 +79,7 @@ def _snapshot() -> BrainStateSnapshot:
         "正在介绍产品",
         ("观众：请介绍产品",),
         "# memory\n",
-        frozenset({"mcp:web/search"}),
+        frozenset({"mcp:web/search", "network.search"}),
         was_playing_1000ms_ago=True,
     )
 
@@ -105,9 +105,7 @@ def test_brain_system_prompt_defines_input_output_syntax_and_semantics() -> None
     completion = _Completion(
         [json.dumps({"decision": "accept", "speech": "您好", "operation": None})]
     )
-    _ = JsonResponseBrain(completion).respond(
-        _snapshot(), available_operations=()
-    )
+    _ = JsonResponseBrain(completion).respond(_snapshot(), available_operations=())
     system = completion.requests[0].prompt.system
 
     assert "【输入语法】" in system
@@ -143,9 +141,7 @@ def test_brain_system_prompt_defines_allowed_inline_actions() -> None:
     completion = _Completion(
         [json.dumps({"decision": "accept", "speech": "您好", "operation": None})]
     )
-    _ = JsonResponseBrain(completion).respond(
-        _snapshot(), available_operations=()
-    )
+    _ = JsonResponseBrain(completion).respond(_snapshot(), available_operations=())
     system = completion.requests[0].prompt.system
 
     assert "【动作标记】" in system
@@ -266,7 +262,7 @@ def test_maintenance_calls_remain_independent() -> None:
 class _Requester:
     arguments: list[dict[str, object]] = field(default_factory=list)
 
-    def request(
+    async def request(
         self,
         allowance: McpToolAllowance,
         arguments: dict[str, object],
@@ -275,7 +271,7 @@ class _Requester:
     ) -> dict[str, object]:
         _ = allowance, timeout_ms
         self.arguments.append(arguments)
-        return {"result": "晴"}
+        return {"content": [{"type": "text", "text": "晴"}]}
 
 
 def test_mcp_operation_uses_its_own_schema_and_arguments() -> None:
@@ -291,7 +287,7 @@ def test_mcp_operation_uses_its_own_schema_and_arguments() -> None:
         mcp_allowlist=StaticMcpAllowlist(
             (McpToolAllowance("web", "search", "network.search", 500, 128),)
         ),
-        mcp_requester=requester,
+        async_mcp_requester=requester,
         mcp_intents=(
             McpIntentRegistration("mcp.web_search", "web/search", "联网检索", schema),
         ),

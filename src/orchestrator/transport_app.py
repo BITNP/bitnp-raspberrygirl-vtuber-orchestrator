@@ -8,14 +8,18 @@ from typing import TYPE_CHECKING, cast
 
 from orchestrator.brain_runtime import (
     AsyncJsonCompletion,
+    McpIntentRegistration,
     build_async_context_compactor,
     build_async_memory_candidate_extractor,
     build_async_response_coordinator,
 )
 from orchestrator.config import OrchestratorConfig, load_config_from_env
 from orchestrator.ids import SessionId
+from orchestrator.mcp_config import load_mcp_configuration
+from orchestrator.mcp_http import StreamableHttpMcpRequester
 from orchestrator.observability import OnsiteObservability
 from orchestrator.onsite_bridge import build_onsite_bridge
+from orchestrator.retrieval import load_knowledge_provider
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.task_registry import SchedulerTaskConfig, TaskKind
 from orchestrator.transport_config import load_transport_config_from_env
@@ -58,12 +62,23 @@ async def run_transport() -> None:
 
     brain_completion = getattr(bridge, "llm", None)
     presentation_decks = config.ppt_deck_catalog
+    retrieval = load_knowledge_provider(os.environ)
+    mcp = load_mcp_configuration(os.environ)
+    mcp_requester = StreamableHttpMcpRequester(mcp.servers) if mcp.tools else None
+    mcp_intents = tuple(
+        McpIntentRegistration(
+            tool.intent, tool.allowance.name, tool.description, tool.arguments_schema
+        )
+        for tool in mcp.tools
+    )
 
     def create_session_runtime(session_id: SessionId) -> SessionRuntime:
         session_runtime = SessionRuntime.create(
             session_id=session_id,
             turn_id_prefix="turn",
             task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+            retrieval=retrieval,
+            agent_mcp_allowlist=mcp.allowlist.names,
         )
         session_runtime.configure_voice_identity(
             getattr(transport_config, "voice_template_key", None),
@@ -73,6 +88,7 @@ async def run_transport() -> None:
             match_threshold=getattr(transport_config, "voice_match_threshold", 0.90),
             ambiguity_margin=getattr(transport_config, "voice_ambiguity_margin", 0.05),
         )
+        session_runtime.agent_capabilities |= mcp.capabilities
         if presentation_decks:
             session_runtime.agent_capabilities = session_runtime.agent_capabilities | {
                 "presentation.deck"
@@ -88,6 +104,9 @@ async def run_transport() -> None:
                         else None
                     ),
                     presentation_decks=presentation_decks,
+                    mcp_allowlist=mcp.allowlist if mcp.tools else None,
+                    async_mcp_requester=mcp_requester,
+                    mcp_intents=mcp_intents,
                 )
             )
             session_runtime.memory_candidate_extractor = (
@@ -149,5 +168,6 @@ def _log_level(env: Mapping[str, str]) -> int:
 
 def configure_dependency_loggers() -> None:
     """Keep provider diagnostics readable without exposing request payloads."""
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     for logger_name in ("openai", "httpcore"):
         logging.getLogger(logger_name).setLevel(logging.INFO)

@@ -6,7 +6,7 @@ import pytest
 from orchestrator.ids import SessionId, TraceId
 from orchestrator.interaction_ingress import SessionInteractionIngress
 from orchestrator.interactions import InteractionAccepted
-from orchestrator.retrieval import ReadonlyLlamaIndexProvider
+from orchestrator.retrieval import ReadonlyLlamaIndexProvider, load_knowledge_provider
 from orchestrator.sessions import EventCorrelation, EventSequence, SessionScheduler
 
 
@@ -113,7 +113,8 @@ def test_ingress_uses_configured_readonly_knowledge_directory(
 
     # When: the production ingress is built for the session.
 
-    ingress = SessionInteractionIngress.create(scheduler)
+    provider = load_knowledge_provider({"ORCHESTRATOR_KNOWLEDGE_DIR": str(knowledge)})
+    ingress = SessionInteractionIngress.create(scheduler, retrieval=provider)
 
     # Then: it owns an immutable LlamaIndex-core corpus, never a fixture corpus.
 
