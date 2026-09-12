@@ -9,6 +9,8 @@ from orchestrator.brain_contracts import BrainStateSnapshot
 from orchestrator.ids import SessionId, TraceId
 from orchestrator.intent_router import IntentRouter
 from orchestrator.interactions import CommentProposal
+from orchestrator.memory import MutableMemorySnapshot
+from orchestrator.memory_store import MarkdownMemoryStore
 from orchestrator.response_contracts import BrainDecision, ResponseProposal
 from orchestrator.response_coordinator import AsyncResponseCoordinator
 from orchestrator.scheduler_runtime import SessionRuntime
@@ -90,6 +92,58 @@ def test_memory_maintenance_exposes_policy_rejection_as_task_failure(
             ),
             expected_state=TaskState.FAILED,
             expected_reason="memory_candidate_unsupported_assertion",
+            expected_revision=0,
+        )
+    )
+
+
+def test_sensitive_maintenance_candidate_never_reaches_file_or_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STATE_DIR", str(tmp_path / "state"))
+    caplog.set_level("DEBUG", logger="orchestrator.scheduler_runtime")
+    protected_text = "用户患有糖尿病"
+    asyncio.run(
+        _memory_maintenance_scenario(
+            json.dumps(
+                {
+                    "decision": "remember",
+                    "key": "health_status",
+                    "value": protected_text,
+                    "confidence": 95,
+                }
+            ),
+            expected_state=TaskState.FAILED,
+            expected_reason="memory_candidate_restricted_category",
+            expected_revision=0,
+        )
+    )
+    assert protected_text not in caplog.text
+    assert "health_status" not in caplog.text
+    assert not list(tmp_path.rglob("memory.md"))
+
+
+def test_persistence_failure_is_a_failed_maintenance_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_STATE_DIR", str(tmp_path / "state"))
+
+    def fail_save(_self: MarkdownMemoryStore, _snapshot: MutableMemorySnapshot) -> None:
+        raise OSError
+
+    monkeypatch.setattr(MarkdownMemoryStore, "save", fail_save)
+    asyncio.run(
+        _memory_maintenance_scenario(
+            json.dumps(
+                {
+                    "decision": "remember",
+                    "key": "research_goal",
+                    "value": "研究通用人工智能并寻找导师",
+                    "confidence": 95,
+                }
+            ),
+            expected_state=TaskState.FAILED,
+            expected_reason="memory_persistence_failed",
             expected_revision=0,
         )
     )

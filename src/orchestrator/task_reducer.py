@@ -1,4 +1,4 @@
-
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import final
@@ -11,7 +11,6 @@ from orchestrator.task_registry import TaskId, TaskRecord, TaskRegistry, TaskSta
 
 @dataclass(frozen=True, slots=True)
 class TaskEffect:
-
     effect_type: str
 
     payload: str
@@ -19,7 +18,6 @@ class TaskEffect:
 
 @dataclass(frozen=True, slots=True)
 class TaskResult:
-
     task_id: TaskId
 
     session_id: SessionId
@@ -37,7 +35,6 @@ class TaskResult:
 
 @unique
 class TaskResultRejection(StrEnum):
-
     TASK_NOT_FOUND = "task_not_found"
 
     CANCELLED = "cancelled"
@@ -59,7 +56,6 @@ class TaskResultRejection(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TaskResultAccepted:
-
     record: TaskRecord
 
     effect: TaskEffect
@@ -67,7 +63,6 @@ class TaskResultAccepted:
 
 @dataclass(frozen=True, slots=True)
 class TaskResultRejected:
-
     reason: TaskResultRejection
 
 
@@ -76,7 +71,6 @@ type TaskReductionResult = TaskResultAccepted | TaskResultRejected
 
 @final
 class TaskResultReducer:
-
     def __init__(self, registry: TaskRegistry) -> None:
         self._registry = registry
 
@@ -87,6 +81,7 @@ class TaskResultReducer:
         snapshot: SessionSnapshot,
         now_ms: int,
         data_snapshot: TaskStateSnapshot | None = None,
+        commit: Callable[[], None] | None = None,
     ) -> TaskReductionResult:
         record = self._registry.task(result.task_id)
 
@@ -113,6 +108,10 @@ class TaskResultReducer:
         if rejection is not None:
             return TaskResultRejected(rejection)
 
+        # Run synchronous state persistence inside the validated reducer boundary.
+        # A failed write must leave this task RUNNING so the caller can fail it.
+        if commit is not None:
+            commit()
         return TaskResultAccepted(
             self._registry.complete(result.task_id),
             result.effect,

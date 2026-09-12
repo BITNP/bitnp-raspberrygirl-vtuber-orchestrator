@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from orchestrator.identity import (
     EncryptedVoiceTemplate,
     ProfileEnrollment,
@@ -86,6 +88,24 @@ def test_session_data_state_admits_only_approved_memory_and_finalized_context() 
     assert prompt_snapshot.memory_entries == ("preferred_name=小莓",)
 
     assert prompt_snapshot.context_entries == ("请叫我小莓",)
+
+
+def test_failed_memory_save_does_not_advance_live_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = _state()
+    store = JsonMemoryStore(tmp_path / "memory.json")
+    _ = store.load(SessionId("session-1"))
+    state.memory_store = store
+    before = state.memory.snapshot
+
+    def fail_save(_snapshot: object) -> None:
+        raise OSError
+
+    monkeypatch.setattr(store, "save", fail_save)
+    with pytest.raises(OSError, match=r"^$"):
+        _ = state.reduce_memory(_memory_proposal())
+    assert state.memory.snapshot == before
 
 
 def test_session_data_state_reset_and_profile_deletion_invalidate_prior_work() -> None:

@@ -161,6 +161,8 @@ class ContextComposition:
 
     content_token_count: TokenBudget
 
+    summary: str = ""
+
 
 @dataclass(frozen=True, slots=True)
 class ContextSessionMismatchError(Exception):
@@ -294,14 +296,24 @@ def compose_context(
     snapshot: TransientContextSnapshot,
     budget: ModelContextBudget,
 ) -> ContextComposition:
-    total_tokens = _content_tokens(snapshot.entries)
+    # UTF-8 bytes conservatively bound byte-based model tokens, including CJK,
+    # punctuation and unbroken strings. Never treat a Chinese paragraph as a word.
+    total_tokens = _content_tokens(snapshot.entries) + len(snapshot.summary.encode())
 
     if total_tokens <= budget.input_tokens:
-        return ContextComposition(snapshot, snapshot.entries, (), total_tokens)
+        return ContextComposition(
+            snapshot, snapshot.entries, (), TokenBudget(total_tokens), snapshot.summary
+        )
+
+    # Reserve room for recent raw entries even if a prior summary is oversized.
+    summary = snapshot.summary.encode()[: int(budget.input_tokens) // 2].decode(
+        "utf-8", errors="ignore"
+    )
+    summary_tokens = len(summary.encode())
 
     retained_indexes = _retain_newest_entry_indexes(
         snapshot.entries,
-        budget.input_tokens,
+        TokenBudget(int(budget.input_tokens) - summary_tokens),
     )
 
     retained_entries = tuple(
@@ -325,7 +337,8 @@ def compose_context(
         snapshot,
         retained_entries,
         (digest,),
-        TokenBudget(_content_tokens(retained_entries) + 1),
+        TokenBudget(_content_tokens(retained_entries) + summary_tokens + 1),
+        summary,
     )
 
 
@@ -351,7 +364,7 @@ def _retain_newest_entry_indexes(
 
 
 def _content_tokens(entries: Sequence[ContextEntry]) -> TokenBudget:
-    return TokenBudget(sum(len(entry.text.split()) for entry in entries))
+    return TokenBudget(sum(len(entry.text.encode()) for entry in entries))
 
 
 def _content_hash(entries: Sequence[ContextEntry]) -> str:

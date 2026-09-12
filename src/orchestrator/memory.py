@@ -1,10 +1,21 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum, unique
+from hashlib import sha256
 from time import time_ns
 from typing import NewType, final
 
 from orchestrator.ids import SessionId, TraceId, TurnId
+from orchestrator.memory_policy import (
+    MAX_MEMORY_AUDIT_RECORDS,
+    MAX_MEMORY_CONFIDENCE,
+    MAX_MEMORY_CONFLICT_RECORDS,
+    MAX_MEMORY_ENTRIES,
+    MAX_MEMORY_PROVENANCE_BYTES,
+    MAX_MEMORY_TEXT_BYTES,
+    contains_sensitive_memory,
+    valid_memory_text,
+)
 from orchestrator.state_snapshots import (
     ConsentRevision,
     ContextGeneration,
@@ -106,6 +117,19 @@ class MemoryConflictAudit:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryAudit:
+    revision: int
+    action: str
+    key: str
+    previous_digest: str
+    value_digest: str
+    trace_id: str
+    turn_id: str
+    evidence_id: str
+    updated_at_ms: int
+
+
+@dataclass(frozen=True, slots=True)
 class MutableMemorySnapshot:
     revision: MemoryRevision
 
@@ -114,6 +138,10 @@ class MutableMemorySnapshot:
     profile_revision: ProfileRevision
 
     consent_revision: ConsentRevision
+
+    conflict_audit: tuple[MemoryConflictAudit, ...] = ()
+
+    audit: tuple[MemoryAudit, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +160,10 @@ class MemoryCommitRejection(StrEnum):
     UNSUPPORTED_ASSERTION = "unsupported_assertion"
 
     CONFLICT = "conflict"
+
+    INVALID_FORMAT = "invalid_format"
+
+    CAPACITY_EXCEEDED = "capacity_exceeded"
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +203,7 @@ class MutableMemory:
         self._clock = clock
 
         self._conflict_audit: list[MemoryConflictAudit] = []
+        self._audit: list[MemoryAudit] = []
 
     @classmethod
     def restore(
@@ -189,6 +222,8 @@ class MutableMemory:
         memory._profile_revision = snapshot.profile_revision
 
         memory._consent_revision = snapshot.consent_revision
+        memory._conflict_audit = list(snapshot.conflict_audit)
+        memory._audit = list(snapshot.audit)
 
         return memory
 
@@ -199,6 +234,8 @@ class MutableMemory:
             entries=tuple(self._entries.values()),
             profile_revision=self._profile_revision,
             consent_revision=self._consent_revision,
+            conflict_audit=tuple(self._conflict_audit),
+            audit=tuple(self._audit),
         )
 
     @property
@@ -225,6 +262,8 @@ class MutableMemory:
                 )
             )
 
+            self._conflict_audit = self._conflict_audit[-MAX_MEMORY_CONFLICT_RECORDS:]
+
         self._entries[proposal.key] = MemoryEntry(
             key=proposal.key,
             value=proposal.value,
@@ -233,6 +272,12 @@ class MutableMemory:
             confidence=proposal.confidence,
             updated_at_ms=self._clock(),
         )
+        self._append_audit(
+            key=proposal.key,
+            previous=existing,
+            current=self._entries[proposal.key],
+            provenance=proposal.provenance,
+        )
 
         return MemoryCommitAccepted(self.snapshot)
 
@@ -240,16 +285,25 @@ class MutableMemory:
         """Validate a proposal without mutating the session memory revision."""
         return self._rejection(proposal)
 
-    def delete(self, key: MemoryKey) -> MutableMemorySnapshot:
-        _ = self._entries.pop(key, None)
+    def delete(
+        self, key: MemoryKey, *, provenance: MemoryProvenance | None = None
+    ) -> MutableMemorySnapshot:
+        previous = self._entries.pop(key, None)
 
         self._revision = MemoryRevision(self._revision + 1)
+        self._conflict_audit = [
+            item for item in self._conflict_audit if item.key != key
+        ]
+        self._append_audit(
+            key=key, previous=previous, current=None, provenance=provenance
+        )
 
         return self.snapshot
 
     def clear(self) -> MutableMemorySnapshot:
         self._entries.clear()
         self._conflict_audit.clear()
+        self._audit.clear()
         self._revision = MemoryRevision(self._revision + 1)
         return self.snapshot
 
@@ -294,13 +348,24 @@ class MutableMemory:
         if proposal.provenance.session_id != self._session_id:
             return MemoryCommitRejection.SESSION_MISMATCH
 
-        if proposal.category is not MemoryCategory.ORDINARY_PREFERENCE:
-            return MemoryCommitRejection.RESTRICTED_CATEGORY
-
-        if proposal.confidence < self._policy.minimum_confidence:
-            return MemoryCommitRejection.UNSUPPORTED_ASSERTION
+        rejection = self._content_rejection(proposal)
+        if rejection is not None:
+            return rejection
 
         existing = self._entries.get(proposal.key)
+
+        projected = {entry.key: entry.value for entry in self._entries.values()} | {
+            proposal.key: proposal.value
+        }
+        if (
+            len(projected) > MAX_MEMORY_ENTRIES
+            or sum(
+                len(key.encode()) + len(value.encode())
+                for key, value in projected.items()
+            )
+            > MAX_MEMORY_TEXT_BYTES
+        ):
+            return MemoryCommitRejection.CAPACITY_EXCEEDED
 
         if (
             existing is not None
@@ -310,3 +375,65 @@ class MutableMemory:
             return MemoryCommitRejection.CONFLICT
 
         return None
+
+    def _content_rejection(
+        self, proposal: MemoryProposal
+    ) -> MemoryCommitRejection | None:
+        if proposal.category is not MemoryCategory.ORDINARY_PREFERENCE:
+            return MemoryCommitRejection.RESTRICTED_CATEGORY
+
+        if contains_sensitive_memory(proposal.key, proposal.value):
+            return MemoryCommitRejection.RESTRICTED_CATEGORY
+
+        if not valid_memory_text(proposal.key, proposal.value):
+            return MemoryCommitRejection.INVALID_FORMAT
+
+        if any(
+            not value or len(value.encode()) > MAX_MEMORY_PROVENANCE_BYTES
+            for value in (
+                proposal.provenance.trace_id,
+                proposal.provenance.turn_id,
+                proposal.provenance.evidence_id,
+            )
+        ):
+            return MemoryCommitRejection.INVALID_FORMAT
+
+        if (
+            not self._policy.minimum_confidence
+            <= proposal.confidence
+            <= MAX_MEMORY_CONFIDENCE
+        ):
+            return MemoryCommitRejection.UNSUPPORTED_ASSERTION
+
+        return None
+
+    def _append_audit(
+        self,
+        *,
+        key: MemoryKey,
+        previous: MemoryEntry | None,
+        current: MemoryEntry | None,
+        provenance: MemoryProvenance | None,
+    ) -> None:
+        self._audit.append(
+            MemoryAudit(
+                revision=int(self._revision),
+                action="delete"
+                if current is None
+                else "add"
+                if previous is None
+                else "replace",
+                key=str(key),
+                previous_digest=""
+                if previous is None
+                else sha256(previous.value.encode()).hexdigest(),
+                value_digest=""
+                if current is None
+                else sha256(current.value.encode()).hexdigest(),
+                trace_id="" if provenance is None else str(provenance.trace_id),
+                turn_id="" if provenance is None else str(provenance.turn_id),
+                evidence_id="" if provenance is None else provenance.evidence_id,
+                updated_at_ms=self._clock(),
+            )
+        )
+        self._audit = self._audit[-MAX_MEMORY_AUDIT_RECORDS:]

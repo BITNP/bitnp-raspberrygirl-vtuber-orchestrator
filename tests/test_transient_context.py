@@ -110,7 +110,7 @@ def test_compaction_is_deterministic_and_preserves_all_source_identities() -> No
 
     policy = StaticContextBudgetPolicy(
         model_id=ModelId("local-model"),
-        budget=ModelContextBudget(input_tokens=TokenBudget(3)),
+        budget=ModelContextBudget(input_tokens=TokenBudget(13)),
     )
 
     first = FinalizedInput(_provenance("input-1", 1), "old question")
@@ -140,7 +140,7 @@ def test_compaction_is_deterministic_and_preserves_all_source_identities() -> No
 
     assert first_composition == second_composition
 
-    assert first_composition.content_token_count == TokenBudget(3)
+    assert first_composition.content_token_count <= TokenBudget(13)
 
     assert tuple(entry.provenance.source_id for entry in first_composition.entries) == (
         ContextSourceId("input-2"),
@@ -153,11 +153,11 @@ def test_compaction_is_deterministic_and_preserves_all_source_identities() -> No
 
 
 def test_compaction_digests_only_the_oversized_entry_between_retained_entries() -> None:
-    # Given: a budget-three sequence with a middle entry too large to retain.
+    # Given: a bounded sequence with a middle entry too large to retain.
 
     policy = StaticContextBudgetPolicy(
         model_id=ModelId("local-model"),
-        budget=ModelContextBudget(input_tokens=TokenBudget(3)),
+        budget=ModelContextBudget(input_tokens=TokenBudget(13)),
     )
 
     old_fit = FinalizedInput(_provenance("old-fit", 1), "one")
@@ -198,7 +198,7 @@ def test_compaction_digests_only_the_oversized_entry_between_retained_entries() 
 def test_compaction_is_atomic_and_rejects_a_stale_source_snapshot() -> None:
     policy = StaticContextBudgetPolicy(
         model_id=ModelId("local-model"),
-        budget=ModelContextBudget(input_tokens=TokenBudget(3)),
+        budget=ModelContextBudget(input_tokens=TokenBudget(13)),
     )
     context = TransientContext(session_id=SessionId("session-1"))
     _ = context.consider(FinalizedInput(_provenance("old", 1), "old question"))
@@ -247,6 +247,41 @@ def test_reset_clears_one_session_without_reusing_another_sessions_context() -> 
 def _provenance(source_id: str, sequence: int) -> ContextProvenance:
 
     return _provenance_for("session-1", source_id, sequence)
+
+
+def test_chinese_context_triggers_compaction_within_budget() -> None:
+    context = TransientContext(session_id=SessionId("session-1"))
+    _ = context.consider(FinalizedInput(_provenance("long", 1), "中文" * 1000))
+    composition = context.compose(
+        ModelId("test"),
+        StaticContextBudgetPolicy(
+            ModelId("test"), ModelContextBudget(TokenBudget(512))
+        ),
+    )
+    assert composition.digests
+    assert composition.content_token_count <= 512
+    assert not composition.entries
+
+
+def test_existing_summary_shares_budget_with_recent_chinese_context() -> None:
+    context = TransientContext(session_id=SessionId("session-1"))
+    policy = StaticContextBudgetPolicy(
+        ModelId("test"), ModelContextBudget(TokenBudget(512))
+    )
+    _ = context.consider(FinalizedInput(_provenance("long", 1), "中文" * 1000))
+    _ = context.compact(
+        context.compose(ModelId("test"), policy), summary="长期摘要" * 500
+    )
+    _ = context.consider(FinalizedInput(_provenance("new", 2), "继续介绍产品"))
+    composition = context.compose(ModelId("test"), policy)
+    actual_bytes = len(composition.summary.encode()) + sum(
+        len(entry.text.encode()) for entry in composition.entries
+    )
+    assert actual_bytes <= composition.content_token_count <= 512
+    assert composition.summary
+    assert composition.summary != context.snapshot.summary
+    assert composition.entries[-1].text == "继续介绍产品"
+    assert composition.digests
 
 
 def _provenance_for(

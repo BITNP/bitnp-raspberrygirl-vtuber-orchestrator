@@ -1,3 +1,5 @@
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ from orchestrator.memory import (
     MutableMemory,
     ProposalRevision,
 )
+from orchestrator.memory_policy import MAX_MEMORY_TEXT_BYTES
 from orchestrator.memory_store import (
     JsonMemoryStore,
     MarkdownMemoryStore,
@@ -324,3 +327,149 @@ def _proposal(
             evidence_id="finalized-input-1",
         ),
     )
+
+
+@pytest.mark.parametrize(
+    "value", ["用户患有糖尿病", "联系邮箱 person@example.test", "密码是虚构口令"]
+)
+def test_sensitive_candidate_cannot_claim_ordinary_category(value: str) -> None:
+    memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
+    assert isinstance(
+        memory.reduce(_proposal(value=value, confidence=95)), MemoryCommitRejected
+    )
+    assert memory.snapshot.revision == 0
+
+
+def test_memory_entry_capacity_rejects_new_keys_without_mutation() -> None:
+    memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
+    rejected = False
+    for index in range(100):
+        before = memory.snapshot
+        result = memory.reduce(
+            replace(
+                _proposal(value="喜欢简洁回答", confidence=95),
+                key=MemoryKey(f"preference_{index}"),
+                base_revision=ProposalRevision(before.revision),
+            )
+        )
+        if isinstance(result, MemoryCommitRejected):
+            assert memory.snapshot == before
+            rejected = True
+            break
+    assert rejected
+
+
+def test_conflict_audit_survives_memory_restart(tmp_path: Path) -> None:
+    session_id = SessionId("session-1")
+    memory = MutableMemory(session_id=session_id, policy=MemoryPolicy())
+    _ = memory.reduce(_proposal(value="小莓", confidence=95))
+    _ = memory.reduce(
+        replace(
+            _proposal(value="莓莓", confidence=96), base_revision=ProposalRevision(1)
+        )
+    )
+    store = MarkdownMemoryStore(tmp_path / "memory.md")
+    _ = store.load(session_id)
+    store.save(memory.snapshot)
+    snapshot = MarkdownMemoryStore(tmp_path / "memory.md").load(session_id)
+    assert snapshot is not None
+    restored = MutableMemory.restore(
+        session_id=session_id, policy=MemoryPolicy(), snapshot=snapshot
+    )
+    assert restored.conflict_audit == memory.conflict_audit
+
+
+def test_memory_byte_capacity_counts_chinese_text() -> None:
+    memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
+    for index in range(32):
+        outcome = memory.reduce(
+            replace(
+                _proposal(value="莓" * 512, confidence=95),
+                key=MemoryKey(f"preference_{index}"),
+                base_revision=ProposalRevision(memory.snapshot.revision),
+            )
+        )
+        if isinstance(outcome, MemoryCommitRejected):
+            assert outcome.reason is MemoryCommitRejection.CAPACITY_EXCEEDED
+            break
+    else:
+        pytest.fail("memory byte budget was not enforced")
+    assert (
+        sum(
+            len(entry.key.encode()) + len(entry.value.encode())
+            for entry in memory.snapshot.entries
+        )
+        <= MAX_MEMORY_TEXT_BYTES
+    )
+
+
+@pytest.mark.parametrize("store_type", [JsonMemoryStore, MarkdownMemoryStore])
+def test_audit_add_replace_delete_roundtrip_excludes_deleted_text(
+    tmp_path: Path, store_type: type[JsonMemoryStore] | type[MarkdownMemoryStore]
+) -> None:
+    session_id = SessionId("session-1")
+    memory = MutableMemory(session_id=session_id, policy=MemoryPolicy())
+    _ = memory.reduce(_proposal(value="小莓", confidence=95))
+    _ = memory.reduce(
+        replace(
+            _proposal(value="莓莓", confidence=96), base_revision=ProposalRevision(1)
+        )
+    )
+    _ = memory.delete(
+        MemoryKey("preferred_name"),
+        provenance=_proposal(value="", confidence=95).provenance,
+    )
+    path = tmp_path / "memory"
+    store = store_type(path)
+    _ = store.load(session_id)
+    store.save(memory.snapshot)
+    restored = store_type(path).load(session_id)
+    assert restored == memory.snapshot
+    assert [item.action for item in memory.snapshot.audit] == [
+        "add",
+        "replace",
+        "delete",
+    ]
+    assert memory.snapshot.audit[-1].trace_id == "trace-1"
+    assert memory.snapshot.audit[-1].previous_digest
+    assert "小莓" not in path.read_text()
+    assert "莓莓" not in path.read_text()
+
+
+def test_unsafe_legacy_memory_is_rejected_without_rewriting_file(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "memory.json"
+    raw = json.dumps(
+        {
+            "session_id": "session-1",
+            "revision": 1,
+            "preferences": [
+                {
+                    "key": "preferred_name",
+                    "value": "用户患有糖尿病",
+                    "source": "agent_proposal",
+                    "trace_id": "trace-1",
+                    "session_id": "session-1",
+                    "turn_id": "turn-1",
+                    "evidence_id": "input-1",
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    _ = path.write_text(raw)
+    with pytest.raises(MemoryStoreBoundaryError):
+        _ = JsonMemoryStore(path).load(SessionId("session-1"))
+    assert path.read_text() == raw
+
+
+@pytest.mark.parametrize(
+    "key", ["health_status", "api_key", "contact_email", "voice_embedding"]
+)
+def test_sensitive_keys_are_rejected_even_with_innocuous_values(key: str) -> None:
+    memory = MutableMemory(session_id=SessionId("session-1"), policy=MemoryPolicy())
+    result = memory.reduce(
+        replace(_proposal(value="测试", confidence=95), key=MemoryKey(key))
+    )
+    assert result == MemoryCommitRejected(MemoryCommitRejection.RESTRICTED_CATEGORY)

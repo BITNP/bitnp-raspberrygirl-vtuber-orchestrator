@@ -1,18 +1,33 @@
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Final, Protocol, final, override
 
 from orchestrator.ids import SessionId, TraceId, TurnId
 from orchestrator.json_boundary import JsonBoundaryError, JsonValue, parse_json_value
 from orchestrator.memory import (
+    MemoryAudit,
     MemoryCategory,
     MemoryConfidence,
+    MemoryConflictAudit,
     MemoryEntry,
     MemoryKey,
+    MemoryPolicy,
+    MemoryProposal,
     MemoryProvenance,
     MemorySource,
+    MutableMemory,
     MutableMemorySnapshot,
+    ProposalRevision,
+)
+from orchestrator.memory_policy import (
+    MAX_MEMORY_AUDIT_RECORDS,
+    MAX_MEMORY_CONFIDENCE,
+    MAX_MEMORY_CONFLICT_RECORDS,
+    MAX_MEMORY_DOCUMENT_BYTES,
+    MAX_MEMORY_PROVENANCE_BYTES,
+    contains_sensitive_memory,
+    valid_memory_text,
 )
 from orchestrator.state_snapshots import (
     ConsentRevision,
@@ -53,29 +68,18 @@ class JsonMemoryStore:
         if self._session_id is None:
             raise MemoryStoreBoundaryError(_SESSION_ID_FIELD)
 
-        document = {
-            "session_id": str(self._session_id),
-            "revision": int(snapshot.revision),
-            "preferences": [
-                {
-                    "key": entry.key,
-                    "value": entry.value,
-                    "source": entry.provenance.source,
-                    "trace_id": entry.provenance.trace_id,
-                    "session_id": entry.provenance.session_id,
-                    "turn_id": entry.provenance.turn_id,
-                    "evidence_id": entry.provenance.evidence_id,
-                }
-                for entry in snapshot.entries
-            ],
-        }
+        document = _document_for_snapshot(snapshot, self._session_id)
+        rendered = (
+            json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        )
+        _check_document_size(rendered)
 
         _ = self._path.parent.mkdir(parents=True, exist_ok=True)
 
         temporary = self._path.with_suffix(f"{self._path.suffix}.tmp")
 
         _ = temporary.write_text(
-            json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            rendered,
             encoding="utf-8",
         )
 
@@ -92,7 +96,7 @@ class JsonMemoryStore:
             return None
 
         try:
-            document = _object(parse_json_value(self._path.read_text(encoding="utf-8")))
+            document = _object(parse_json_value(_read_document(self._path)))
 
         except JsonBoundaryError as error:
             raise MemoryStoreBoundaryError(error.field_name) from error
@@ -112,6 +116,7 @@ class MarkdownMemoryStore:
         if self._session_id is None:
             raise MemoryStoreBoundaryError(_SESSION_ID_FIELD)
         rendered = render_markdown_memory(snapshot, self._session_id)
+        _check_document_size(rendered)
         _ = self._path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._path.with_suffix(f"{self._path.suffix}.tmp")
         _ = temporary.write_text(rendered, encoding="utf-8")
@@ -124,7 +129,7 @@ class MarkdownMemoryStore:
             raise MemoryStoreBoundaryError(_SESSION_ID_FIELD)
         if not self._path.exists():
             return None
-        raw = self._path.read_text(encoding="utf-8")
+        raw = _read_document(self._path)
         start = raw.find(_MARKDOWN_STATE_OPEN)
         end = raw.find(_MARKDOWN_STATE_CLOSE, start + len(_MARKDOWN_STATE_OPEN))
         if start < 0 or end < 0:
@@ -171,6 +176,7 @@ def _document_for_snapshot(
     snapshot: MutableMemorySnapshot, session_id: SessionId
 ) -> dict[str, object]:
     return {
+        "format_version": 2,
         "session_id": str(session_id),
         "revision": int(snapshot.revision),
         "preferences": [
@@ -188,12 +194,18 @@ def _document_for_snapshot(
             }
             for entry in snapshot.entries
         ],
+        "conflict_audit": [asdict(item) for item in snapshot.conflict_audit],
+        "audit": [asdict(item) for item in snapshot.audit],
     }
 
 
 def _snapshot_from_document(
     document: dict[str, JsonValue], session_id: SessionId
 ) -> MutableMemorySnapshot | None:
+    version = _optional_integer(document, "format_version", 1)
+    if version not in {1, 2}:
+        field = "format_version"
+        raise MemoryStoreBoundaryError(field)
     stored_session_id = SessionId(_text(document, _SESSION_ID_FIELD))
     if stored_session_id != session_id:
         return None
@@ -218,12 +230,128 @@ def _snapshot_from_document(
     )
     if any(entry.provenance.session_id != session_id for entry in entries):
         return None
+    # Never silently migrate unsafe legacy files into the Brain's memory.
+    validator = MutableMemory(session_id=session_id, policy=MemoryPolicy())
+    for entry in entries:
+        proposal = MemoryProposal(
+            entry.key,
+            entry.value,
+            entry.category,
+            entry.confidence,
+            ProposalRevision(validator.snapshot.revision),
+            entry.provenance,
+        )
+        if validator.validate(proposal) is not None or any(
+            item.key == entry.key for item in validator.snapshot.entries
+        ):
+            field = "preferences"
+            raise MemoryStoreBoundaryError(field)
+        _ = validator.reduce(proposal)
+    revision = _integer(document, "revision")
+    if revision < 0:
+        field = "revision"
+        raise MemoryStoreBoundaryError(field)
     return MutableMemorySnapshot(
-        revision=MemoryRevision(_integer(document, "revision")),
+        revision=MemoryRevision(revision),
         entries=entries,
         profile_revision=ProfileRevision(0),
         consent_revision=ConsentRevision(0),
+        conflict_audit=_conflicts(document),
+        audit=_audit(document, revision),
     )
+
+
+def _check_document_size(text: str) -> None:
+    if len(text.encode()) > MAX_MEMORY_DOCUMENT_BYTES:
+        field = "document_size"
+        raise MemoryStoreBoundaryError(field)
+
+
+def _read_document(path: Path) -> str:
+    with path.open("rb") as stream:
+        raw = stream.read(MAX_MEMORY_DOCUMENT_BYTES + 1)
+    if len(raw) > MAX_MEMORY_DOCUMENT_BYTES:
+        field = "document_size"
+        raise MemoryStoreBoundaryError(field)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeError as error:
+        field = "encoding"
+        raise MemoryStoreBoundaryError(field) from error
+
+
+def _audit_items(
+    document: dict[str, JsonValue], field: str
+) -> list[dict[str, JsonValue]]:
+    items = document.get(field, [])
+    if not isinstance(items, list) or len(items) > MAX_MEMORY_AUDIT_RECORDS:
+        raise MemoryStoreBoundaryError(field)
+    return [_object(item) for item in items]
+
+
+def _conflicts(document: dict[str, JsonValue]) -> tuple[MemoryConflictAudit, ...]:
+    results: list[MemoryConflictAudit] = []
+    items = _audit_items(document, "conflict_audit")
+    if len(items) > MAX_MEMORY_CONFLICT_RECORDS:
+        field = "conflict_audit"
+        raise MemoryStoreBoundaryError(field)
+    for item in items:
+        key = _text(item, "key")
+        old = _text(item, "replaced_value")
+        new = _text(item, "replacement_value")
+        confidences = (
+            _integer(item, "replaced_confidence"),
+            _integer(item, "replacement_confidence"),
+        )
+        if any(
+            not valid_memory_text(key, value) or contains_sensitive_memory(key, value)
+            for value in (old, new)
+        ) or any(not 0 <= value <= MAX_MEMORY_CONFIDENCE for value in confidences):
+            field = "conflict_audit"
+            raise MemoryStoreBoundaryError(field)
+        results.append(
+            MemoryConflictAudit(
+                MemoryKey(key),
+                old,
+                new,
+                MemoryConfidence(confidences[0]),
+                MemoryConfidence(confidences[1]),
+            )
+        )
+    return tuple(results)
+
+
+def _audit(document: dict[str, JsonValue], revision: int) -> tuple[MemoryAudit, ...]:
+    results: list[MemoryAudit] = []
+    for item in _audit_items(document, "audit"):
+        record = MemoryAudit(
+            revision=_integer(item, "revision"),
+            action=_text(item, "action"),
+            key=_text(item, "key"),
+            previous_digest=_text(item, "previous_digest"),
+            value_digest=_text(item, "value_digest"),
+            trace_id=_text(item, "trace_id"),
+            turn_id=_text(item, "turn_id"),
+            evidence_id=_text(item, "evidence_id"),
+            updated_at_ms=_integer(item, "updated_at_ms"),
+        )
+        if (
+            not 0 < record.revision <= revision
+            or record.action not in {"add", "replace", "delete"}
+            or any(
+                len(value.encode()) > MAX_MEMORY_PROVENANCE_BYTES
+                for value in (
+                    record.key,
+                    record.trace_id,
+                    record.turn_id,
+                    record.evidence_id,
+                )
+            )
+        ):
+            field = "audit"
+            raise MemoryStoreBoundaryError(field)
+        results.append(record)
+    return tuple(results)
 
 
 def _object(value: JsonValue) -> dict[str, JsonValue]:

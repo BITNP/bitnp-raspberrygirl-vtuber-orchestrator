@@ -77,6 +77,7 @@ from orchestrator.memory_extractor import (
     AsyncMemoryCandidateExtractor,
     parse_memory_candidate,
 )
+from orchestrator.memory_policy import contains_sensitive_memory
 from orchestrator.memory_store import render_markdown_memory
 from orchestrator.modes import AdaptiveAgentPolicy
 from orchestrator.operational_journal import OperationalJournal, OperationalRecord
@@ -220,7 +221,6 @@ _OPERATION_REQUEST_LOG = "operation_request trace=%s session=%s turn=%s segment=
 _OPERATION_OBSERVATION_LOG = "operation_observation trace=%s session=%s turn=%s segment=%s kind=%s name=%s observation=%r"  # noqa: E501
 _TTS_FIRST_FRAME_LOG = "tts_first_frame_admitted trace=%s session=%s turn=%s segment=%s task=%s speech=%r"  # noqa: E501
 _MEMORY_REJECTED_LOG = "memory_candidate_rejected trace=%s session=%s turn=%s segment=%s task=%s key=%r value=%r confidence=%d reason=%s"  # noqa: E501
-_MEMORY_INVARIANT_LOG = "memory_candidate_commit_invariant_failed trace=%s session=%s turn=%s segment=%s task=%s key=%r value=%r confidence=%d"  # noqa: E501
 _MEMORY_COMMITTED_LOG = "memory_candidate_committed trace=%s session=%s turn=%s segment=%s task=%s revision=%d key=%r value=%r confidence=%d"  # noqa: E501
 
 _DEFAULT_AGENT_CAPABILITIES = frozenset(
@@ -1147,7 +1147,7 @@ class SessionRuntime:
             revision=int(self.scheduler.snapshot.revision),
             cancellation_epoch=int(self.cancellation_epoch),
             input=audience_input,
-            context_summary=context.summary,
+            context_summary=composition.summary,
             recent_context=tuple(entry.text for entry in composition.entries),
             memory_markdown=render_markdown_memory(
                 memory, self.scheduler.snapshot.session_id
@@ -1842,6 +1842,7 @@ class SessionRuntime:
         )
         rejection = self.interaction_ingress.data.memory.validate(proposal)
         if rejection is not None:
+            protected = contains_sensitive_memory(candidate.key, candidate.value)
             reason = f"memory_candidate_{rejection.value}"
             _ = self.task_registry.fail(task_id, reason=reason)
             _LOGGER.debug(
@@ -1851,39 +1852,47 @@ class SessionRuntime:
                 pending.provenance.turn_id,
                 pending.provenance.segment_id,
                 task_id,
-                candidate.key,
-                candidate.value,
+                "[受保护]" if protected else candidate.key,
+                "[受保护]" if protected else candidate.value,
                 candidate.confidence,
                 rejection.value,
             )
             return
-        accepted = self.reduce_task(
-            TaskResult(
-                task_id,
-                pending.provenance.session_id,
-                pending.provenance.turn_id,
-                record.request.snapshot_revision,
-                TaskEffect("memory.candidate", str(candidate.key)),
-                record.request.cancellation_epoch,
-                record.request.segment_id,
-            ),
-            correlation,
-        )
-        if not accepted.accepted:
-            return
-        commit = self.interaction_ingress.data.reduce_memory(proposal)
-        if not isinstance(commit, MemoryCommitAccepted):
-            _LOGGER.error(
-                _MEMORY_INVARIANT_LOG,
+
+        def commit_memory() -> None:
+            commit = self.interaction_ingress.data.reduce_memory(proposal)
+            match commit:
+                case MemoryCommitAccepted():
+                    pass
+                case _:
+                    reason = "memory_candidate_commit_invariant_failed"
+                    raise ValueError(reason)
+
+        try:
+            accepted = self.reduce_task(
+                TaskResult(
+                    task_id,
+                    pending.provenance.session_id,
+                    pending.provenance.turn_id,
+                    record.request.snapshot_revision,
+                    TaskEffect("memory.candidate", str(candidate.key)),
+                    record.request.cancellation_epoch,
+                    record.request.segment_id,
+                ),
+                correlation,
+                commit=commit_memory,
+            )
+        except (OSError, ValueError):
+            _ = self.task_registry.fail(task_id, reason="memory_persistence_failed")
+            _LOGGER.debug(
+                "memory_persistence_failed trace=%s session=%s turn=%s task=%s",
                 correlation.trace_id,
                 pending.provenance.session_id,
                 pending.provenance.turn_id,
-                pending.provenance.segment_id,
                 task_id,
-                candidate.key,
-                candidate.value,
-                candidate.confidence,
             )
+            return
+        if not accepted.accepted:
             return
         _LOGGER.debug(
             _MEMORY_COMMITTED_LOG,
@@ -1892,7 +1901,7 @@ class SessionRuntime:
             pending.provenance.turn_id,
             pending.provenance.segment_id,
             task_id,
-            commit.snapshot.revision,
+            self.interaction_ingress.data.memory.snapshot.revision,
             candidate.key,
             candidate.value,
             candidate.confidence,
@@ -2282,7 +2291,17 @@ class SessionRuntime:
                 )
 
             case MemoryDeleteControl(key=key, correlation=correlation):
-                self.interaction_ingress.data.delete_memory(key)
+                self.interaction_ingress.data.delete_memory(
+                    key,
+                    provenance=MemoryProvenance(
+                        source=MemorySource.USER_REQUEST,
+                        trace_id=correlation.trace_id,
+                        session_id=correlation.session_id,
+                        turn_id=self.scheduler.snapshot.active_turn_id
+                        or TurnId("operator"),
+                        evidence_id=f"operator:{correlation.sequence}",
+                    ),
+                )
                 return self._interaction_outcome(
                     correlation, "memory_deleted", accepted=True, task_id=None
                 )
@@ -2896,7 +2915,11 @@ class SessionRuntime:
         return self.executor.next(now_ms=now_ms)
 
     def reduce_task(
-        self, result: TaskResult, correlation: EventCorrelation
+        self,
+        result: TaskResult,
+        correlation: EventCorrelation,
+        *,
+        commit: Callable[[], None] | None = None,
     ) -> RuntimeOutcome:
         record = self.task_registry.task(result.task_id)
         if record is not None and not record.request.capability_snapshot.issubset(
@@ -2909,6 +2932,7 @@ class SessionRuntime:
             snapshot=self.scheduler.snapshot,
             data_snapshot=self._task_data_snapshot,
             now_ms=self.clock(),
+            commit=commit,
         )
 
         match outcome:

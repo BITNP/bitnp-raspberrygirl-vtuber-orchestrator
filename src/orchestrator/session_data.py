@@ -18,6 +18,7 @@ from orchestrator.memory import (
     MemoryKey,
     MemoryPolicy,
     MemoryProposal,
+    MemoryProvenance,
     MutableMemory,
 )
 from orchestrator.memory_store import MemoryStore
@@ -121,23 +122,37 @@ class SessionDataState:
         return snapshot == self.task_snapshot
 
     def reduce_memory(self, proposal: MemoryProposal) -> MemoryCommitResult:
-        result = self.memory.reduce(proposal)
+        staged = MutableMemory.restore(
+            session_id=self.context.snapshot.session_id,
+            policy=MemoryPolicy(),
+            snapshot=self.memory.snapshot,
+        )
+        result = staged.reduce(proposal)
 
         match result:
             case MemoryCommitAccepted(snapshot=snapshot):
                 if self.memory_store is not None:
                     self.memory_store.save(snapshot)
+                self.memory = staged
 
             case _:
                 pass
 
         return result
 
-    def delete_memory(self, key: MemoryKey) -> None:
-        snapshot = self.memory.delete(key)
+    def delete_memory(
+        self, key: MemoryKey, *, provenance: MemoryProvenance | None = None
+    ) -> None:
+        staged = MutableMemory.restore(
+            session_id=self.context.snapshot.session_id,
+            policy=MemoryPolicy(),
+            snapshot=self.memory.snapshot,
+        )
+        snapshot = staged.delete(key, provenance=provenance)
 
         if self.memory_store is not None:
             self.memory_store.save(snapshot)
+        self.memory = staged
 
     def consider_context(self, material: ContextMaterial) -> None:
         _ = self.context.consider(material)
