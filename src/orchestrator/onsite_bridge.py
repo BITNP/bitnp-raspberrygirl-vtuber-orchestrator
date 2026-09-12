@@ -476,6 +476,7 @@ def build_onsite_bridge(
         config.llm_model,
         config.llm_api_key,
         config.llm_reasoning_dialect,
+        generation=config.llm_generation,
         brain_model=config.llm_brain_model,
         maintenance_model=config.llm_maintenance_model,
         timeout_seconds=120.0,

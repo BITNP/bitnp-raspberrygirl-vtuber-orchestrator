@@ -16,7 +16,53 @@ Raspberry Girl 是一个面向公开讲解、虚拟主播和现场产品介绍�
 
 开发和测试默认使用 `ORCHESTRATOR_LLM_PROVIDER=mock`，不需要凭据、GPU、外部服务、真实音频设备或 Godot。`.env.example` 展示的是现场语音链路的生产配置形状；普通开发不要直接采用其中的 `openai_compatible` provider 值。
 
-真实 LLM 部署必须通过 `ORCHESTRATOR_LLM_REASONING_DIALECT` 明确选择 `deepseek` 或 `openai` 请求方言。Brain 开启思考，记忆提取与上下文压缩关闭思考；两类工作负载可分别指定模型，未指定时使用 `ORCHESTRATOR_LLM_MODEL`。
+真实 LLM 部署必须通过 `ORCHESTRATOR_LLM_REASONING_DIALECT` 明确选择 `deepseek`、`openai` 或 `none` 请求方言。`none` 不发送思考参数。Brain、记忆提取与上下文压缩默认均关闭思考；两类工作负载可分别指定模型，未指定时使用 `ORCHESTRATOR_LLM_MODEL`。
+
+### LLM 生成参数
+
+以下后缀加上 `ORCHESTRATOR_LLM_` 构成全局环境变量；也可使用
+`ORCHESTRATOR_LLM_BRAIN_` 或 `ORCHESTRATOR_LLM_MAINTENANCE_` 前缀分别覆盖。
+优先级是任务专属非空值 → 全局非空值 → 原有请求默认值。空白表示继承；
+`omit` 表示不发送该参数，不等于数值 0，也不等于关闭思考。
+配置在启动时读取，修改后重启。非法数值、非有限数值和未知枚举在启动时拒绝。
+
+| 后缀 | 可配置值 | 未配置时 |
+| --- | --- | --- |
+| `TEMPERATURE` | 0～2，或 `omit` | Brain 0.2，维护 0 |
+| `TOP_P` | 0～1，或 `omit` | 不发送 |
+| `FREQUENCY_PENALTY` | -2～2，或 `omit` | 不发送 |
+| `PRESENCE_PENALTY` | -2～2，或 `omit` | 不发送 |
+| `REASONING` | `enabled` / `disabled` / `omit` | `disabled` |
+| `REASONING_EFFORT` | `minimal` / `low` / `medium` / `high` / `xhigh` | `medium`；仅 openai 方言开启思考时发送 |
+| `MAX_COMPLETION_TOKENS` | 正整数 | Brain 8192，维护 4096 |
+| `TOKEN_PARAMETER` | `auto` / `max_tokens` / `max_completion_tokens` | `auto`：openai 使用后者，deepseek/none 使用前者 |
+| `REASONING_DIALECT` | `deepseek` / `openai` / `none` | 任务专属值继承必填的全局方言 |
+
+例如，调整 Brain 温度与预算，同时保持维护调用保守：
+
+```dotenv
+ORCHESTRATOR_LLM_REASONING_DIALECT=deepseek
+ORCHESTRATOR_LLM_BRAIN_TEMPERATURE=0.6
+ORCHESTRATOR_LLM_BRAIN_REASONING=disabled
+ORCHESTRATOR_LLM_BRAIN_MAX_COMPLETION_TOKENS=4096
+ORCHESTRATOR_LLM_MAINTENANCE_TEMPERATURE=0
+ORCHESTRATOR_LLM_MAINTENANCE_REASONING=disabled
+ORCHESTRATOR_LLM_MAINTENANCE_MAX_COMPLETION_TOKENS=2048
+```
+
+思考参数没有统一协议：deepseek 方言发送 `thinking.type`，openai 方言发送
+`reasoning_effort`（关闭时为 `none`）。如果服务不支持思考控制，选择 `none` 方言
+或 `REASONING=omit`；这只省略参数，不能保证服务端停止思考。不支持温度或惩罚项
+的模型可将相应参数设为 `omit`。不同维护模型可单独指定方言和预算字段名。
+枚举和数值范围表示客户端接受的配置，实际支持范围仍取决于服务和模型；
+服务返回错误时保留既有失败处理，不自动删参数重试。通常先调整温度或 top_p 中的一项。
+
+输出预算不会省略，也不会扩大调度器的 deadline、响应长度或效果权限。
+推理模型可能将思考 token 计入输出预算，增加预算并不保证在原有时限内完成。
+结构化响应仍使用 `json_object` 和本地提案校验。思考开关不负责清理 `speech`
+字段中混入的思考文本；生成参数配置并不替代播报内容校验。
+实际发送的生成参数记录在 `DEBUG` 的 `llm_generation_parameters` 日志中。
+
 
 ```bash
 cd bitnp-raspberrygirl-vtuber-orchestrator

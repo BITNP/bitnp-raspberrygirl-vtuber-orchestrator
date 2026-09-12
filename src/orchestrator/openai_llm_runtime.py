@@ -5,7 +5,7 @@ import logging
 import ssl
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, cast
 
 import httpx
 from openai import (
@@ -34,17 +34,15 @@ from orchestrator.llm import (
     LLMRequest,
     LLMStreamEvent,
     LLMWorkload,
-    ReasoningMode,
 )
+from orchestrator.llm_settings import LLMGenerationConfig, ReasoningDialect
 from orchestrator.provider_streaming import ProviderDeadlines, ProviderResponseError
 
 _LOGGER = logging.getLogger(__name__)
 
-type ReasoningDialect = Literal["deepseek", "openai"]
+_JSON_REQUEST_LOG = "llm_json_request workload=%s model=%s schema=%s default_dialect=%s request_reasoning=%s request_temperature=%s request_max_completion_tokens=%d system=%r user=%r"  # noqa: E501
 
-_JSON_REQUEST_LOG = "llm_json_request workload=%s model=%s schema=%s dialect=%s reasoning=%s temperature=%s max_completion_tokens=%d system=%r user=%r"  # noqa: E501
-
-_STREAM_REQUEST_LOG = "llm_request workload=%s model=%s dialect=%s reasoning=%s temperature=%s max_completion_tokens=%d system=%r user=%r"  # noqa: E501
+_STREAM_REQUEST_LOG = "llm_request workload=%s model=%s default_dialect=%s request_reasoning=%s request_temperature=%s request_max_completion_tokens=%d system=%r user=%r"  # noqa: E501
 
 
 def _noop() -> None:
@@ -97,6 +95,7 @@ class AsyncOpenAICompatibleLLMRuntime:
     maintenance_model: str | None = None
     timeout_seconds: float = 120.0
     deadlines: ProviderDeadlines = field(default_factory=ProviderDeadlines)
+    generation: LLMGenerationConfig = field(default_factory=LLMGenerationConfig)
     ca_path: Path | None = None
     http_client: httpx.AsyncClient | None = None
     _client: AsyncOpenAI = field(init=False, repr=False)
@@ -109,7 +108,7 @@ class AsyncOpenAICompatibleLLMRuntime:
             raise AdapterConfigError(field_name="model")
         if self.api_key.strip() == "":
             raise AdapterConfigError(field_name="api_key")
-        if self.reasoning_dialect not in {"deepseek", "openai"}:
+        if self.reasoning_dialect not in {"deepseek", "openai", "none"}:
             raise AdapterConfigError(field_name="reasoning_dialect")
         for field_name, configured_model in (
             ("brain_model", self.brain_model),
@@ -172,16 +171,10 @@ class AsyncOpenAICompatibleLLMRuntime:
             body: dict[str, object] = {
                 "model": model,
                 "messages": chat_messages(request),
-                "temperature": request.temperature,
+                **self._generation_parameters(request),
                 "stream": False,
                 "response_format": {"type": "json_object"},
             }
-            if self.reasoning_dialect == "deepseek":
-                body.update(_deepseek_reasoning_body(request.reasoning))
-                body["max_tokens"] = request.max_completion_tokens
-            else:
-                body["reasoning_effort"] = _openai_reasoning_effort(request.reasoning)
-                body["max_completion_tokens"] = request.max_completion_tokens
             response = await self._http_client.post(
                 f"{self.endpoint.rstrip('/')}/chat/completions",
                 json=body,
@@ -260,7 +253,7 @@ class AsyncOpenAICompatibleLLMRuntime:
         ) as error:
             raise provider_error(error) from error
 
-    async def stream(  # noqa: C901, PLR0912
+    async def stream(  # noqa: C901
         self,
         request: LLMRequest,
         *,
@@ -283,26 +276,13 @@ class AsyncOpenAICompatibleLLMRuntime:
             request.prompt.user,
         )
         try:
-            if self.reasoning_dialect == "deepseek":
-                stream = await self._client.chat.completions.create(
-                    model=model,
-                    messages=chat_messages(request),
-                    temperature=request.temperature,
-                    stream=True,
-                    extra_body=_deepseek_reasoning_body(request.reasoning),
-                    max_tokens=request.max_completion_tokens,
-                    timeout=self._request_timeout(request.timeout_seconds),
-                )
-            else:
-                stream = await self._client.chat.completions.create(
-                    model=model,
-                    messages=chat_messages(request),
-                    temperature=request.temperature,
-                    stream=True,
-                    reasoning_effort=_openai_reasoning_effort(request.reasoning),
-                    max_completion_tokens=request.max_completion_tokens,
-                    timeout=self._request_timeout(request.timeout_seconds),
-                )
+            stream = await self._client.chat.completions.create(
+                model=model,
+                messages=chat_messages(request),
+                stream=True,
+                extra_body=self._generation_parameters(request),
+                timeout=self._request_timeout(request.timeout_seconds),
+            )
             if cancellation is not None:
                 loop = asyncio.get_running_loop()
 
@@ -360,12 +340,22 @@ class AsyncOpenAICompatibleLLMRuntime:
             case LLMWorkload.MAINTENANCE:
                 return self.maintenance_model or self.model
 
-
-def _deepseek_reasoning_body(mode: ReasoningMode) -> dict[str, object]:
-    return {"thinking": {"type": mode.value}}
-
-
-def _openai_reasoning_effort(
-    mode: ReasoningMode,
-) -> Literal["none", "medium"]:
-    return "medium" if mode is ReasoningMode.ENABLED else "none"
+    def _generation_parameters(self, request: LLMRequest) -> dict[str, object]:
+        settings = (
+            self.generation.brain
+            if request.workload is LLMWorkload.BRAIN
+            else self.generation.maintenance
+        )
+        parameters = settings.parameters(
+            temperature=request.temperature,
+            reasoning=request.reasoning.value,
+            max_completion_tokens=request.max_completion_tokens,
+            dialect=self.reasoning_dialect,
+        )
+        _LOGGER.debug(
+            "llm_generation_parameters workload=%s model=%s parameters=%r",
+            request.workload,
+            self._model_for(request.workload),
+            parameters,
+        )
+        return parameters

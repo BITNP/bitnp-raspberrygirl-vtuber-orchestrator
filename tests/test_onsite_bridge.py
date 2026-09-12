@@ -54,6 +54,8 @@ def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
             "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
             "ORCHESTRATOR_LLM_BRAIN_MODEL": "brain-model",
             "ORCHESTRATOR_LLM_MAINTENANCE_MODEL": "maintenance-model",
+            "ORCHESTRATOR_LLM_BRAIN_TEMPERATURE": "0.6",
+            "ORCHESTRATOR_LLM_BRAIN_MAX_COMPLETION_TOKENS": "2048",
             "ORCHESTRATOR_TLS_CA_PATH": "/run/secrets/onsite-ca.pem",
             "ORCHESTRATOR_TTS_PROVIDER": "vllm_omni",
             "ORCHESTRATOR_TTS_ENDPOINT": "https://tts.example.test/v1",
@@ -77,6 +79,8 @@ def test_build_onsite_bridge_has_no_orchestrator_asr_adapter() -> None:
     assert bridge.llm.reasoning_dialect == "deepseek"
     assert bridge.llm.brain_model == "brain-model"
     assert bridge.llm.maintenance_model == "maintenance-model"
+    assert bridge.llm.generation.brain.temperature == 0.6
+    assert bridge.llm.generation.brain.max_completion_tokens == 2048
     assert bridge.voice == ""
 
 

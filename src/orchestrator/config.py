@@ -1,9 +1,11 @@
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, Literal, NewType, override
+
+from orchestrator.llm_settings import LLMGenerationConfig, load_llm_generation_config
 
 DEFAULT_SERVICE_NAME: Final = "orchestrator"
 
@@ -68,7 +70,7 @@ _MAX_PPT_DECKS: Final = 32
 
 LlmProvider = Literal["mock", "openai_compatible"]
 
-LlmReasoningDialect = Literal["deepseek", "openai"]
+LlmReasoningDialect = Literal["deepseek", "openai", "none"]
 
 AsrProvider = Literal["mock", "openai_compatible", "funasr"]
 
@@ -115,6 +117,8 @@ class OrchestratorConfigInput:
     llm_brain_model: str | None = None
 
     llm_maintenance_model: str | None = None
+
+    llm_generation: LLMGenerationConfig = field(default_factory=LLMGenerationConfig)
 
     asr_provider: AsrProvider = DEFAULT_ASR_PROVIDER
 
@@ -164,6 +168,8 @@ class OrchestratorConfig:
     llm_brain_model: str | None = None
 
     llm_maintenance_model: str | None = None
+
+    llm_generation: LLMGenerationConfig = field(default_factory=LLMGenerationConfig)
 
     asr_provider: AsrProvider = DEFAULT_ASR_PROVIDER
 
@@ -231,6 +237,7 @@ class OrchestratorConfig:
             session_id_prefix=config.session_id_prefix.strip(),
             fake=config.fake,
             llm_provider=config.llm_provider,
+            llm_generation=config.llm_generation,
             llm_endpoint=_normalize_optional(config.llm_endpoint),
             llm_model=_normalize_optional(config.llm_model),
             llm_api_key=config.llm_api_key,
@@ -284,6 +291,7 @@ def load_config_from_env(env: Mapping[str, str] | None = None) -> OrchestratorCo
             ),
             llm_brain_model=source.get(LLM_BRAIN_MODEL_KEY),
             llm_maintenance_model=source.get(LLM_MAINTENANCE_MODEL_KEY),
+            llm_generation=_parse_llm_generation(source),
             asr_provider=_parse_asr_provider(source.get(ASR_PROVIDER_KEY)),
             asr_endpoint=source.get(ASR_ENDPOINT_KEY),
             asr_model=source.get(ASR_MODEL_KEY),
@@ -324,7 +332,7 @@ def _parse_llm_reasoning_dialect(
     if raw_dialect is None or raw_dialect.strip() == "":
         return None
     match raw_dialect.strip():
-        case "deepseek" | "openai" as dialect:
+        case "deepseek" | "openai" | "none" as dialect:
             return dialect
         case _:
             raise ConfigParseError(field_name=LLM_REASONING_DIALECT_KEY)
@@ -424,3 +432,10 @@ def _parse_deck_catalog(raw_catalog: str | None) -> frozenset[str]:
     ):
         raise ConfigParseError(field_name=PPT_DECK_CATALOG_KEY)
     return frozenset(values)
+
+
+def _parse_llm_generation(source: Mapping[str, str]) -> LLMGenerationConfig:
+    try:
+        return load_llm_generation_config(source)
+    except ValueError as error:
+        raise ConfigParseError(field_name=str(error)) from None
