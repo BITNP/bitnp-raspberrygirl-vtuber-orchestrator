@@ -4,7 +4,11 @@ import pytest
 
 from orchestrator import onsite_bridge
 from orchestrator.config import load_config_from_env
-from orchestrator.llm import AudioCppTTSAdapter, VllmOmniTTSAdapter
+from orchestrator.llm import (
+    AliyunCosyVoiceTTSAdapter,
+    AudioCppTTSAdapter,
+    VllmOmniTTSAdapter,
+)
 from orchestrator.onsite_bridge import OnsiteBridgeConfigError, build_onsite_bridge
 from orchestrator.openai_llm_runtime import AsyncOpenAICompatibleLLMRuntime
 
@@ -214,3 +218,34 @@ def test_build_onsite_bridge_supports_audio_cpp_model_default_voice() -> None:
     assert isinstance(bridge.tts, AudioCppTTSAdapter)
     assert bridge.tts.endpoint == "http://127.0.0.1:8080/v1"
     assert bridge.tts.capability == "final_only"
+
+
+def test_build_onsite_bridge_supports_aliyun_cosyvoice_voice_id() -> None:
+    endpoint = (
+        "https://workspace.cn-beijing.maas.aliyuncs.com"
+        "/api/v1/services/audio/tts/SpeechSynthesizer"
+    )
+    config = load_config_from_env(
+        {
+            "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
+            "ORCHESTRATOR_LLM_ENDPOINT": "https://llm.example.test/v1",
+            "ORCHESTRATOR_LLM_MODEL": "onsite-model",
+            "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
+            "ORCHESTRATOR_TTS_PROVIDER": "aliyun_cosyvoice",
+            "ORCHESTRATOR_TTS_ENDPOINT": endpoint,
+            "ORCHESTRATOR_TTS_MODEL": "cosyvoice-v3.5-flash",
+            "ORCHESTRATOR_TTS_API_KEY": "aliyun-test-key",
+        }
+    )
+
+    bridge = build_onsite_bridge(
+        config,
+        voice="cosyvoice-clone-id",
+        ref_audio="",
+        ref_text="",
+    )
+
+    assert isinstance(bridge.tts, AliyunCosyVoiceTTSAdapter)
+    assert bridge.tts.endpoint == endpoint
+    assert bridge.voice == "cosyvoice-clone-id"

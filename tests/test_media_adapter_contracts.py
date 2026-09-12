@@ -12,6 +12,7 @@ import pytest
 from orchestrator import media_adapters
 from orchestrator.config import load_config_from_env
 from orchestrator.llm import (
+    AliyunCosyVoiceTTSAdapter,
     AudioCppTTSAdapter,
     OpenAICompatibleASRAdapter,
     VllmOmniTTSAdapter,
@@ -152,6 +153,199 @@ def test_vllm_omni_builds_opt_in_fake_local_speech_request() -> None:
         "ref_audio": "https://media.example.test/raspberry.wav",
         "ref_text": "参考音色文本",
     }
+
+
+def test_aliyun_cosyvoice_builds_native_speechsynthesizer_request() -> None:
+    adapter = AliyunCosyVoiceTTSAdapter(
+        endpoint=(
+            "https://workspace.cn-beijing.maas.aliyuncs.com"
+            "/api/v1/services/audio/tts/SpeechSynthesizer"
+        ),
+        model="cosyvoice-v3.5-flash",
+        api_key="test-api-key",
+    )
+
+    request = adapter.build_speech_request(
+        text="你好。我是树莓娘。",
+        voice="cosyvoice-clone-id",
+        ref_audio="data:audio/wav;base64,ignored",
+        ref_text="已通过声音复刻 API 创建音色。",
+    )
+
+    assert request.url.endswith("/api/v1/services/audio/tts/SpeechSynthesizer")
+    assert request.json == {
+        "model": "cosyvoice-v3.5-flash",
+        "input": {
+            "text": "你好。我是树莓娘。",
+            "voice": "cosyvoice-clone-id",
+            "format": "wav",
+            "sample_rate": 16_000,
+        },
+    }
+
+
+def test_aliyun_cosyvoice_streams_native_sse_pcm_without_openai_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint = (
+        "https://workspace.cn-beijing.maas.aliyuncs.com"
+        "/api/v1/services/audio/tts/SpeechSynthesizer"
+    )
+    adapter = AliyunCosyVoiceTTSAdapter(
+        endpoint=endpoint,
+        model="cosyvoice-v3.5-flash",
+        api_key="test-api-key",
+        capability="streaming_sse",
+    )
+    calls: list[dict[str, object]] = []
+    pcm = b"\x10\x20" * 320
+
+    @final
+    class Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return
+
+        def iter_lines(self) -> list[str]:
+            return [
+                'data:{"output":{"type":"sentence-begin"}}',
+                "data:"
+                + json.dumps(
+                    {
+                        "output": {
+                            "type": "sentence-synthesis",
+                            "audio": {"data": base64.b64encode(pcm).decode()},
+                        }
+                    }
+                ),
+                'data:{"output":{"finish_reason":"stop"}}',
+            ]
+
+    @final
+    class Client:
+        def stream(self, method: str, url: str, **kwargs: object) -> Response:
+            calls.append({"method": method, "url": url, **kwargs})
+            return Response()
+
+        def close(self) -> None:
+            return
+
+    def build_client(_adapter: AliyunCosyVoiceTTSAdapter) -> Client:
+        return Client()
+
+    monkeypatch.setattr(AliyunCosyVoiceTTSAdapter, "_client", build_client)
+
+    chunks = tuple(
+        adapter.stream_pcm16le(
+            text="你好。我是树莓娘。",
+            voice="cosyvoice-clone-id",
+            ref_audio="data:audio/wav;base64,not-sent",
+            ref_text="不随合成请求发送",
+        )
+    )
+
+    assert [chunk.data for chunk in chunks] == [pcm]
+    assert calls == [
+        {
+            "method": "POST",
+            "url": endpoint,
+            "json": {
+                "model": "cosyvoice-v3.5-flash",
+                "input": {
+                    "text": "你好。我是树莓娘。",
+                    "voice": "cosyvoice-clone-id",
+                    "format": "pcm",
+                    "sample_rate": 16_000,
+                },
+            },
+            "headers": {
+                "Authorization": "Bearer test-api-key",
+                "Content-Type": "application/json",
+                "X-DashScope-SSE": "enable",
+            },
+        }
+    ]
+
+
+def test_aliyun_cosyvoice_final_only_downloads_wav_without_forwarding_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint = (
+        "https://workspace.cn-beijing.maas.aliyuncs.com"
+        "/api/v1/services/audio/tts/SpeechSynthesizer"
+    )
+    audio_url = (
+        "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com"
+        "/pre/result.wav?signature=test"
+    )
+    adapter = AliyunCosyVoiceTTSAdapter(
+        endpoint=endpoint,
+        model="cosyvoice-v3.5-flash",
+        api_key="test-api-key",
+    )
+    calls: list[dict[str, object]] = []
+
+    @final
+    class SynthesisResponse:
+        text = json.dumps(
+            {
+                "output": {
+                    "finish_reason": "stop",
+                    "audio": {"url": audio_url},
+                }
+            }
+        )
+
+        def raise_for_status(self) -> None:
+            return
+
+    @final
+    class AudioResponse:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return
+
+        def iter_bytes(self) -> list[bytes]:
+            return [b"RIFF", b"downloaded-wav"]
+
+    @final
+    class Client:
+        def post(self, url: str, **kwargs: object) -> SynthesisResponse:
+            calls.append({"method": "POST", "url": url, **kwargs})
+            return SynthesisResponse()
+
+        def stream(self, method: str, url: str, **kwargs: object) -> AudioResponse:
+            calls.append({"method": method, "url": url, **kwargs})
+            return AudioResponse()
+
+        def close(self) -> None:
+            return
+
+    def build_client(_adapter: AliyunCosyVoiceTTSAdapter) -> Client:
+        return Client()
+
+    monkeypatch.setattr(AliyunCosyVoiceTTSAdapter, "_client", build_client)
+
+    result = adapter.synthesize(
+        text="你好",
+        voice="cosyvoice-clone-id",
+        ref_audio="",
+        ref_text="",
+    )
+
+    assert result.data == b"RIFFdownloaded-wav"
+    assert calls[0]["url"] == endpoint
+    assert calls[1] == {"method": "GET", "url": audio_url}
 
 
 def test_audio_cpp_builds_non_streaming_request_using_model_default_voice() -> None:

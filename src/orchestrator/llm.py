@@ -4,6 +4,7 @@ from enum import StrEnum, unique
 from typing import Final, Literal, Protocol, Self, TypedDict, override
 
 from orchestrator.media_adapters import (
+    AliyunCosyVoiceTTSAdapter,
     AudioCppTTSAdapter,
     OpenAICompatibleASRAdapter,
     VllmOmniTTSAdapter,
@@ -18,7 +19,12 @@ from orchestrator.state_snapshots import (
     TaskStateSnapshot,
 )
 
-__all__ = ["AudioCppTTSAdapter", "OpenAICompatibleASRAdapter", "VllmOmniTTSAdapter"]
+__all__ = [
+    "AliyunCosyVoiceTTSAdapter",
+    "AudioCppTTSAdapter",
+    "OpenAICompatibleASRAdapter",
+    "VllmOmniTTSAdapter",
+]
 
 
 DEFAULT_TEMPERATURE: Final = 0.2

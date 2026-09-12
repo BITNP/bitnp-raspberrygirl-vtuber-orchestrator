@@ -79,7 +79,7 @@ LlmReasoningDialect = Literal["deepseek", "openai", "none"]
 
 AsrProvider = Literal["mock", "openai_compatible", "funasr"]
 
-TtsProvider = Literal["mock", "vllm_omni", "audio_cpp"]
+TtsProvider = Literal["mock", "vllm_omni", "audio_cpp", "aliyun_cosyvoice"]
 
 TtsMode = Literal["final_only", "streaming_sse"]
 
@@ -374,7 +374,7 @@ def _parse_tts_provider(raw_provider: str | None) -> TtsProvider:
     provider = DEFAULT_TTS_PROVIDER if raw_provider is None else raw_provider.strip()
 
     match provider:
-        case "mock" | "vllm_omni" | "audio_cpp":
+        case "mock" | "vllm_omni" | "audio_cpp" | "aliyun_cosyvoice":
             return provider
 
         case _:

@@ -145,6 +145,7 @@ def _onsite_bridge_enabled(config: OrchestratorConfig) -> bool:
     return config.llm_provider == "openai_compatible" and config.tts_provider in {
         "vllm_omni",
         "audio_cpp",
+        "aliyun_cosyvoice",
     }
 
 

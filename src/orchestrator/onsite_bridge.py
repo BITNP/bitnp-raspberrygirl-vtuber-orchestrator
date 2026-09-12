@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Final, cast
 
 from orchestrator.llm import CancellationToken
 from orchestrator.media_adapters import (
+    AliyunCosyVoiceTTSAdapter,
     AudioCppTTSAdapter,
     MediaAdapterConfigError,
     VllmOmniTTSAdapter,
@@ -451,7 +452,11 @@ def build_onsite_bridge(
     ref_audio: str,
     ref_text: str,
 ) -> OnsiteExplainerBridge:
-    if config.tts_provider not in {"vllm_omni", "audio_cpp"}:
+    if config.tts_provider not in {
+        "vllm_omni",
+        "audio_cpp",
+        "aliyun_cosyvoice",
+    }:
         raise OnsiteBridgeConfigError(field_name="tts_provider")
 
     if config.tts_endpoint is None or config.tts_model is None:
@@ -471,6 +476,11 @@ def build_onsite_bridge(
     ):
         raise OnsiteBridgeConfigError(field_name="voice_reference")
 
+    if config.tts_provider == "aliyun_cosyvoice" and (
+        config.tts_api_key is None or voice.strip() == ""
+    ):
+        raise OnsiteBridgeConfigError(field_name="aliyun_tts_api_key_or_voice")
+
     llm = AsyncOpenAICompatibleLLMRuntime(
         config.llm_endpoint,
         config.llm_model,
@@ -485,11 +495,11 @@ def build_onsite_bridge(
     )
 
     return OnsiteExplainerBridge(
-        tts=(
-            AudioCppTTSAdapter
-            if config.tts_provider == "audio_cpp"
-            else VllmOmniTTSAdapter
-        )(
+        tts={
+            "audio_cpp": AudioCppTTSAdapter,
+            "aliyun_cosyvoice": AliyunCosyVoiceTTSAdapter,
+            "vllm_omni": VllmOmniTTSAdapter,
+        }[config.tts_provider](
             config.tts_endpoint,
             config.tts_model,
             config.tts_api_key,
