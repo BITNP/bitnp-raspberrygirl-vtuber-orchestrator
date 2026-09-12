@@ -728,7 +728,7 @@ class TransportRuntime:
                     # Mic ASR is the only voice ingress. A partial is parsed by
                     # the control dispatcher for diagnostics only; a final is
                     # route/epoch/replay checked before it reaches the shared
-                    # Gate and Brain pipeline.
+                    # serialized Brain candidate pipeline.
                     try:
                         control_event = parse_control_event(message)
                     except (ControlEnvelopeError, JsonBoundaryError):

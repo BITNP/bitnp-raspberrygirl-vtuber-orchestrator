@@ -89,6 +89,7 @@ def test_documentation_tree_and_protocol_ownership_contract() -> None:
         in {
                 ".gitignore",
                 "README.md",
+                "frontend-config.json.example",
                 "project.godot",
                 "scripts/vtuber_control_client.gd",
                 "raspberry_girl.tscn",

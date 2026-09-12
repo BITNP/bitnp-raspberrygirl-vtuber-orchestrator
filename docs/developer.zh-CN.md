@@ -1,6 +1,6 @@
-# Raspberry Girl 开发者文档
+# 树莓娘开发者文档
 
-本文档描述整个 Raspberry Girl 工作区的开发视角。总体架构、协议和跨模块契约以 Orchestrator 为权威；模块内部行为在各模块仓库的开发者文档中维护。
+本文档描述整个树莓娘工作区的开发视角。总体架构、协议和跨模块契约以 Orchestrator 为权威；模块内部行为在各模块仓库的开发者文档中维护。
 
 ## 项目概览
 
@@ -10,7 +10,7 @@
 
 - Orchestrator、Mic、Sound、Comments：Python 3.12+、`uv`、`pytest`、`websockets`。Mic 和 Sound 使用 `sounddevice` 作为本地音频边界。
 - Orchestrator 开发检查：`basedpyright`、`ruff`、JSON Schema fixture 验证、拓扑验证和 Frontend 契约验证。
-- Frontend：Godot 4.6，主场景 `res://raspberry_girl.tscn`，配置项 `application/run/orchestrator_ws_url` 指向 Orchestrator。
+- Frontend：Godot 4.6，主场景 `res://main.tscn`；启动时从显式 JSON 配置文件读取连接参数，将校验后的值写入进程内 ProjectSettings 供控制客户端使用，不读取打包的部署凭据作为替代。
 
 ## 项目架构
 
@@ -26,7 +26,7 @@ Orchestrator 拥有 session state、revisioned event history、active turn、tas
 
 Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口提交给 OpenAI-compatible ASR；它在同一认证 control connection 发送 `asr.final`，`asr.partial` 仅用于诊断。Orchestrator 只接受已注册 stream、当前 session/epoch、未重放序列及合法 RTP 范围的 final，然后与评论共用单一 Brain 候选队列。Mic 没有 UDP RTP 输入路径。LLM/TTS 生成的音频经校验后 packetize 为 L16 RTP 发给 Sound。每个输出使用独立 packetizer 和生成 SSRC；新的已接受输入会取消过期回答工作，已取消的 LLM/TTS 结果不得产生 RTP。
 
-评论输入由 Comments 以规范 envelope 提交为 `audience.input`。Frontend 只接收 Orchestrator 源的 caption、action、scene、presentation 等命令，演示命令完成后返回 `presentation.result`。所有迟到、超时、取消或被 supersede 的任务即使物理完成，也不能提交状态或产生副作用。
+评论输入由 Comments 以规范 envelope 提交为 `audience.input`。ASR final 和评论进入同一个每会话串行候选队列，容量为 16，语音优先；队列已满时，新语音可淘汰最旧的排队评论。Frontend 只接收 Orchestrator 源的 caption、action、scene、presentation 等命令，演示命令完成后返回 `presentation.result`。所有迟到、超时、取消或被替代的任务即使物理完成，也不能提交状态或产生副作用。
 
 ## 通信协议
 
@@ -38,10 +38,12 @@ Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口
 
 封闭 envelope 必须携带 schema version、event identity、source、time、`trace_id`、`session_id`、`seq` 和 typed `data`。RTP 媒体契约固定为 L16、16 kHz、mono、payload type 96、每帧 320 samples。客户端仓库只能引用 Orchestrator schema，不能复制 schema 或 fixture。
 
+生产示例统一使用 `/control` 作为 WebSocket URL 路径；当前 listener 不按 URL path 分流，握手身份完全来自 bearer token 映射，消息权限再由已绑定角色和 session 所有权决定。Mic input、Sound sink 和 Frontend 注册可以创建 session；Comments 与 operator 只能使用已有 session。连接断开时移除该连接拥有的 route、ack 和 lease；无 owner、无活动工作且超过 TTL 的 session 在 sweep 时完整清理。
+
 ## 模块契约
 
 - Orchestrator：唯一 session state writer、协议权威、Brain 与 LLM/TTS provider 边界，以及唯一跨服务 reducer 和命令校验者。
-- Mic：唯一 VAD/endpoint/ASR provider 边界；只在认证 Orchestrator control connection 上注册 `mic.input.register`，并提交 `asr.partial`、`asr.final` 与可选 `voice.evidence`。Mic 不创建 RTP route，也不发送 UDP RTP。
+- Mic：唯一 VAD/endpoint/ASR provider 边界；只在认证 Orchestrator control connection 上注册 `mic.input.register`，提交 `asr.final` 与可选 `voice.evidence`，协议另支持诊断用 `asr.partial`。当前 endpoint-batched ASR 管线不产生 partial。Mic 不创建 RTP route，也不发送 UDP RTP。
 - Sound：只向 Orchestrator 注册 RTP sink，只播放匹配 `media.stream.command` 的流，并报告 queued、playing、finished、cancelled、flush ack 等状态；只有精确关联的 `finished` 才能释放输出 lease。
 - Comments：只向 Orchestrator 发送观众输入，不拥有平台生产接入的全功能边界。
 - Frontend：只连接 Orchestrator，执行有限动作、表情、场景和演示控制映射。
@@ -50,15 +52,19 @@ Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口
 
 ### 精简回复契约与异步任务
 
-单一 Brain 使用严格 `decision/speech/operation` 提案。`discard` 必须为空 speech 且无操作；`accept` 必须有非空 speech，并可带至多一个具有独立 arguments 的操作。speech 仅进入 TTS、context 和字幕，arguments 仅进入注册工具的 schema 校验与请求构造。畸形 JSON、未知 intent、非法参数或非法 cue 均无效果，也不进行文本回退或 JSON 修复。本地知识在首次 Brain 前完成有界检索；操作结果最多回填一次，最终 Brain 只能返回无操作 speech。
+单一 Brain 同时完成输入取舍与回复，使用严格 `decision/speech/operation` 提案，不存在独立的 LLM Gate。`discard` 必须为空 speech 且无操作；`accept` 必须有非空 speech，并可带至多一个具有独立 arguments 的操作。speech 仅进入 TTS、context 和字幕，arguments 仅进入注册工具的 schema 校验与请求构造。畸形 JSON、未知 intent、非法参数或非法 cue 均无效果，也不进行文本回退或 JSON 修复。本地知识在首次 Brain 前完成有界检索；操作结果最多回填一次，最终 Brain 只能返回无操作 speech。
+
+候选进入 Brain 前只执行确定性的低成本检查，例如单字符 ASR 噪声和最近回复回声；这些检查不生成内容，也不是另一个模型决策层。Brain 返回后，Orchestrator 再校验播放期间的打断语义、连接所有权、会话、重放状态、revision、操作和 cue。候选只有全部通过才原子创建正式 turn、推进取消代次并提交输入与 speech；被丢弃或校验失败的候选不会进入上下文。
 
 ASR 候选进入 session admission queue 时，Orchestrator 用自己的 monotonic clock 冻结 `was_playing_1000ms_ago`，不使用 Mic 的进程时钟，也不在候选排到队首后重新计算。该值为 true 时，Brain 的 `accept` 仍是不可信提案；reducer 只允许包含明确停止、等待、纠正或切换话题措辞的 ASR 通过，其余统一以 `brain_playback_policy_violated` 丢弃。由于 endpoint ASR final 可能在播放完成数秒后才到达，确定性回声检查还会对最近已确认的智能体 speech 做有界模糊片段匹配，容忍少量增删误识别；单字符 ASR 噪声在 Brain 前丢弃，Brain 对不清晰 ASR 生成的复述或“请重复”回复也在正式 turn 前 fail-closed。comment 不受这些规则影响。Mic control 接收循环只负责协议校验和快速投递候选任务，不等待 Brain 完成，因此慢模型不会把后续 ASR 堵在 WebSocket 缓冲区外，也不会改变其入队时播放判定。
 
-演示工具只在启动时配置非空 `ORCHESTRATOR_PPT_DECK_CATALOG` 后注册：`presentation.load` 只接受目录内 `deck_id`，`presentation.navigate` 只接受 1 到 10000 的整数 `page`，`presentation.play` 只接受空对象，且三者拒绝额外字段。Orchestrator 根据当前状态补入可信的 session、turn、command ID、deck version 和页码，模型参数不能覆盖这些字段。执行前再次验证实时 capability、revision、epoch 与当前 deck 前置条件；只有 session-owning Frontend 对精确 command ID 的一次回执可提交演示状态，错误 owner、重复或迟到回执均无效。
+演示工具只在启动时配置非空 `ORCHESTRATOR_PPT_DECK_CATALOG` 后注册：`presentation.load` 只接受目录内 `deck_id`，`presentation.navigate` 只接受 1 到 10000 的整数 `page`，`presentation.play` 只接受空对象，且三者拒绝额外字段。Orchestrator 根据当前状态补入可信的 session、turn、command ID、deck version 和页码，模型参数不能覆盖这些字段。执行前再次验证实时 capability、revision、epoch 与当前 deck 前置条件；只有 session-owning Frontend 对精确 command ID 的一次回执可提交演示状态，错误 owner、重复或迟到回执均无效。当前 Frontend 尚无 deck 渲染器，合法演示命令会返回 `presentation_unavailable`，所以配置目录只会向 Brain 暴露操作契约，不会使 PPT 实际可用。
 
-回复可含 `<action name="..."/>` 和 `<expression name="..."/>`。当前动作 allowlist 仅为 `act_cute`、`emphasis`、`hello`，expression allowlist 为空；Orchestrator 丢弃或拒绝其他标记，TTS 接收去标记文本。Frontend 使用 canonical `vtuber.caption.timeline.command` / `vtuber.caption.timeline.cancel` 事件按 `inline-cue/v1` 渲染字幕，并只通过角色 AnimationTree 的 BlendSpace2D 与两个 OneShot 执行动作和眨眼。
+回复可含 `<action name="..."/>` 和 `<expression name="..."/>`。当前动作 allowlist 仅为 `act_cute`、`emphasis`、`hello`，expression allowlist 为空；Orchestrator 拒绝含未知或非法控制标记的候选，TTS 接收去除合法 cue 后的文本。Frontend 使用 canonical `vtuber.caption.timeline.command` / `vtuber.caption.timeline.cancel` 事件按 `inline-cue/v1` 渲染字幕，并通过角色 AnimationTree 执行动作、眨眼和口型。
 
-LLM、MCP、TTS、flush、字幕投递、记忆提取和上下文压缩必须由 `TaskRegistry` 生命周期管理。任务先经 `ADMITTED → QUEUED → RUNNING → SUCCEEDED`，队列反压时仍停在 admission 边界并撤回；取消会先短暂进入 `CANCELLING` 关闭结果栅栏，再成为不可复用的 `CANCELLED` tombstone。字幕 timeline 在首个 RTP 帧获准后登记为短生命周期 interactive 任务；投递前重新核验 session、turn、revision、数据快照、epoch、deadline 与能力，投递成功也须经 reducer 提交。Sound replacement 在发出 flush 前也登记 interactive 任务，ACK 只会暂存新 lease；仅当该任务仍当前且 reducer 接受切换结果时才提交新 lease。ACK 后取消、过期或结果拒绝会回滚到旧 lease，使旧音频继续播放。前端不可用只使该字幕任务失败，绝不回滚音频。任务结果提交前需校验 session、turn、revision、epoch 和 deadline；取消先关闭结果栅栏，再取消 provider，因此迟到结果不得产生媒体、上下文、记忆或前端效果。replacement TTS 必须持有首个有效 RTP 帧并等待 Sound flush ACK，失败时原播放保持不变。
+LLM 使用 OpenAI-compatible Chat Completions。所有项目编写的系统、任务、记忆和压缩提示词使用中文，引用材料保留原文。生成参数支持全局值及 Brain、maintenance 两级覆盖，实际请求参数由 workload 与显式 provider 方言共同决定；完整变量、范围、继承顺序和 `omit` 语义见[用户文档](user.zh-CN.md#llm-生成参数)。Chat Template 与 reasoning parser 属于模型服务端职责，Orchestrator 发送 `system`/`user` messages，不在客户端重复套模板。`reasoning_content` 不作为回复正文；如果服务端把思考混入合法 JSON 的 `speech`，当前结构校验不能可靠识别无标记的思考文本。
+
+正式 turn 内的 Brain、MCP、TTS、flush、字幕投递、记忆提取和上下文压缩由 `TaskRegistry` 生命周期管理；尚未形成 turn 的首次 Brain 候选由每会话候选队列及独立 cancellable provider task 跟踪。正式任务先经 `ADMITTED → QUEUED → RUNNING → SUCCEEDED`，队列反压时仍停在 admission 边界并撤回；取消会先短暂进入 `CANCELLING` 关闭结果栅栏，再成为不可复用的 `CANCELLED` tombstone。字幕 timeline 在首个 RTP 帧获准后登记为短生命周期 interactive 任务；投递前重新核验 session、turn、revision、数据快照、epoch、deadline 与能力，投递成功也须经 reducer 提交。Sound replacement 在发出 flush 前也登记 interactive 任务，ACK 只会暂存新 lease；仅当该任务仍当前且 reducer 接受切换结果时才提交新 lease。ACK 后取消、过期或结果拒绝会回滚到旧 lease，使旧音频继续播放。前端不可用只使该字幕任务失败，绝不回滚音频。任务结果提交前需校验 session、turn、revision、epoch 和 deadline；取消先关闭结果栅栏，再取消 provider，因此迟到结果不得产生媒体、上下文、记忆或前端效果。replacement TTS 必须持有首个有效 RTP 帧并等待 Sound flush ACK，失败时原播放保持不变。
 
 Orchestrator 的调度器把工作分为 reflex、interactive、deliberative 和 maintenance lane。反射类行为，如打断、TTS gate 和 RTP 输出 gate，不能等待 LLM、检索、MCP 或后台任务。
 
@@ -75,7 +81,7 @@ provider 回调自行推进状态。正常状态为
 可以处在准备状态，但旧物理 playback lease 仍由 `SchedulerOutputFence` 保留，直到 flush
 task 的结果栅栏允许切换。
 
-首次 Brain 候选不创建正式 turn、不推进取消代次，也不停止当前播放；接受后才原子创建 turn 并立即提交输入与首次 speech。首次 Brain、受控工具、最终 Brain、TTS、记忆提取和上下文压缩分别登记为 task。首次与
+首次 Brain 候选不创建正式 turn、不推进取消代次，也不停止当前播放；接受后才原子创建 turn 并立即提交输入与首次 speech。首次 Brain 的 provider coroutine 由候选队列跟踪；正式 turn 之后的 Brain、受控工具、TTS、记忆提取和上下文压缩登记为 task。首次与
 最终 Brain 最多各一次；最终调用禁止 operation。首次 speech 合成与唯一工具并行，工具、LLM 或维护 provider 的返回先
 经过 task/revision/data-snapshot/epoch/deadline 栅栏，再允许创建下一任务或提交结果。
 经过校验的 speech 在 TTS 前写入 transient context；终态 speech 后才会安排 memory/compaction maintenance
@@ -85,9 +91,9 @@ lease 校验的 `finished` 事件触发；TTS provider 完成或重复/过期 fi
 如果 replacement flush 被拒绝、超时或失效，`TurnCoordinator` 会恢复已保留旧 lease 的
 `PLAYING` 状态；新 turn 不得写入 context、memory 或 timeline。
 
-旧 Gate、shadow/execute 模式和现场回退均已删除。缺少 Brain coordinator 时输入 fail-closed；现场 callback 对已丢弃和已接受输入都返回 handled，不能回落到旧 ASR/LLM 路径。
+独立 Gate、shadow/execute 模式和现场回退均已删除。缺少 Brain coordinator 时输入 fail-closed；现场 callback 对已丢弃和已接受输入都返回 handled，不能回落到旧 ASR/LLM 路径。
 
-Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 保持回放和健康检查能力。Frontend 不参与 onsite audio loop；字幕 cue 在协议层准备就绪，但不要把同步字幕渲染描述为已完成能力。
+Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 当前只提供 JSONL 回放和配置健康检查，不是直播平台生产接入器。Frontend 不参与 onsite audio loop，但已实现音频获准后的逐字字幕 timeline、口型和 cue 动作；它尚未实现真实 deck 渲染。
 
 ## 关键技术细节
 
@@ -112,7 +118,7 @@ Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comment
 会被拒绝加载并保留原文件，不会自动迁移或删除。写盘失败不推进内存状态。会话结束或 TTL
 回收会删除记忆及审计。
 
-- 用户语音打断必须立即停止或 gate TTS 和生成 RTP，并取消被 supersede 的非必要任务。
+- 播放期间的语音候选只有明确表达停止、纠正或切换话题并通过 Brain 与 reducer 校验后才成为替换轮次；候选评估期间保留当前播放，成功切换后取消被替代任务。
 - LLM 输出是不可信提案，动作、翻页、MCP 调用等必须转为 closed typed command 后再校验。
 - mutable memory、immutable knowledge、session working memory 三者分离。
 - 说话人 diarization 是 session-local 标签，不是身份；跨 session 说话人识别需要显式同意、模板保护和删除路径。

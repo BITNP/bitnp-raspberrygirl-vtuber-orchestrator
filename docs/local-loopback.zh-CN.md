@@ -12,6 +12,8 @@
 - Mic 与 Sound 使用相同的 session ID 和 stream ID。
 - 防火墙只允许受信任主机访问 Orchestrator TCP control 端口；只有远程 Sound 需要 RTP UDP 路由。
 
+以下片段只列出明文联调需要修改或关联的字段，不是完整环境文件。Orchestrator 仍需配置真实 LLM/TTS 才能回复；Mic 仍需完整 ASR 和本地音频配置；Comments 回放还需 JSONL、session 和 trace 字段。以各仓库 `.env.example` 为完整配置基线。
+
 ## Orchestrator
 
 ```dotenv
@@ -87,7 +89,7 @@ Frontend 的 URL、CA、session、明文开关和角色 token 全部从此文件
 
 ## 启动与验证
 
-依次启动 Orchestrator、Sound、Frontend/Comments，最后启动 Mic：
+依次启动 Orchestrator、Sound、可选的 Frontend/Comments，最后启动 Mic。下面列出现场音频链路；Frontend 用 Godot 运行，Comments 回放命令及其 fixture 配置见各自用户文档：
 
 ```bash
 uv run --env-file .env orchestrator-transport

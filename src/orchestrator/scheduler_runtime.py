@@ -878,7 +878,7 @@ class SessionRuntime:
     def receive_comment(self, proposal: CommentProposal) -> RuntimeOutcome:
         """Reject the retired synchronous response path.
 
-        Gate, model, tool, and TTS work all have asynchronous task lifecycles;
+        Brain, tool, and TTS work all have asynchronous task lifecycles;
         a synchronous callback cannot own their cancellation and result fences.
         """
         return self._reject(proposal.correlation, "async_response_required")
