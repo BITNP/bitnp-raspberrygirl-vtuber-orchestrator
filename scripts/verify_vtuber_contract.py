@@ -261,17 +261,17 @@ def main() -> int:
 
         return 1
 
+    avatar = (frontend / "scripts/live2d_avatar.gd").read_text(encoding="utf-8")
     if any(
-        contract not in client
+        contract not in avatar
         for contract in (
-            '"act_cute": Vector2(0.0, 0.0)',
-            '"emphasis": Vector2(1.0, 0.0)',
-            '"hello": Vector2(0.0, 1.0)',
-            '"parameters/OneShot/request"',
-            '"parameters/OneShot 2/request"',
+            '"act_cute": "wink"',
+            '"emphasis": "point"',
+            '"hello": "wave"',
+            '"nod", "shake_head", "wink"',
         )
-    ):
-        print("Frontend AnimationTree action contract is missing")
+    ) or 'preload("res://scripts/live2d_avatar.gd")' not in client:
+        print("Frontend Live2D action/expression contract is missing")
 
         return 1
 

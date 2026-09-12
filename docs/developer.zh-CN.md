@@ -60,7 +60,7 @@ ASR 候选进入 session admission queue 时，Orchestrator 用自己的 monoton
 
 演示工具只在启动时配置非空 `ORCHESTRATOR_PPT_DECK_CATALOG` 后注册：`presentation.load` 只接受目录内 `deck_id`，`presentation.navigate` 只接受 1 到 10000 的整数 `page`，`presentation.play` 只接受空对象，且三者拒绝额外字段。Orchestrator 根据当前状态补入可信的 session、turn、command ID、deck version 和页码，模型参数不能覆盖这些字段。执行前再次验证实时 capability、revision、epoch 与当前 deck 前置条件；只有 session-owning Frontend 对精确 command ID 的一次回执可提交演示状态，错误 owner、重复或迟到回执均无效。当前 Frontend 尚无 deck 渲染器，合法演示命令会返回 `presentation_unavailable`，所以配置目录只会向 Brain 暴露操作契约，不会使 PPT 实际可用。
 
-回复可含 `<action name="..."/>` 和 `<expression name="..."/>`。当前动作 allowlist 仅为 `act_cute`、`emphasis`、`hello`，expression allowlist 为空；Orchestrator 拒绝含未知或非法控制标记的候选，TTS 接收去除合法 cue 后的文本。Frontend 使用 canonical `vtuber.caption.timeline.command` / `vtuber.caption.timeline.cancel` 事件按 `inline-cue/v1` 渲染字幕，并通过角色 AnimationTree 执行动作、眨眼和口型。
+回复可含 `<action name="..."/>` 和 `<expression name="..."/>`。动作 allowlist 为 `act_cute`、`emphasis`、`hello`；expression allowlist 为 `nod`（点头）、`shake_head`（摇头）、`wink`（单眼眨眼），播放旧前端录制的面捕参数序列。候选准入和最终回复阶段使用相同白名单；Orchestrator 拒绝含未知或非法控制标记的候选，TTS 接收去除合法 cue 后的文本。Frontend 使用 canonical `vtuber.caption.timeline.command` / `vtuber.caption.timeline.cancel` 事件按 `inline-cue/v1` 渲染字幕，通过 Live2D 驱动执行原生动作、录制面捕、眨眼和口型。录制面捕不会覆盖字幕驱动的嘴部开合，不开启实时摄像头。
 
 LLM 使用 OpenAI-compatible Chat Completions。所有项目编写的系统、任务、记忆和压缩提示词使用中文，引用材料保留原文。生成参数支持全局值及 Brain、maintenance 两级覆盖，实际请求参数由 workload 与显式 provider 方言共同决定；完整变量、范围、继承顺序和 `omit` 语义见[用户文档](user.zh-CN.md#llm-生成参数)。Chat Template 与 reasoning parser 属于模型服务端职责，Orchestrator 发送 `system`/`user` messages，不在客户端重复套模板。`reasoning_content` 不作为回复正文；如果服务端把思考混入合法 JSON 的 `speech`，当前结构校验不能可靠识别无标记的思考文本。
 

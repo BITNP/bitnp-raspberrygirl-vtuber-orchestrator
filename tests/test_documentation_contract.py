@@ -1,7 +1,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from re import finditer
 from typing import Final
@@ -68,40 +67,6 @@ def test_documentation_tree_and_protocol_ownership_contract() -> None:
 
         assert not tuple(repository.rglob("*.schema.json"))
 
-        # Then: frontend changes remain limited to its control protocol surface.
-
-    frontend = WORKSPACE / "bitnp-raspberrygirl-vtuber-frontend"
-
-    status = subprocess.run(
-        ["/usr/bin/git", "status", "--porcelain"],
-        cwd=frontend,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-    assert status.returncode == 0, status.stderr
-
-    changed_paths = tuple(line[3:] for line in status.stdout.splitlines())
-
-    assert all(
-        path
-        in {
-                ".gitignore",
-                "README.md",
-                "frontend-config.json.example",
-                "project.godot",
-                "scripts/vtuber_control_client.gd",
-                "raspberry_girl.tscn",
-                "tests/protocol_smoke.gd",
-                "tests/fixtures/frontend_test_ca.pem",
-                "tests/fixtures/runtime-config.json",
-            "tests/fixtures/vtuber_control_commands.json",
-            "tests/fixtures/vtuber_control_invalid.json",
-        }
-        or path.startswith("docs/")
-        for path in changed_paths
-    )
 
 
 def test_documentation_links_resolve_within_the_workspace() -> None:

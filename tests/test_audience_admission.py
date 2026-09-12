@@ -1,6 +1,8 @@
 import asyncio
 from dataclasses import dataclass, field, replace
 
+import pytest
+
 from orchestrator.brain_contracts import (
     AudienceInput,
     AudienceSource,
@@ -134,9 +136,16 @@ def test_discard_candidate_does_not_create_turn_or_advance_epoch() -> None:
     asyncio.run(scenario())
 
 
-def test_candidate_snapshot_omits_succeeded_tasks() -> None:
+@pytest.mark.parametrize("expression", ["nod", "shake_head", "wink"])
+def test_candidate_admits_recorded_expression_and_omits_succeeded_tasks(
+    expression: str,
+) -> None:
     async def scenario() -> None:
-        brain = _Brain(ResponseProposal(BrainDecision.ACCEPT, "回答", None))
+        brain = _Brain(
+            ResponseProposal(
+                BrainDecision.ACCEPT, f'回答<expression name="{expression}"/>', None
+            )
+        )
         runtime = _runtime(brain)
         for task_id in ("succeeded-task", "active-task"):
             request = TaskRequest(

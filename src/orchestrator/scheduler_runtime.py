@@ -1098,7 +1098,7 @@ class SessionRuntime:
         compiled = parse_inline_cues(
             initial.speech,
             allowed_actions=frozenset({"act_cute", "emphasis", "hello"}),
-            allowed_expressions=frozenset(),
+            allowed_expressions=frozenset({"nod", "shake_head", "wink"}),
         )
         if compiled.rejected_cues or not compiled.spoken_text.strip():
             return self._reject(correlation, "brain_speech_invalid")
@@ -1261,7 +1261,7 @@ class SessionRuntime:
             cancellation_epoch=int(self.cancellation_epoch),
             deadline_ms=self.clock() + self.response_task_timeout_ms,
             allowed_actions=frozenset({"act_cute", "emphasis", "hello"}),
-            allowed_expressions=frozenset(),
+            allowed_expressions=frozenset({"nod", "shake_head", "wink"}),
             replacement=self.turn_coordinator.state.pending_interrupt,
         )
         initial_task_id = TaskId(f"response-brain-initial-{turn_id}")

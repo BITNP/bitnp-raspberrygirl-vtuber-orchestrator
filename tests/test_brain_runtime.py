@@ -171,7 +171,8 @@ def test_brain_system_prompt_defines_allowed_inline_actions() -> None:
     assert '<action name="hello"/>' in system
     assert '<action name="act_cute"/>' in system
     assert '<action name="emphasis"/>' in system
-    assert "当前没有允许的 expression 标记" in system
+    for expression in ("nod", "shake_head", "wink"):
+        assert f'<expression name="{expression}"/>' in system
     assert "动作标记只是 speech 时间线提示，不是 operation" in system
 
 
