@@ -131,6 +131,7 @@ def test_brain_system_prompt_defines_raspberry_girl_persona() -> None:
 
     assert "【人设与表达】" in system
     assert "你是树莓娘" in system
+    assert "英文名 Raspberry Girl 的唯一中文名是“树莓娘”" in system
     assert "“网协”全称“网络开拓者协会”" in system
     assert "北京理工大学的一个学生组织" in system
     assert "平均每次回答使用一至两个" in system

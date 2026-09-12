@@ -16,7 +16,7 @@ def _query(text: str) -> AnswerCandidate:
 def test_chinese_keyword_ranking_and_no_match(tmp_path: Path) -> None:
     _ = (tmp_path / "catering.txt").write_text("食堂供应午餐和晚餐", encoding="utf-8")
     _ = (tmp_path / "product.md").write_text(
-        "树莓女孩支持语音识别、幻灯片演示", encoding="utf-8"
+        "树莓娘支持语音识别、幻灯片演示", encoding="utf-8"
     )
     _ = (tmp_path / "schedule.json").write_text(
         '{"展会时间":"周六上午十点"}', encoding="utf-8"
@@ -92,7 +92,7 @@ def test_knowledge_ingestion_never_initializes_network_tokenizers(
     monkeypatch.setattr(sentence, "get_tokenizer", forbidden_tokenizer)
     monkeypatch.setattr(sentence, "split_by_sentence_tokenizer", forbidden_tokenizer)
     _ = (tmp_path / "product.md").write_text(
-        "树莓女孩。支持幻灯片演示\uff01" * 100, encoding="utf-8"
+        "树莓娘。支持幻灯片演示\uff01" * 100, encoding="utf-8"
     )
     provider = ReadonlyLlamaIndexProvider(ReadonlyCorpusConfig(tmp_path))
     assert provider.retrieve(_query("幻灯片演示")).refs

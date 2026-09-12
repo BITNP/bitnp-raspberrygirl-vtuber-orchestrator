@@ -60,7 +60,7 @@ def test_static_allowlist_executes_only_matching_capability_and_bounds_request()
     allowance = McpToolAllowance("web", "search", "network.search", 500, 64)
     requester = _Requester([])
     executor = AsyncMcpToolExecutor(StaticMcpAllowlist((allowance,)), requester)
-    request = ToolRequest("mcp", "web/search", {"query": "树莓女孩"})
+    request = ToolRequest("mcp", "web/search", {"query": "树莓娘"})
 
     observation = asyncio.run(
         executor.execute(

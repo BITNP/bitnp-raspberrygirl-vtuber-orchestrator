@@ -104,7 +104,7 @@ def test_ingress_uses_configured_readonly_knowledge_directory(
 
     knowledge = tmp_path / "knowledge"
     knowledge.mkdir()
-    _ = (knowledge / "product.md").write_text("树莓女孩", encoding="utf-8")
+    _ = (knowledge / "product.md").write_text("树莓娘", encoding="utf-8")
     monkeypatch.setenv("ORCHESTRATOR_KNOWLEDGE_DIR", str(knowledge))
     monkeypatch.setenv("ORCHESTRATOR_STATE_DIR", str(tmp_path / "state"))
     scheduler = SessionScheduler(

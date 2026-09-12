@@ -91,7 +91,7 @@ def test_readonly_llama_index_loads_only_controlled_files_at_startup(
     tmp_path: Path,
 ) -> None:
     allowed = tmp_path / "product.md"
-    _ = allowed.write_text("树莓女孩产品讲解", encoding="utf-8")
+    _ = allowed.write_text("树莓娘产品讲解", encoding="utf-8")
     _ = (tmp_path / "ignored.bin").write_bytes(b"not corpus")
     provider = ReadonlyLlamaIndexProvider(ReadonlyCorpusConfig(tmp_path))
     candidate = AdaptiveAgentPolicy().select_answer_candidate(
@@ -104,4 +104,4 @@ def test_readonly_llama_index_loads_only_controlled_files_at_startup(
     assert result.snapshot == provider.snapshot
     assert result.refs
     assert all("ignored.bin" not in ref.ref_id for ref in result.refs)
-    assert allowed.read_text(encoding="utf-8") == "树莓女孩产品讲解"
+    assert allowed.read_text(encoding="utf-8") == "树莓娘产品讲解"
