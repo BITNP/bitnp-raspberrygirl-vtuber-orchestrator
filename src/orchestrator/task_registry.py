@@ -28,6 +28,12 @@ class TaskKind(StrEnum):
     MAINTENANCE = "maintenance"
 
 
+@unique
+class TaskDataDependency(StrEnum):
+    FULL = "full"
+    VALIDATED_SPEECH = "validated_speech"
+
+
 class TaskState(StrEnum):
 
     CREATED = "created"
@@ -121,6 +127,22 @@ class TaskRequest:
     retry_attempt: int = 0
 
     data_snapshot: TaskStateSnapshot = field(default_factory=TaskStateSnapshot.initial)
+
+    data_dependency: TaskDataDependency = TaskDataDependency.FULL
+
+    def data_is_current(self, current: TaskStateSnapshot) -> bool:
+        """Validated speech no longer reads mutable conversation material.
+
+        Identity, consent and knowledge versions remain fenced, as do the
+        separate session revision, turn, epoch, capability and deadline checks.
+        """
+        if self.data_dependency is TaskDataDependency.VALIDATED_SPEECH:
+            current = replace(
+                current,
+                memory_revision=self.data_snapshot.memory_revision,
+                context_generation=self.data_snapshot.context_generation,
+            )
+        return self.data_snapshot == current
 
     @property
     def deadline_monotonic_ms(self) -> TaskDeadlineMs:

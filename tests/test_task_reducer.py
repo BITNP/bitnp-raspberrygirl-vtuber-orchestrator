@@ -1,4 +1,3 @@
-
 from dataclasses import replace
 from typing import Literal
 
@@ -6,6 +5,15 @@ import pytest
 
 from orchestrator.ids import SegmentId, SessionId, TurnId
 from orchestrator.sessions import SessionSnapshot, StateRevision
+from orchestrator.state_snapshots import (
+    ConsentRevision,
+    ContextGeneration,
+    CorpusRevision,
+    IndexRevision,
+    MemoryRevision,
+    ProfileRevision,
+    TaskStateSnapshot,
+)
 from orchestrator.task_reducer import (
     TaskEffect,
     TaskResult,
@@ -17,6 +25,7 @@ from orchestrator.task_reducer import (
 from orchestrator.task_registry import (
     IdempotencyKey,
     SchedulerTaskConfig,
+    TaskDataDependency,
     TaskDeadlineMs,
     TaskId,
     TaskKind,
@@ -32,9 +41,55 @@ from orchestrator.task_registry import (
 )
 
 
+@pytest.mark.parametrize("dependency", list(TaskDataDependency))
+@pytest.mark.parametrize(
+    ("current", "conversation_only"),
+    [
+        (replace(TaskStateSnapshot.initial(), memory_revision=MemoryRevision(1)), True),
+        (
+            replace(
+                TaskStateSnapshot.initial(), context_generation=ContextGeneration(1)
+            ),
+            True,
+        ),
+        (
+            replace(TaskStateSnapshot.initial(), profile_revision=ProfileRevision(1)),
+            False,
+        ),
+        (
+            replace(TaskStateSnapshot.initial(), consent_revision=ConsentRevision(1)),
+            False,
+        ),
+        (
+            replace(TaskStateSnapshot.initial(), corpus_revision=CorpusRevision(1)),
+            False,
+        ),
+        (replace(TaskStateSnapshot.initial(), index_revision=IndexRevision(1)), False),
+    ],
+)
+def test_speech_dependency_preserves_non_conversation_version_fences(
+    dependency: TaskDataDependency, current: TaskStateSnapshot, conversation_only: bool
+) -> None:
+    registry = _registry()
+    _register(
+        registry,
+        replace(_request(task_id="task-1", key="answer-1"), data_dependency=dependency),
+    )
+    outcome = TaskResultReducer(registry).reduce(
+        _result(snapshot_revision=StateRevision(7)),
+        snapshot=_snapshot(),
+        now_ms=100,
+        data_snapshot=current,
+    )
+    if dependency is TaskDataDependency.VALIDATED_SPEECH and conversation_only:
+        assert isinstance(outcome, TaskResultAccepted)
+    else:
+        assert isinstance(outcome, TaskResultRejected)
+        assert outcome.reason is TaskResultRejection.STALE_DATA_SNAPSHOT
+
+
 def test_registry_returns_existing_task_for_duplicate_idempotency_key() -> None:
     # Given: a scheduler-owned registry with one allowed interactive task kind.
-
 
     registry = _registry()
 

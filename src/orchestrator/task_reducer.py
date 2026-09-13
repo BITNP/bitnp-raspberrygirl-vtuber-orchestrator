@@ -159,7 +159,7 @@ def _snapshot_rejection(
 
     current_data_snapshot = data_snapshot or TaskStateSnapshot.initial()
 
-    if record.request.data_snapshot != current_data_snapshot:
+    if not record.request.data_is_current(current_data_snapshot):
         return TaskResultRejection.STALE_DATA_SNAPSHOT
 
     return None

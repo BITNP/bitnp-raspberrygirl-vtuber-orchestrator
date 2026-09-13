@@ -1,12 +1,13 @@
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from orchestrator.brain_contracts import BrainStateSnapshot
-from orchestrator.ids import SessionId, TraceId
+from orchestrator.ids import SegmentId, SessionId, TraceId
 from orchestrator.intent_router import IntentRouter
 from orchestrator.interactions import CommentProposal
 from orchestrator.memory import MutableMemorySnapshot
@@ -21,6 +22,13 @@ from orchestrator.task_registry import (
     TaskKind,
     TaskRecord,
     TaskState,
+)
+from orchestrator.transient_context import (
+    ContextComposition,
+    ModelContextBudget,
+    ModelId,
+    StaticContextBudgetPolicy,
+    TokenBudget,
 )
 
 
@@ -51,6 +59,79 @@ class _Extractor:
         assert user_text == "我想研究通用人工智能并且现在要找导师"
         assert reply_text == "我记住你的研究方向了。"
         return self.raw
+
+
+@dataclass(frozen=True)
+class _Compactor:
+    release: asyncio.Event
+
+    async def compact(self, composition: ContextComposition) -> str:
+        assert composition.digests
+        _ = await self.release.wait()
+        return "用户希望研究通用人工智能。"
+
+
+def test_compaction_before_output_preserves_speech_flush_and_caption() -> None:
+    async def scenario() -> None:
+        session_id = SessionId("session-compaction-output")
+        release = asyncio.Event()
+        runtime = SessionRuntime.create(
+            session_id=session_id,
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+            async_response_coordinator=AsyncResponseCoordinator(
+                _Brain(), IntentRouter(()), _Tools()
+            ),
+            context_compactor=_Compactor(release),
+        )
+        correlation = EventCorrelation(
+            TraceId("trace-compact"), session_id, EventSequence(1)
+        )
+        outcome = await runtime.receive_comment_async(
+            CommentProposal("我希望研究通用人工智能。" * 40, correlation)
+        )
+        assert outcome.turn_id is not None
+        flush = runtime.schedule_sound_flush(
+            outcome.turn_id,
+            SegmentId("speech-1"),
+            request_id="flush-1",
+            correlation=correlation,
+        )
+        assert flush is not None
+        context = runtime.interaction_ingress.data.context
+        before = context.snapshot.generation
+        release.set()
+        _ = await _wait_for_terminal_task(
+            runtime, TaskId(f"context-compact-{outcome.turn_id}")
+        )
+        assert context.snapshot.generation > before
+        assert context.snapshot.summary == "用户希望研究通用人工智能。"
+        assert runtime.sound_flush_is_current(flush)
+        assert runtime.complete_sound_flush(flush, correlation)
+
+        async def synthesize(_text: str, first_frame: Callable[[], bool]) -> bool:
+            assert first_frame()
+            return True
+
+        assert await runtime.run_agent_tts_for_turn(
+            outcome.turn_id, synthesize, correlation
+        )
+        timeline = runtime.schedule_started_timeline(
+            outcome.turn_id, audio_stream_id="audio-1", correlation=correlation
+        )
+        assert timeline is not None
+        # Another independent compaction must not invalidate in-flight captions.
+        composition = context.compose(
+            ModelId("test"),
+            StaticContextBudgetPolicy(
+                ModelId("test"), ModelContextBudget(TokenBudget(1))
+            ),
+        )
+        _ = context.compact(composition, summary="已确认用户的研究方向。")
+        assert runtime.caption_timeline_delivery_is_current(timeline[0])
+        assert runtime.complete_caption_timeline_delivery(timeline[0], correlation)
+
+    asyncio.run(scenario())
 
 
 def test_memory_maintenance_succeeds_only_after_candidate_is_committed(
@@ -188,6 +269,15 @@ async def _memory_maintenance_scenario(
         assert len(memory.entries) == 1
         assert memory.entries[0].key == "research_goal"
         assert memory.entries[0].value == "研究通用人工智能并寻找导师"
+
+    async def synthesize(text: str, first_frame: Callable[[], bool]) -> bool:
+        assert text == "我记住你的研究方向了。"
+        assert first_frame(), "independent maintenance invalidated accepted speech"
+        return True
+
+    assert await runtime.run_agent_tts_for_turn(
+        outcome.turn_id, synthesize, correlation
+    )
 
 
 async def _wait_for_terminal_task(

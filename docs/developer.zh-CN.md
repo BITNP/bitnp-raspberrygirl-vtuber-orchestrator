@@ -68,6 +68,21 @@ LLM 使用 OpenAI-compatible Chat Completions。所有项目编写的系统、�
 
 Orchestrator 的调度器把工作分为 reflex、interactive、deliberative 和 maintenance lane。反射类行为，如打断、TTS gate 和 RTP 输出 gate，不能等待 LLM、检索、MCP 或后台任务。
 
+已验证 speech 的 TTS、Sound flush 和字幕投递使用 `validated_speech` 数据依赖：
+记忆修订和上下文压缩可以独立完成，不会使这些已确定的媒体内容失效。
+会话 revision、turn、epoch、deadline、能力，以及身份、同意和知识版本仍须通过校验。
+Brain、工具和维护任务默认保留完整数据快照检查。
+
+ASR 回声过滤只参考通过首帧准入的实际播放文本，播放结束后保留 1 秒尾窗；
+未播放的字幕及历史对话不作为回声证据。精确文本片段或整体相似度至少 0.88
+的近似复述才可能被过滤，仅有相同主题不能判定回声。澄清防护只匹配直接向当前
+用户求重复的句首表达，跳过成对引号内的例句；模糊语义仍交给 Brain 判定。
+英文打断匹配保留单词边界，因此 `hold on` 和 `please stop now` 均可识别。
+
+Brain 和维护的 JSON HTTP 响应分块读取，解码后的完整响应体上限为 1 MiB，
+包含 `reasoning_content` 和其他元数据。超限立即关闭响应流并拒绝结果，
+不记录超限正文；完整且未超限的响应仍按 DEBUG 日志规则记录。
+
 ### TurnCoordinator 状态与执行信封
 
 每个接受的输入由协调器从不可变快照生成内部 `ExecutionEnvelope`。它固定

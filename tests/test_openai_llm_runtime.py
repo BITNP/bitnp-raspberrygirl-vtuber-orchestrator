@@ -1,7 +1,9 @@
 import asyncio
 import json
 import logging
-from typing import cast
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import cast, override
 
 import httpx
 import pytest
@@ -133,3 +135,54 @@ def test_provider_error_is_raised_and_shared_client_closes() -> None:
         return client.is_closed
 
     assert asyncio.run(run())
+
+
+@dataclass
+class _OversizedBody(httpx.AsyncByteStream):
+    consumed: int = 0
+    closed: bool = False
+
+    @override
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        # No Content-Length: the client must enforce its limit while reading.
+        for _ in range(256):
+            self.consumed += 1
+            yield b"x" * 16_384
+
+    @override
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def test_json_response_limit_stops_reading_and_closes_stream(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    body = _OversizedBody()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        _ = request
+        return httpx.Response(200, stream=body)
+
+    async def run() -> None:
+        runtime = AsyncOpenAICompatibleLLMRuntime(
+            "https://example.test/v1",
+            "default",
+            "key",
+            "none",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+        try:
+            with pytest.raises(ProviderResponseError, match="response_too_large"):
+                _ = await runtime.complete_json(
+                    _request(LLMWorkload.BRAIN, ReasoningMode.DISABLED, 100),
+                    schema_name="brain",
+                    schema={},
+                )
+        finally:
+            await runtime.aclose()
+
+    caplog.set_level(logging.DEBUG, logger="orchestrator.openai_llm_runtime")
+    asyncio.run(run())
+    assert body.consumed < 256
+    assert body.closed
+    assert "xxxxxxxx" not in caplog.text

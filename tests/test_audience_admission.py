@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 import pytest
@@ -334,7 +335,10 @@ def test_playback_policy_is_frozen_at_enqueue_and_cannot_be_overridden() -> None
     asyncio.run(scenario())
 
 
-def test_explicit_interruption_can_be_accepted_during_playback_policy() -> None:
+@pytest.mark.parametrize("text", ["停一下", "hold on", "please stop now"])
+def test_explicit_interruption_can_be_accepted_during_playback_policy(
+    text: str,
+) -> None:
     async def scenario() -> None:
         runtime = _runtime(_Brain(ResponseProposal(BrainDecision.ACCEPT, "好的", None)))
         runtime.clock = lambda: 5_000
@@ -346,7 +350,7 @@ def test_explicit_interruption_can_be_accepted_during_playback_policy() -> None:
 
         outcome = await runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
             coordinator,
-            replace(_input(1, AudienceSource.ASR), text="停一下"),
+            replace(_input(1, AudienceSource.ASR), text=text),
             _correlation(1),
             lambda _proposal, _snapshot: asyncio.sleep(
                 0,
@@ -355,6 +359,85 @@ def test_explicit_interruption_can_be_accepted_during_playback_policy() -> None:
         )
 
         assert outcome.accepted
+
+    asyncio.run(scenario())
+
+
+def test_silent_followup_is_not_rejected_as_historical_echo() -> None:
+    async def scenario() -> None:
+        brain = _Brain(ResponseProposal(BrainDecision.ACCEPT, "这是网协的全称。", None))
+        runtime = _runtime(brain)
+        runtime._frontend_caption = (  # pyright: ignore[reportPrivateUsage]
+            "我是北京理工大学网络开拓者协会的官方吉祥物。"
+        )
+        coordinator = runtime.async_response_coordinator
+        assert coordinator is not None
+        outcome = await runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+            coordinator,
+            replace(
+                _input(1, AudienceSource.ASR),
+                text="北京理工大学网络开拓者协会是什么",
+            ),
+            _correlation(1),
+            lambda _proposal, _snapshot: asyncio.sleep(
+                0, result=RuntimeOutcome(accepted=True, correlation=_correlation(1))
+            ),
+        )
+        assert outcome.accepted
+        assert len(brain.snapshots) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("tail_ms", [None, 500, 1_001])
+@pytest.mark.parametrize("replacement_pending", [False, True])
+def test_echo_filter_tracks_actual_audio_and_expires(
+    tail_ms: int | None, replacement_pending: bool
+) -> None:
+    async def scenario() -> None:
+        brain = _Brain(
+            ResponseProposal(BrainDecision.ACCEPT, "这是正在播放的回答。", None)
+        )
+        runtime = _runtime(brain)
+        runtime.clock = lambda: 1_000
+        outcome = await runtime.receive_comment_async(
+            CommentProposal("介绍产品", _correlation(1))
+        )
+        assert outcome.turn_id is not None
+
+        async def synthesize(_text: str, first_frame: Callable[[], bool]) -> bool:
+            return first_frame()
+
+        assert await runtime.run_agent_tts_for_turn(
+            outcome.turn_id, synthesize, _correlation(1)
+        )
+        if replacement_pending:
+            replacement = await runtime.receive_comment_async(
+                CommentProposal("请继续介绍产品", _correlation(10))
+            )
+            assert replacement.accepted
+        if tail_ms is not None:
+            runtime.clock = lambda: 2_000
+            assert runtime.response_playback_finished() is not replacement_pending
+            received_at_ms = 2_000 + tail_ms
+            runtime.clock = lambda: received_at_ms
+        coordinator = runtime.async_response_coordinator
+        assert coordinator is not None
+        echoed = await runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
+            coordinator,
+            replace(_input(2, AudienceSource.ASR), text="这是正在播放的回答"),
+            _correlation(2),
+            lambda _proposal, _snapshot: asyncio.sleep(
+                0, result=RuntimeOutcome(accepted=True, correlation=_correlation(2))
+            ),
+        )
+        if tail_ms is not None and tail_ms > 1_000:
+            assert echoed.accepted
+            assert len(brain.snapshots) == 2 + int(replacement_pending)
+        else:
+            assert not echoed.accepted
+            assert len(brain.snapshots) == 1 + int(replacement_pending)
+            assert runtime.observables.rejections[-1].reason == "deterministic_asr_echo"
 
     asyncio.run(scenario())
 

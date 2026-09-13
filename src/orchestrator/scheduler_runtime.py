@@ -126,6 +126,7 @@ from orchestrator.task_reducer import (
 from orchestrator.task_registry import (
     IdempotencyKey,
     SchedulerTaskConfig,
+    TaskDataDependency,
     TaskDeadlineMs,
     TaskId,
     TaskKind,
@@ -214,6 +215,7 @@ _VOICE_EVIDENCE_MINIMUM_QUALITY = 0.5
 _VOICE_EVIDENCE_MINIMUM_SPEECH_MS = 500
 _AUDIENCE_QUEUE_CAPACITY = 16
 _PLAYBACK_HISTORY_CAPACITY = 32
+_ASR_ECHO_TAIL_MS = 1_000
 _BRAIN_CANDIDATE_LOG = "brain_candidate trace=%s session=%s seq=%s source=%s decision=%s speech=%r operation_intent=%s operation_arguments=%r"  # noqa: E501
 _BRAIN_POLICY_REJECTION_LOG = "brain_candidate_policy_rejected trace=%s session=%s seq=%s reason=%s input=%r speech=%r"  # noqa: E501
 _PREBRAIN_REJECTION_LOG = "audience_prebrain_rejected trace=%s session=%s seq=%s source=%s reason=%s text=%r"  # noqa: E501
@@ -237,14 +239,11 @@ _DEFAULT_AGENT_CAPABILITIES = frozenset(
 
 def _prebrain_audience_rejection(
     audience_input: BrainAudienceInput,
-    frontend_caption: str,
-    recent_turn_context: tuple[str, ...],
+    playback_text: str,
 ) -> str | None:
     if is_low_information_asr(audience_input):
         return "asr_low_information"
-    if is_deterministic_asr_echo(
-        audience_input, frontend_caption, recent_turn_context
-    ):
+    if is_deterministic_asr_echo(audience_input, playback_text):
         return "deterministic_asr_echo"
     return None
 
@@ -431,6 +430,10 @@ class SessionRuntime:
     _ended: bool = False
 
     _playback_started_at_ms: int | None = None
+
+    _echo_playback_text: str = ""
+
+    _echo_playback_ended_at_ms: int | None = None
 
     _playback_intervals: deque[tuple[int, int]] = field(default_factory=deque)
 
@@ -810,6 +813,16 @@ class SessionRuntime:
         independent output generation, so a stale media event cannot complete
         a newer logical turn.
         """
+        # The exact physical lease has finished even if a replacement turn is
+        # still reasoning or synthesizing. End its echo window independently
+        # without completing that newer logical turn.
+        if self._playback_started_at_ms is not None:
+            now_ms = self.clock()
+            self._echo_playback_ended_at_ms = now_ms
+            self._playback_intervals.append((self._playback_started_at_ms, now_ms))
+            self._playback_started_at_ms = None
+            while len(self._playback_intervals) > _PLAYBACK_HISTORY_CAPACITY:
+                _ = self._playback_intervals.popleft()
         state = self.turn_coordinator.state
         if (
             state.turn_id is None
@@ -820,13 +833,6 @@ class SessionRuntime:
         transition = self.turn_coordinator.playback_finished(
             turn_id=state.turn_id, epoch=int(self.cancellation_epoch)
         )
-        if self._playback_started_at_ms is not None:
-            self._playback_intervals.append(
-                (self._playback_started_at_ms, self.clock())
-            )
-            self._playback_started_at_ms = None
-            while len(self._playback_intervals) > _PLAYBACK_HISTORY_CAPACITY:
-                _ = self._playback_intervals.popleft()
         return transition.state.phase is TurnPhase.COMPLETED
 
     def _cancel_active_response_providers(
@@ -959,8 +965,7 @@ class SessionRuntime:
         self._pending_correlations.add(correlation)
         prebrain_rejection = _prebrain_audience_rejection(
             audience_input,
-            self._frontend_caption,
-            self.interaction_ingress.data.recent_turn_context,
+            self._current_echo_text(),
         )
         if prebrain_rejection is not None:
             _LOGGER.debug(
@@ -1632,6 +1637,7 @@ class SessionRuntime:
                 idempotency_key=IdempotencyKey(str(task_id)),
                 kind=TaskKind.INTERACTIVE,
                 segment_id=envelope.segment_id,
+                data_dependency=TaskDataDependency.VALIDATED_SPEECH,
             ),
             correlation,
         )
@@ -1972,6 +1978,7 @@ class SessionRuntime:
                 idempotency_key=IdempotencyKey(str(task_id)),
                 kind=TaskKind.INTERACTIVE,
                 segment_id=segment_id,
+                data_dependency=TaskDataDependency.VALIDATED_SPEECH,
             ),
             correlation,
         )
@@ -1990,7 +1997,7 @@ class SessionRuntime:
             request.session_id == self.scheduler.snapshot.session_id
             and request.turn_id == self.scheduler.snapshot.active_turn_id
             and request.snapshot_revision == self.scheduler.snapshot.revision
-            and request.data_snapshot == self._task_data_snapshot
+            and request.data_is_current(self._task_data_snapshot)
             and request.cancellation_epoch == int(self.cancellation_epoch)
             and int(request.deadline_ms) >= self.clock()
             and request.capability_snapshot.issubset(self.agent_capabilities)
@@ -2046,6 +2053,7 @@ class SessionRuntime:
                 idempotency_key=IdempotencyKey(str(task_id)),
                 kind=TaskKind.INTERACTIVE,
                 segment_id=segment_id,
+                data_dependency=TaskDataDependency.VALIDATED_SPEECH,
             ),
             correlation,
         )
@@ -2067,7 +2075,7 @@ class SessionRuntime:
             request.session_id == self.scheduler.snapshot.session_id
             and request.turn_id == self.scheduler.snapshot.active_turn_id
             and request.snapshot_revision == self.scheduler.snapshot.revision
-            and request.data_snapshot == self._task_data_snapshot
+            and request.data_is_current(self._task_data_snapshot)
             and request.cancellation_epoch == int(self.cancellation_epoch)
             and request.capability_snapshot.issubset(self.agent_capabilities)
         )
@@ -2178,7 +2186,7 @@ class SessionRuntime:
                     task_id,
                     text,
                 )
-                self._record_playback_started()
+                self._record_playback_started(text)
                 _ = self.turn_coordinator.playback_started(
                     turn_id=str(record.request.turn_id),
                     epoch=record.request.cancellation_epoch,
@@ -2212,13 +2220,24 @@ class SessionRuntime:
         _ = self._agent_tts_text.pop(task_id, None)
         return True
 
-    def _record_playback_started(self) -> None:
+    def _record_playback_started(self, text: str) -> None:
         now_ms = self.clock()
         if self._playback_started_at_ms is not None:
             self._playback_intervals.append(
                 (self._playback_started_at_ms, now_ms)
             )
         self._playback_started_at_ms = now_ms
+        self._echo_playback_text = text
+        self._echo_playback_ended_at_ms = None
+
+    def _current_echo_text(self) -> str:
+        """Only actual audio and its bounded ASR tail can be an echo source."""
+        if self._playback_started_at_ms is not None:
+            return self._echo_playback_text
+        ended = self._echo_playback_ended_at_ms
+        if ended is not None and 0 <= self.clock() - ended <= _ASR_ECHO_TAIL_MS:
+            return self._echo_playback_text
+        return ""
 
     async def _await_preoutput_tts_provider(
         self, task_id: TaskId, operation: Awaitable[bool]
@@ -2475,6 +2494,10 @@ class SessionRuntime:
         self._agent_tts_text.clear()
         self._pending_response_commits.clear()
         self._started_timeline_text.clear()
+        self._echo_playback_text = ""
+        self._echo_playback_ended_at_ms = None
+        self._playback_started_at_ms = None
+        self._playback_intervals.clear()
         for task in tuple(self._maintenance_tasks):
             _ = task.cancel()
         self._maintenance_tasks.clear()

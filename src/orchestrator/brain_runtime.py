@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 _ECHO_MIN_CHARS = 3
 _FUZZY_ECHO_MIN_CHARS = 6
 _FUZZY_ECHO_MAX_CHARS = 256
-_FUZZY_ECHO_MIN_COVERAGE = 0.6
+_FUZZY_ECHO_MIN_SIMILARITY = 0.88
 
 
 class McpResponseConfigurationError(ValueError):
@@ -242,22 +242,14 @@ def _brain_request(
 
 def is_deterministic_asr_echo(
     audience_input: AudienceInput,
-    active_summary: str,
-    recent_turn_context: tuple[str, ...],
+    playback_text: str,
 ) -> bool:
     if audience_input.source.value != "asr":
         return False
     candidate = _normalize_echo_text(audience_input.text)
     if len(candidate) < _ECHO_MIN_CHARS:
         return False
-    references = [active_summary]
-    references.extend(
-        entry for entry in recent_turn_context if entry.lstrip().startswith("智能体")
-    )
-    return any(
-        _is_echo_fragment(candidate, _normalize_echo_text(reference))
-        for reference in references
-    )
+    return _is_echo_fragment(candidate, _normalize_echo_text(playback_text))
 
 
 def is_low_information_asr(audience_input: AudienceInput) -> bool:
@@ -272,22 +264,28 @@ def is_asr_clarification_speech(audience_input: AudienceInput, speech: str) -> b
     input_text = _normalize_echo_text(audience_input.text)
     if re.search(r"(?:请|再|重新).*(?:重复|说|讲)一遍", input_text) is not None:
         return False
-    normalized = _normalize_echo_text(speech)
+    # Quoted examples and explanatory prefixes are content, not a request for
+    # the current speaker to repeat. Match only direct sentence openings.
+    unquoted = _QUOTED_SPEECH.sub(" 引用 ", speech)
+    unmarked = re.sub(r"<(?:action|expression)\b[^>]*>", "", unquoted)
     return any(
-        phrase in normalized
-        for phrase in (
-            "听到您说",
-            "听到你说",
-            "没有听清",
-            "没听清",
-            "听得不太清楚",
-            "听到的有些模糊",
-            "再重复",
-            "重复一遍",
-            "再说一次",
-            "再说一遍",
-        )
+        _DIRECT_ASR_CLARIFICATION.match(_normalize_echo_text(sentence)) is not None
+        for sentence in re.split(r"[。！？.!?\n]", unmarked)
     )
+
+
+_QUOTED_SPEECH = re.compile(r'“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"|‘[^’]*’')
+_DIRECT_ASR_CLARIFICATION = re.compile(
+    r"""
+    ^(?:您好|你好|抱歉|对不起|不好意思)*
+    (?:
+        (?:我(?:这边)?(?:刚才)?|刚才)?(?:没有听清|没听清|听得不太清楚|听到的有些模糊)
+        |我(?:刚才)?听到[您你]说
+        |(?:能否|能不能|可以|能)?(?:请)?(?:您|你)?(?:再重复|重复一遍|再说一次|再说一遍)
+    )
+    """,
+    re.VERBOSE,
+)
 
 
 def _is_echo_fragment(candidate: str, reference: str) -> bool:
@@ -295,12 +293,9 @@ def _is_echo_fragment(candidate: str, reference: str) -> bool:
         return True
     if not _FUZZY_ECHO_MIN_CHARS <= len(candidate) <= _FUZZY_ECHO_MAX_CHARS:
         return False
-    longest = SequenceMatcher(
-        None, candidate, reference, autojunk=False
-    ).find_longest_match()
     return (
-        longest.size >= _FUZZY_ECHO_MIN_CHARS
-        and longest.size / len(candidate) >= _FUZZY_ECHO_MIN_COVERAGE
+        SequenceMatcher(None, candidate, reference, autojunk=False).ratio()
+        >= _FUZZY_ECHO_MIN_SIMILARITY
     )
 
 
@@ -320,7 +315,9 @@ def is_explicit_asr_interruption(audience_input: AudienceInput) -> bool:
     """Recognize only an explicit spoken interruption for the playback fence."""
     if audience_input.source.value != "asr":
         return False
-    candidate = "".join(audience_input.text.split()).casefold()
+    # Keep English word boundaries; Chinese ASR can still contain stray spaces.
+    candidate = " ".join(audience_input.text.split()).casefold()
+    candidate = re.sub(r"(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])", "", candidate)
     return any(
         pattern.search(candidate) is not None
         for pattern in _EXPLICIT_INTERRUPTION_PATTERNS

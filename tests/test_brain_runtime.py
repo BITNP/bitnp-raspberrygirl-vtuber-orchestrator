@@ -184,27 +184,32 @@ def test_malformed_brain_output_has_no_plain_text_fallback() -> None:
 
 
 def test_deterministic_echo_applies_only_to_asr() -> None:
-    assert is_deterministic_asr_echo(_snapshot().input, "这里介绍产品功能", ())
+    assert is_deterministic_asr_echo(_snapshot().input, "这里介绍产品功能")
     comment = replace(_snapshot().input, source=AudienceSource.COMMENT)
-    assert not is_deterministic_asr_echo(comment, "这里介绍产品功能", ())
+    assert not is_deterministic_asr_echo(comment, "这里介绍产品功能")
 
 
 @pytest.mark.parametrize(
     ("candidate", "reply"),
     [
-        ("很高兴", "智能体 - 你好，很高兴为您服务"),
-        ("而请您再重复一遍吗", "智能体 - 能请您再重复一遍吗"),
+        ("很高兴", "你好，很高兴为您服务"),
+        ("而请您再重复一遍吗", "能请您再重复一遍吗"),
         (
             "请问您是想还是需要我继续为您服务呢",
-            "智能体 - 请问您是想确认什么，还是需要我继续为您服务呢",
+            "请问您是想确认什么，还是需要我继续为您服务呢",
         ),
     ],
 )
 def test_deterministic_echo_tolerates_bounded_asr_fragment_errors(
     candidate: str, reply: str
 ) -> None:
-    assert is_deterministic_asr_echo(
-        replace(_snapshot().input, text=candidate), "", (reply,)
+    assert is_deterministic_asr_echo(replace(_snapshot().input, text=candidate), reply)
+
+
+def test_shared_topic_is_not_sufficient_to_identify_echo() -> None:
+    assert not is_deterministic_asr_echo(
+        replace(_snapshot().input, text="北京理工大学网络开拓者协会是什么"),
+        "我是北京理工大学网络开拓者协会的官方吉祥物。",
     )
 
 
@@ -237,7 +242,30 @@ def test_explicit_repeat_request_may_receive_a_repeat_response() -> None:
 
 
 @pytest.mark.parametrize(
-    "text", ["停一下", "等等，让我说", "不对，你说错了", "换个话题"]
+    "speech",
+    [
+        "可以说：我没听清，可以慢一点吗？",
+        "可以这样表达：“我没听清，可以慢一点吗？”",
+        "“再说一次”是在请求对方重复。",
+        "避免反复要求对方重复一遍，可以先确认关键词。",
+    ],
+)
+def test_clarification_examples_are_valid_answers(speech: str) -> None:
+    audience_input = replace(_snapshot().input, text="怎么用英语礼貌地请对方放慢语速")
+    assert not is_asr_clarification_speech(audience_input, speech)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "停一下",
+        "等等，让我说",
+        "不对，你说错了",
+        "换个话题",
+        "hold on",
+        "HOLD  ON",
+        "please stop now",
+    ],
 )
 def test_explicit_asr_interruption_is_narrowly_recognized(text: str) -> None:
     assert is_explicit_asr_interruption(replace(_snapshot().input, text=text))

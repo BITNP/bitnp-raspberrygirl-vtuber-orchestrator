@@ -39,6 +39,8 @@ from orchestrator.llm_settings import LLMGenerationConfig, ReasoningDialect
 from orchestrator.provider_streaming import ProviderDeadlines, ProviderResponseError
 
 _LOGGER = logging.getLogger(__name__)
+_MAX_JSON_RESPONSE_BYTES = 1_048_576
+_JSON_READ_CHUNK_BYTES = 16_384
 
 _JSON_REQUEST_LOG = "llm_json_request workload=%s model=%s schema=%s default_dialect=%s request_reasoning=%s request_temperature=%s request_max_completion_tokens=%d system=%r user=%r"  # noqa: E501
 
@@ -175,14 +177,15 @@ class AsyncOpenAICompatibleLLMRuntime:
                 "stream": False,
                 "response_format": {"type": "json_object"},
             }
-            response = await self._http_client.post(
+            async with self._http_client.stream(
+                "POST",
                 f"{self.endpoint.rstrip('/')}/chat/completions",
                 json=body,
                 timeout=self._request_timeout(request.timeout_seconds),
                 headers={"Authorization": f"Bearer {self.api_key}"},
-            )
-            _ = response.raise_for_status()
-            response_text = response.text
+            ) as response:
+                _ = response.raise_for_status()
+                response_text = await _read_bounded_json_response(response)
             _LOGGER.debug(
                 "llm_json_http_response model=%s schema=%s body=%r",
                 model,
@@ -359,3 +362,16 @@ class AsyncOpenAICompatibleLLMRuntime:
             parameters,
         )
         return parameters
+
+
+async def _read_bounded_json_response(response: httpx.Response) -> str:
+    """Bound decoded response bytes before parsing or logging provider content."""
+    content = bytearray()
+    async for chunk in response.aiter_bytes(chunk_size=_JSON_READ_CHUNK_BYTES):
+        if len(content) + len(chunk) > _MAX_JSON_RESPONSE_BYTES:
+            raise ProviderResponseError(stage="llm", reason="response_too_large")
+        content.extend(chunk)
+    try:
+        return content.decode("utf-8")
+    except UnicodeError as error:
+        raise ProviderResponseError(stage="llm", reason="invalid_encoding") from error
