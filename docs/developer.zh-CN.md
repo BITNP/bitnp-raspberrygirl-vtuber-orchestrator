@@ -24,6 +24,14 @@ Orchestrator 拥有 session state、revisioned event history、active turn、tas
 
 ## 数据流动关系
 
+### 行动与表达需求
+
+语音（说话）本身是一种可选输出操作。树莓娘由 Brain 根据场景、上下文和当前能力自主选择语音、MCP、形象表情/动作、PPT 翻页、知识库读取或不操作；接受输入不意味着立即语音回复。允许静默执行 MCP、操作完成后再反馈、全程静默或接受信息而暂不表达。语音与评论入口必须一致执行提案的实际选择，轮次完成不应依赖 TTS，静默接纳也不应自动打断当前播放。共享需求及验收场景见[智能体行动与表达约定](../../.scratch/agent-response-choice/spec.md)。
+
+**实现状态：待适配。** 当前解析器与系统提示词仍要求 accept 带非空 speech，并将处理流程与语音输出耦合；无声操作和独立形象动作尚不能按上述需求完整表达。下面描述的语音链路是当前实现路径，不是所有输入必须发声的产品约束。
+
+### 当前输入与媒体链路
+
 Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口提交给 OpenAI-compatible ASR；它在同一认证 control connection 发送 `asr.final`，`asr.partial` 仅用于诊断。Orchestrator 只接受已注册 stream、当前 session/epoch、未重放序列及合法 RTP 范围的 final，然后与评论共用单一 Brain 候选队列。Mic 没有 UDP RTP 输入路径。LLM/TTS 生成的音频经校验后 packetize 为 L16 RTP 发给 Sound。每个输出使用独立 packetizer 和生成 SSRC；新的已接受输入会取消过期回答工作，已取消的 LLM/TTS 结果不得产生 RTP。
 
 评论输入由 Comments 以规范 envelope 提交为 `audience.input`。ASR final 和评论进入同一个每会话串行候选队列，容量为 16，语音优先；队列已满时，新语音可淘汰最旧的排队评论。Frontend 只接收 Orchestrator 源的 caption、action、scene、presentation 等命令，演示命令完成后返回 `presentation.result`。所有迟到、超时、取消或被替代的任务即使物理完成，也不能提交状态或产生副作用。
@@ -52,11 +60,11 @@ Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口
 
 ### 精简回复契约与异步任务
 
-单一 Brain 同时完成输入取舍与回复，使用严格 `decision/speech/operation` 提案，不存在独立的 LLM Gate。`discard` 必须为空 speech 且无操作；`accept` 必须有非空 speech，并可带至多一个具有独立 arguments 的操作。speech 仅进入 TTS、context 和字幕，arguments 仅进入注册工具的 schema 校验与请求构造。畸形 JSON、未知 intent、非法参数或非法 cue 均无效果，也不进行文本回退或 JSON 修复。本地知识在首次 Brain 前完成有界检索；操作结果最多回填一次，最终 Brain 只能返回无操作 speech。
+单一 Brain 同时完成输入取舍与回复，使用严格 `decision/speech/operation` 提案，不存在独立的 LLM Gate。当前实现要求 `discard` 为空 speech 且无操作、`accept` 有非空 speech，并可带至多一个具有独立 arguments 的非语音操作；强制非空 speech 是待迁移的实现限制，不是目标需求。speech 仅进入 TTS、context 和字幕，arguments 仅进入注册工具的 schema 校验与请求构造。畸形 JSON、未知 intent、非法参数或非法 cue 均无效果，也不进行文本回退或 JSON 修复。本地知识在首次 Brain 前完成有界检索；操作结果最多回填一次，最终 Brain 只能返回无操作 speech。
 
 候选进入 Brain 前只执行确定性的低成本检查，例如单字符 ASR 噪声和最近回复回声；这些检查不生成内容，也不是另一个模型决策层。Brain 返回后，Orchestrator 再校验播放期间的打断语义、连接所有权、会话、重放状态、revision、操作和 cue。候选只有全部通过才原子创建正式 turn、推进取消代次并提交输入与 speech；被丢弃或校验失败的候选不会进入上下文。
 
-ASR 候选进入 session admission queue 时，Orchestrator 用自己的 monotonic clock 冻结 `was_playing_1000ms_ago`，不使用 Mic 的进程时钟，也不在候选排到队首后重新计算。该值为 true 时，Brain 的 `accept` 仍是不可信提案；reducer 只允许包含明确停止、等待、纠正或切换话题措辞的 ASR 通过，其余统一以 `brain_playback_policy_violated` 丢弃。由于 endpoint ASR final 可能在播放完成数秒后才到达，确定性回声检查还会对最近已确认的智能体 speech 做有界模糊片段匹配，容忍少量增删误识别；单字符 ASR 噪声在 Brain 前丢弃，Brain 对不清晰 ASR 生成的复述或“请重复”回复也在正式 turn 前 fail-closed。comment 不受这些规则影响。Mic control 接收循环只负责协议校验和快速投递候选任务，不等待 Brain 完成，因此慢模型不会把后续 ASR 堵在 WebSocket 缓冲区外，也不会改变其入队时播放判定。
+ASR 候选进入 session admission queue 时，Orchestrator 用自己的 monotonic clock 冻结 `was_playing_1000ms_ago`，不使用 Mic 的进程时钟，也不在候选排到队首后重新计算。该值为 true 时，Brain 的 `accept` 仍是不可信提案；reducer 只允许包含明确停止、等待、纠正或切换话题措辞的 ASR 通过，其余统一以 `brain_playback_policy_violated` 丢弃。确定性回声检查只参考实际开始播放的文本及播放结束后 1 秒尾窗，使用精确文本片段或整体相似度至少 0.88 的近似复述匹配；单字符 ASR 噪声在 Brain 前丢弃，Brain 对不清晰 ASR 生成的复述或“请重复”回复也在正式 turn 前 fail-closed。comment 不受这些规则影响。Mic control 接收循环只负责协议校验和快速投递候选任务，不等待 Brain 完成，因此慢模型不会把后续 ASR 堵在 WebSocket 缓冲区外，也不会改变其入队时播放判定。
 
 演示工具只在启动时配置非空 `ORCHESTRATOR_PPT_DECK_CATALOG` 后注册：`presentation.load` 只接受目录内 `deck_id`，`presentation.navigate` 只接受 1 到 10000 的整数 `page`，`presentation.play` 只接受空对象，且三者拒绝额外字段。Orchestrator 根据当前状态补入可信的 session、turn、command ID、deck version 和页码，模型参数不能覆盖这些字段。执行前再次验证实时 capability、revision、epoch 与当前 deck 前置条件；只有 session-owning Frontend 对精确 command ID 的一次回执可提交演示状态，错误 owner、重复或迟到回执均无效。当前 Frontend 尚无 deck 渲染器，合法演示命令会返回 `presentation_unavailable`，所以配置目录只会向 Brain 暴露操作契约，不会使 PPT 实际可用。
 
