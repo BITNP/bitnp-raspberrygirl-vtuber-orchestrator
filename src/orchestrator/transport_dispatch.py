@@ -50,8 +50,12 @@ _CODEC = {
 _LOGGER = logging.getLogger(__name__)
 
 _STREAM_STATE_REJECTED_LOG = "control_stream_state_rejected session=%s stream=%s state=%s command=%s epoch=%s expected=%s outcome=lease_mismatch"  # noqa: E501
-_PLAYBACK_FINISH_FENCED_LOG = "playback_finish_fenced session=%s stream=%s turn=%s segment=%s epoch=%s outcome=%s"  # noqa: E501
-_STREAM_END_SKIPPED_LOG = "control_stream_end_skipped session=%s stream=%s epoch=%d expected=%s outcome=stale"  # noqa: E501
+_PLAYBACK_FINISH_FENCED_LOG = (
+    "playback_finish_fenced session=%s stream=%s turn=%s segment=%s epoch=%s outcome=%s"
+)
+_STREAM_END_SKIPPED_LOG = (
+    "control_stream_end_skipped session=%s stream=%s epoch=%d expected=%s outcome=stale"
+)
 
 
 class ControlPeer(Protocol):
@@ -90,6 +94,7 @@ class OutputFence(Protocol):
         segment_id: SegmentId | None,
         cancellation_epoch: CancellationEpoch | None,
     ) -> bool: ...
+
 
 @dataclass(frozen=True, slots=True)
 class _SinkPeer:
@@ -177,15 +182,18 @@ class TransportControlDispatch:
         owner = _connection_id(connection)
         if isinstance(event, VoiceEvidence):
             evidence_stream = StreamKey(event.session_id, event.stream_id)
+            if not self._hub.owns_mic_input(
+                evidence_stream, owner
+            ) or event.input_epoch != self._hub.input_epoch(evidence_stream):
+                return
+        if isinstance(event, StreamState):
+            sink = self._sinks.get(StreamKey(event.session_id, event.stream_id))
             if (
-                not self._hub.owns_mic_input(evidence_stream, owner)
-                or event.input_epoch != self._hub.input_epoch(evidence_stream)
+                sink is None
+                or sink.connection is not connection
+                or not self._accept_stream_state_lease(event)
             ):
                 return
-        if isinstance(event, StreamState) and not self._accept_stream_state_lease(
-            event
-        ):
-            return
 
         self._hub.register_control(event, peer_ip, owner)
 
@@ -500,17 +508,7 @@ class TransportControlDispatch:
 
         for stream, sink in tuple(self._sinks.items()):
             if sink.connection is connection:
-                del self._sinks[stream]
-
-                self._dispatched.discard(stream)
-
-                self._ready_sinks.discard(stream)
-
-                waiter = self._ready_waiters.pop(stream, None)
-                if waiter is not None and not waiter.done():
-                    _ = waiter.cancel()
-
-                _ = self._leases.pop(stream, None)
+                self._discard(stream)
 
     def _replace_ready_waiter(self, stream: StreamKey) -> asyncio.Future[None]:
         self._ready_sinks.discard(stream)
@@ -571,6 +569,10 @@ class TransportControlDispatch:
                     await sink.connection.send(envelope)
 
     def _discard(self, stream: StreamKey) -> None:
+        self._flush_admission.remove_stream(stream)
+        self._flush_outbox[:] = [
+            item for item in self._flush_outbox if item.stream != stream
+        ]
         _ = self._sinks.pop(stream, None)
 
         self._dispatched.discard(stream)

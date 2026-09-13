@@ -10,6 +10,7 @@ from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
 from orchestrator import transport_runtime
+from orchestrator.agent_state import TurnPhase
 from orchestrator.brain_contracts import (
     AudienceInput,
     AudienceSource,
@@ -24,6 +25,7 @@ from orchestrator.execution_envelope import ExecutionEnvelope
 from orchestrator.ids import ConnectionId, SessionId, TraceId
 from orchestrator.ids import SegmentId as AgentSegmentId
 from orchestrator.ids import TurnId as AgentTurnId
+from orchestrator.intent_router import IntentRouter
 from orchestrator.interactions import (
     CommandId,
     PresentationCommand,
@@ -35,7 +37,10 @@ from orchestrator.mcp_adapters import DeckDispatchIntent, DeckEffectResultKind
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.provider_streaming import ProviderCancellationHandle
 from orchestrator.response_contracts import BrainDecision, ResponseProposal
-from orchestrator.response_coordinator import CoordinatedResponse
+from orchestrator.response_coordinator import (
+    AsyncResponseCoordinator,
+    CoordinatedResponse,
+)
 from orchestrator.scheduler_runtime import SessionRuntime
 from orchestrator.sessions import (
     EventCorrelation,
@@ -680,9 +685,7 @@ def test_brain_presentation_tool_revalidates_capability_and_commits_result() -> 
             {**request.arguments, "page": 2, "command_id": "second-command"},
         )
         assert (
-            await session_runtime.execute_presentation_tool(
-                navigate, current_snapshot
-            )
+            await session_runtime.execute_presentation_tool(navigate, current_snapshot)
             is not None
         )
         assert session_runtime.interaction_ingress.reducer.presentation_state == (
@@ -1492,3 +1495,228 @@ def test_control_handler_never_infers_mic_role_from_source(
         await runtime.close()
 
     asyncio.run(scenario())
+
+
+def test_sound_disconnect_preserves_registered_mic_input_epoch() -> None:
+    hub = RtpHub()
+    mic_owner = ConnectionId("mic-owner")
+    sound_owner = ConnectionId("sound-owner")
+    hub.register_control(_source_registration(), SOURCE_PEER[0], mic_owner)
+    hub.register_control(_sink_registration(), SINK_PEER[0], sound_owner)
+    stream = StreamKey(SESSION_ID, STREAM_ID)
+    epoch = hub.input_epoch(stream)
+    hub.remove_connection(sound_owner)
+    assert hub.input_epoch(stream) == epoch
+    assert hub.owns_mic_input(stream, mic_owner)
+    assert not hub.route_ready
+
+
+def test_foreign_sound_state_cannot_mutate_owned_route() -> None:
+    async def scenario() -> None:
+        hub = RtpHub()
+        dispatch = TransportControlDispatch(hub)
+        mic = RecordingControlPeer()
+        sound = RecordingControlPeer()
+        stranger = RecordingControlPeer()
+        await dispatch.register(_source_registration(), SOURCE_PEER[0], mic)
+        await dispatch.register(_sink_registration(), SINK_PEER[0], sound)
+        stream = StreamKey(SESSION_ID, STREAM_ID)
+        epoch = hub.input_epoch(stream)
+        await dispatch.register(_stream_state("error"), SINK_PEER[0], stranger)
+        assert hub.route_ready
+        assert hub.input_epoch(stream) == epoch
+
+    asyncio.run(scenario())
+
+
+def test_comment_speech_reaches_the_transport_output_scheduler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    class Brain:
+        async def respond(
+            self,
+            snapshot: BrainStateSnapshot,
+            *,
+            available_operations: tuple[dict[str, object], ...],
+            observation: str | None = None,
+        ) -> ResponseProposal:
+            _ = snapshot, available_operations, observation
+            return ResponseProposal(BrainDecision.ACCEPT, "评论回复", None)
+
+    class Tools:
+        async def execute(
+            self, request: ToolRequest, snapshot: BrainStateSnapshot
+        ) -> None:
+            _ = request, snapshot
+
+    scheduled: list[StreamKey | None] = []
+
+    def capture(
+        self: TransportRuntime,
+        session: SessionRuntime,
+        outcome: object,
+        stream: StreamKey | None,
+        correlation: EventCorrelation,
+    ) -> None:
+        _ = self, session, outcome, correlation
+        scheduled.append(stream)
+
+    monkeypatch.setattr(TransportRuntime, "_schedule_agent_tts", capture)
+
+    async def scenario() -> None:
+        hub = RtpHub()
+
+        def hub_factory(**_kwargs: object) -> RtpHub:
+            return hub
+
+        monkeypatch.setattr(transport_runtime, "RtpHub", hub_factory)
+        runtime = TransportRuntime(_loopback_config())
+        session = SessionRuntime.create(
+            session_id=SessionId(SESSION_ID),
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+            async_response_coordinator=AsyncResponseCoordinator(
+                Brain(), IntentRouter(()), Tools()
+            ),
+        )
+        runtime.set_session_runtime(session)
+        hub.register_control(_sink_registration(), SINK_PEER[0])
+        connection = _ControlConnection(
+            (_audience_comment(SESSION_ID, "comment-output", 1),),
+            authorization="Bearer test-comments",
+        )
+        await runtime.handle_control(connection)
+        assert scheduled == [StreamKey(SESSION_ID, STREAM_ID)]
+        assert any(
+            entry.text == "评论回复"
+            for entry in session.interaction_ingress.data.context.snapshot.entries
+        )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("succeeded", [True, False])
+def test_avatar_result_requires_owned_ack_and_reports_rejection(
+    succeeded: bool,
+) -> None:
+    async def scenario() -> None:
+        runtime = TransportRuntime(_loopback_config())
+        session = SessionRuntime.create(
+            session_id=SessionId(SESSION_ID),
+            turn_id_prefix="turn",
+            task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+        )
+        runtime.set_session_runtime(session)
+        session.agent_capabilities |= {"avatar.cue"}
+        lease = session.output_fence.activate(
+            stream=StreamKey(SESSION_ID, STREAM_ID),
+            segment_id=SegmentId("speech"),
+            correlation=EnvelopeCorrelation("trace-cue", SESSION_ID, 1),
+        )
+        owner = _ControlConnection(())
+        foreign = _ControlConnection(())
+        runtime.register_frontend_connection(SessionId(SESSION_ID), owner)
+        snapshot = BrainStateSnapshot(
+            SESSION_ID,
+            str(lease.turn_id),
+            int(session.scheduler.snapshot.revision),
+            int(session.cancellation_epoch),
+            AudienceInput(
+                SESSION_ID, "trace-cue", 1, AudienceSource.COMMENT, 1, "点头"
+            ),
+            "",
+            (),
+            "",
+            session.agent_capabilities,
+        )
+        operation = asyncio.create_task(
+            session.execute_avatar_tool(
+                ToolRequest("avatar", "cue", {"kind": "expression", "name": "nod"}),
+                snapshot,
+            )
+        )
+        for _ in range(100):
+            if owner.sent:
+                break
+            await asyncio.sleep(0)
+        assert owner.sent
+        assert not operation.done()
+        command = parse_json_value(owner.sent[-1])
+        assert isinstance(command, dict)
+        command_data = command["data"]
+        assert isinstance(command_data, dict)
+        result = {
+            **command,
+            "event_type": "vtuber.cue.result",
+            "source": "frontend",
+            "data": {
+                "command_id": command_data["command_id"],
+                "succeeded": succeeded,
+                "reason": "" if succeeded else "unsupported_cue",
+            },
+        }
+        assert not runtime.accept_cue_result(json.dumps(result), foreign)
+        wrong = {
+            **result,
+            "data": {"command_id": "avatar-foreign", "succeeded": True, "reason": ""},
+        }
+        assert not runtime.accept_cue_result(json.dumps(wrong), owner)
+        assert not operation.done()
+        assert runtime.accept_cue_result(json.dumps(result), owner)
+        if succeeded:
+            assert await operation == "前端已接纳形象动作"
+        else:
+            assert await operation is None
+        assert not runtime.accept_cue_result(json.dumps(result), owner)
+        await runtime.close()
+
+    asyncio.run(scenario())
+
+
+def test_sound_loss_revokes_output_and_reconnect_starts_new_epoch() -> None:
+    session = SessionRuntime.create(
+        session_id=SessionId(SESSION_ID),
+        turn_id_prefix="turn",
+        task_config=SchedulerTaskConfig(frozenset(TaskKind), 2),
+    )
+    hub = RtpHub()
+    hub.set_output_fence(session.output_fence, SESSION_ID)
+    owner = ConnectionId("sound")
+    hub.register_control(_source_registration(), SOURCE_PEER[0], ConnectionId("mic"))
+    hub.register_control(_sink_registration(), SINK_PEER[0], owner)
+    stream = StreamKey(SESSION_ID, STREAM_ID)
+    input_epoch = hub.input_epoch(stream)
+    old = session.output_fence.activate(
+        stream=stream,
+        segment_id=SegmentId("old"),
+        correlation=EnvelopeCorrelation("trace", SESSION_ID, 1),
+    )
+    replacement, _ = session.output_fence.interrupt(
+        stream=stream,
+        segment_id=SegmentId("new"),
+        correlation=EnvelopeCorrelation("trace", SESSION_ID, 2),
+    )
+    hub.output_removed = lambda _stream: session.response_output_lost()
+    turn_id = str(replacement.turn_id)
+    epoch = int(session.cancellation_epoch)
+    _ = session.turn_coordinator.enqueue(turn_id=turn_id, epoch=epoch)
+    _ = session.turn_coordinator.start_reasoning(turn_id=turn_id, epoch=epoch)
+    _ = session.turn_coordinator.start_synthesizing(turn_id=turn_id, epoch=epoch)
+    _ = session.turn_coordinator.playback_started(turn_id=turn_id, epoch=epoch)
+    assert session.response_turn_state.phase is TurnPhase.PLAYING
+    hub.remove_connection(owner)
+    assert session.response_turn_state.phase is TurnPhase.FAILED
+    assert not session.has_active_work
+    assert not session.output_fence.has_active_playback
+    assert not session.output_fence.can_emit(stream, old.cancellation_epoch)
+    assert not session.output_fence.abandon_replacement(stream)
+    assert hub.input_epoch(stream) == input_epoch
+    hub.register_control(_sink_registration(), SINK_PEER[0], owner)
+    new = session.output_fence.activate(
+        stream=stream,
+        segment_id=SegmentId("reconnected"),
+        correlation=EnvelopeCorrelation("trace", SESSION_ID, 3),
+    )
+    assert new.cancellation_epoch > replacement.cancellation_epoch
+    assert session.output_fence.can_emit(stream, new.cancellation_epoch)

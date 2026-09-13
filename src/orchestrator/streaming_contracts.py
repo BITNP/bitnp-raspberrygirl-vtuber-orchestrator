@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -31,23 +30,18 @@ _TIMEOUT_AFTER_MS: Final = 750
 
 
 class EnvelopeIdentity(Protocol):
+    @property
+    def trace_id(self) -> str: ...
 
     @property
-    def trace_id(self) -> str:
-        ...
+    def session_id(self) -> str: ...
 
     @property
-    def session_id(self) -> str:
-        ...
-
-    @property
-    def seq(self) -> int:
-        ...
+    def seq(self) -> int: ...
 
 
 @dataclass(frozen=True, slots=True)
 class StreamKey:
-
     session_id: str
 
     stream_id: str
@@ -55,7 +49,6 @@ class StreamKey:
 
 @dataclass(frozen=True, slots=True)
 class StreamFlush:
-
     stream: StreamKey
 
     turn_id: TurnId
@@ -75,7 +68,6 @@ class StreamFlush:
 
 @dataclass(frozen=True, slots=True)
 class FlushAcknowledgement:
-
     stream: StreamKey
 
     turn_id: TurnId
@@ -115,28 +107,22 @@ class FlushAcknowledgement:
 
 @dataclass(frozen=True, slots=True)
 class FlushFailure:
-
     flush: StreamFlush
 
     reason: str
 
 
 class FlushClock(Protocol):
-
     @property
-    def now_ms(self) -> int:
-        ...
+    def now_ms(self) -> int: ...
 
 
 class FlushSender(Protocol):
-
-    def send_flush(self, flush: StreamFlush) -> None:
-        ...
+    def send_flush(self, flush: StreamFlush) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class _PendingFlush:
-
     flush: StreamFlush
 
     started_at_ms: int
@@ -146,7 +132,6 @@ class _PendingFlush:
 
 @final
 class FlushAdmission:
-
     def __init__(self, *, clock: FlushClock, sender: FlushSender) -> None:
         self._clock = clock
 
@@ -227,6 +212,10 @@ class FlushAdmission:
                     started_at_ms=pending.started_at_ms,
                     retried=True,
                 )
+
+    def remove_stream(self, stream: StreamKey) -> None:
+        _ = self._pending.pop(stream, None)
+        self._admitted = {item for item in self._admitted if item.stream != stream}
 
     def admitted(self, flush: StreamFlush) -> bool:
         return flush in self._admitted

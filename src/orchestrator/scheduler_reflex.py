@@ -256,6 +256,13 @@ class SchedulerOutputFence:
         _ = self._retained.pop(stream, None)
         return replacement, flush
 
+    def revoke_stream(self, stream: StreamKey) -> None:
+        """Revoke output ownership while retaining its epoch high water mark."""
+        _ = self._leases.pop(stream, None)
+        _ = self._pending.pop(stream, None)
+        _ = self._acknowledged.pop(stream, None)
+        _ = self._retained.pop(stream, None)
+
     def has_active_lease(self, stream: StreamKey) -> bool:
         return stream in self._leases
 
@@ -289,9 +296,7 @@ class SchedulerOutputFence:
             self._retained[stream] = acknowledged.previous
         return True
 
-    def commit_replacement(
-        self, stream: StreamKey, epoch: CancellationEpoch
-    ) -> bool:
+    def commit_replacement(self, stream: StreamKey, epoch: CancellationEpoch) -> bool:
         """Make an ACKed replacement irreversible after reducer acceptance."""
         acknowledged = self._acknowledged.get(stream)
         if (
@@ -303,6 +308,10 @@ class SchedulerOutputFence:
         del self._acknowledged[stream]
         _ = self._retained.pop(stream, None)
         return True
+
+    def retain_playback(self) -> None:
+        """Keep admitted media alive while an independent new turn is reduced."""
+        self._retained.update(self._leases)
 
     def can_emit(self, stream: StreamKey, epoch: CancellationEpoch) -> bool:
         lease = self._leases.get(stream)

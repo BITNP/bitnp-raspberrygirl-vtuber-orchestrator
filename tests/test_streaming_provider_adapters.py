@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import ssl
 import threading
@@ -26,6 +27,7 @@ from orchestrator.media_adapters import (
     ASRStreamRequest,
     OpenAICompatibleASRAdapter,
 )
+from orchestrator.openai_llm_runtime import AsyncOpenAICompatibleLLMRuntime
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.provider_streaming import (
     ProviderDeadlines,
@@ -493,67 +495,36 @@ def test_streaming_llm_honors_read_deadline_without_time_based_test_sleep() -> N
 
 
 def test_streaming_llm_cancellation_closes_mid_read_without_stale_tokens() -> None:
-    # Given: a stream that has yielded one token and is blocked before its next token.
-
+    # Exercise the production async adapter, not the legacy synchronous fixture:
+    # closing a sync HTTP socket from another thread is not a portable wakeup.
     server = _FakeStreamingServer(mode="block")
 
-    cancellation = CancellationToken()
-
-    result: list[LLMStreamEvent] = []
-
-    failure: list[BaseException] = []
-
-    # When: cancellation is requested while the iterator waits for a provider read.
-
-    with server as endpoint:
-        stream = OpenAICompatibleLLMRuntimeAdapter(
+    async def scenario(endpoint: str) -> None:
+        runtime = AsyncOpenAICompatibleLLMRuntime(
             endpoint=endpoint,
             model="local-chat",
             api_key="test-secret",
-            capability="streaming",
-            deadlines=_deadlines(),
-        ).stream(
-            _llm_request(),
-            cancellation=cancellation,
+            reasoning_dialect="none",
+            deadlines=_deadlines(read_seconds=10),
         )
+        cancellation = CancellationToken()
+        stream = runtime.stream(_llm_request(), cancellation=cancellation)
+        try:
+            assert await anext(stream) == LLMChunk(index=0, text="first")
 
-        first = next(stream)
+            async def remaining() -> list[LLMStreamEvent]:
+                return [event async for event in stream]
 
-        worker = threading.Thread(
-            target=_consume_remaining,
-            args=(stream, result, failure),
-        )
+            pending = asyncio.create_task(remaining())
+            await asyncio.sleep(0)
+            assert not pending.done()
+            assert cancellation.cancel(reason="newer_turn")
+            assert await asyncio.wait_for(pending, timeout=1) == []
+        finally:
+            await runtime.aclose()
 
-        worker.start()
-
-        assert server.entered_block.wait(timeout=1.0)
-
-        assert cancellation.cancel(reason="newer_turn") is True
-
-        worker.join(timeout=1.0)
-
-    # Then: the blocked read releases and neither stale token nor final is emitted.
-
-    assert first == LLMChunk(index=0, text="first")
-
-    assert worker.is_alive() is False
-
-    assert result == []
-
-    assert failure == []
-
-
-def _consume_remaining(
-    stream: Iterator[LLMStreamEvent],
-    result: list[LLMStreamEvent],
-    failure: list[BaseException],
-) -> None:
-
-    try:
-        result.extend(stream)
-
-    except BaseException as error:  # noqa: BLE001 - captures worker failure for test assertion.
-        failure.append(error)
+    with server as endpoint:
+        asyncio.run(scenario(endpoint))
 
 
 def _consume_asr(

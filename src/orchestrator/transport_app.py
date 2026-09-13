@@ -41,6 +41,16 @@ class _PresentationToolExecutor:
         return await self.runtime.execute_presentation_tool(request, snapshot)
 
 
+@dataclass(frozen=True, slots=True)
+class _AvatarToolExecutor:
+    runtime: SessionRuntime
+
+    async def execute(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> str | None:
+        return await self.runtime.execute_avatar_tool(request, snapshot)
+
+
 async def run_transport() -> None:
     config = load_config_from_env(os.environ)
 
@@ -88,7 +98,7 @@ async def run_transport() -> None:
             match_threshold=getattr(transport_config, "voice_match_threshold", 0.90),
             ambiguity_margin=getattr(transport_config, "voice_ambiguity_margin", 0.05),
         )
-        session_runtime.agent_capabilities |= mcp.capabilities
+        session_runtime.agent_capabilities |= mcp.capabilities | {"avatar.cue"}
         if presentation_decks:
             session_runtime.agent_capabilities = session_runtime.agent_capabilities | {
                 "presentation.deck"
@@ -104,6 +114,7 @@ async def run_transport() -> None:
                         else None
                     ),
                     presentation_decks=presentation_decks,
+                    avatar_executor=_AvatarToolExecutor(session_runtime),
                     mcp_allowlist=mcp.allowlist if mcp.tools else None,
                     async_mcp_requester=mcp_requester,
                     mcp_intents=mcp_intents,

@@ -75,19 +75,19 @@ class CueParseResult:
 
 def parse_response_proposal(raw: str) -> ResponseProposal | None:  # noqa: PLR0911
     """Parse one strict proposal; malformed output has no fallback effect."""
-    if len(raw) > _MAX_SPEECH_CHARS * 2:
+    parsed = _decode_proposal(raw)
+    if parsed is None:
         return None
-    try:
-        value = parse_json_value(raw)
-    except JsonBoundaryError:
+    version = _proposal_version(parsed)
+    if version is None:
         return None
-    if not isinstance(value, dict) or set(value) != {"decision", "speech", "operation"}:
-        return None
-    parsed = cast("dict[str, object]", value)
     decision = parsed["decision"]
     speech = parsed["speech"]
     operation_value = parsed["operation"]
-    if decision not in {BrainDecision.ACCEPT, BrainDecision.DISCARD}:
+    if not isinstance(decision, str) or decision not in {
+        BrainDecision.ACCEPT,
+        BrainDecision.DISCARD,
+    }:
         return None
     if not isinstance(speech, str) or len(speech) > _MAX_SPEECH_CHARS:
         return None
@@ -95,12 +95,32 @@ def parse_response_proposal(raw: str) -> ResponseProposal | None:  # noqa: PLR09
         if speech != "" or operation_value is not None:
             return None
         return ResponseProposal(BrainDecision.DISCARD, "", None)
-    if not speech.strip():
+    if (speech != "" and not speech.strip()) or (version == "1.0.0" and not speech):
         return None
     operation = _parse_operation(operation_value)
     if operation_value is not None and operation is None:
         return None
     return ResponseProposal(BrainDecision.ACCEPT, speech, operation)
+
+
+def _decode_proposal(raw: str) -> dict[str, object] | None:
+    if len(raw) > _MAX_SPEECH_CHARS * 2:
+        return None
+    try:
+        value = parse_json_value(raw)
+    except JsonBoundaryError:
+        return None
+    return cast("dict[str, object]", value) if isinstance(value, dict) else None
+
+
+def _proposal_version(value: dict[str, object]) -> str | None:
+    version = value.get("schema_version", "1.0.0")
+    fields = {"decision", "speech", "operation"}
+    if version == "2.0.0":
+        fields.add("schema_version")
+    elif version != "1.0.0":
+        return None
+    return str(version) if set(value) == fields else None
 
 
 def _parse_operation(value: object) -> OperationProposal | None:
@@ -125,7 +145,7 @@ def _parse_operation(value: object) -> OperationProposal | None:
 
 
 def parse_final_speech_proposal(raw: str) -> ResponseProposal | None:
-    """The observation follow-up can only accept non-empty speech."""
+    """The bounded observation follow-up can speak or explicitly finish silently."""
     proposal = parse_response_proposal(raw)
     if (
         proposal is None

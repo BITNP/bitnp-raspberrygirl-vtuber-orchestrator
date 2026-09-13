@@ -16,7 +16,7 @@ JsonValue: TypeAlias = (
 
 JsonObject: TypeAlias = dict[str, JsonValue]
 
-SUPPORTED_SCHEMA_VERSIONS: Final = frozenset({"1.0.0", "1.1.0"})
+SUPPORTED_SCHEMA_VERSIONS: Final = frozenset({"1.0.0", "1.1.0", "1.2.0"})
 
 ALLOWED_SOURCES: Final = frozenset(
     {"orchestrator", "mic", "sound", "comments", "frontend"}
@@ -31,6 +31,8 @@ TURN_CORRELATED_EVENTS: Final = frozenset(
         "media.stream.command",
         "media.stream.state",
         "vtuber.caption.command",
+        "vtuber.cue.command",
+        "vtuber.cue.result",
         "vtuber.expression.command",
         "vtuber.action.command",
         "presentation.load.command",

@@ -58,6 +58,7 @@ from orchestrator.transport_config import TransportConfig
 from orchestrator.transport_control import (
     AsrFinal,
     ControlEnvelopeError,
+    EnvelopeCorrelation,
     parse_control_event,
 )
 from orchestrator.transport_dispatch import TransportControlDispatch
@@ -69,11 +70,14 @@ from orchestrator.transport_hub import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_PLAYBACK_FINISH_REDUCED_LOG = "playback_finish_reduced session=%s stream=%s turn=%s epoch=%d phase=%s outcome=%s"  # noqa: E501
+_PLAYBACK_FINISH_REDUCED_LOG = (
+    "playback_finish_reduced session=%s stream=%s turn=%s epoch=%d phase=%s outcome=%s"
+)
 
 if TYPE_CHECKING:
     from websockets.http11 import Request, Response
 
+    from orchestrator.brain_contracts import BrainStateSnapshot
     from orchestrator.ids import TurnId
     from orchestrator.mcp_adapters import DeckDispatchIntent
     from orchestrator.observability import OnsiteObservability
@@ -232,6 +236,8 @@ class TransportRuntime:
         self._session_sweeper: asyncio.Task[None] | None = None
 
         self._agent_tts_tasks: set[asyncio.Task[None]] = set()
+        self._speech_tasks: dict[asyncio.Task[bool], StreamKey] = {}
+        self._hub.output_removed = self._on_output_removed
 
         self._preoutput_agent_tts: dict[tuple[str, str], asyncio.Task[None]] = {}
 
@@ -249,13 +255,14 @@ class TransportRuntime:
 
         self._frontend_connections: dict[str, FrontendConnection] = {}
 
-        self._pending_presentations: dict[tuple[str, str], _PendingPresentation] = {}
+        self._pending_frontend_results: dict[tuple[str, str], _PendingPresentation] = {}
 
         self._active_timelines: dict[str, tuple[CaptionTimelineCommand, TurnId]] = {}
 
         self._control_peers: dict[int, _ControlPeerState] = {}
 
     def set_session_runtime(self, session_runtime: SessionRuntime) -> None:
+        session_runtime.avatar_dispatch = self._dispatch_avatar
         self._session_runtime = session_runtime
         self._session_runtimes[str(session_runtime.scheduler.snapshot.session_id)] = (
             session_runtime
@@ -285,6 +292,86 @@ class TransportRuntime:
             session_runtime.scheduler.snapshot.session_id,
             self._dispatch_presentation,
         )
+
+    async def _dispatch_avatar(
+        self, snapshot: BrainStateSnapshot, kind: str, name: str
+    ) -> bool:
+        connection = self._frontend_connections.get(snapshot.session_id)
+        runtime = self._session_runtimes.get(snapshot.session_id)
+        if connection is None or runtime is None:
+            return False
+        current = runtime.scheduler.snapshot
+        if (
+            str(current.active_turn_id) != snapshot.turn_id
+            or current.revision != snapshot.revision
+            or int(runtime.cancellation_epoch) != snapshot.cancellation_epoch
+        ):
+            return False
+        envelope = {
+            "schema_version": "1.2.0",
+            "event_type": "vtuber.cue.command",
+            "event_id": str(uuid4()),
+            "source": "orchestrator",
+            "time": datetime.now(UTC).isoformat(),
+            "trace_id": snapshot.input.trace_id,
+            "session_id": snapshot.session_id,
+            "turn_id": snapshot.turn_id,
+            "segment_id": f"agent-{snapshot.turn_id}-cue",
+            "seq": snapshot.input.sequence,
+            "data": {
+                "command_id": f"avatar-{snapshot.turn_id}",
+                "kind": kind,
+                "name": name,
+            },
+        }
+        key = (snapshot.session_id, f"avatar-{snapshot.turn_id}")
+        if key in self._pending_frontend_results:
+            return False
+        future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        self._pending_frontend_results[key] = _PendingPresentation(connection, future)
+        try:
+            async with asyncio.timeout(4.5):
+                await connection.send(json.dumps(envelope, ensure_ascii=False))
+                _LOGGER.debug("avatar_cue_sent payload=%r outcome=sent", envelope)
+                return await future
+        except (OSError, TimeoutError):
+            return False
+        finally:
+            _ = self._pending_frontend_results.pop(key, None)
+
+    def accept_cue_result(self, message: str, connection: ControlConnection) -> bool:
+        value = parse_json_value(message)
+        if (
+            not isinstance(value, dict)
+            or value.get("schema_version") != "1.2.0"
+            or value.get("event_type") != "vtuber.cue.result"
+            or value.get("source") != "frontend"
+        ):
+            return False
+        data = value.get("data")
+        if not isinstance(data, dict) or set(data) != {
+            "command_id",
+            "succeeded",
+            "reason",
+        }:
+            return False
+        session, command = value.get("session_id"), data.get("command_id")
+        if (
+            not isinstance(session, str)
+            or not isinstance(command, str)
+            or not command.startswith("avatar-")
+        ):
+            return False
+        if not isinstance(data.get("succeeded"), bool) or not isinstance(
+            data.get("reason"), str
+        ):
+            return False
+        pending = self._pending_frontend_results.get((session, command))
+        if pending is None or pending.owner is not connection or pending.future.done():
+            return False
+        pending.future.set_result(data["succeeded"] is True)
+        _LOGGER.debug("avatar_cue_result payload=%r outcome=accepted", value)
+        return True
 
     def set_session_runtime_factory(self, factory: SessionRuntimeFactory) -> None:
         self._session_runtime_factory = factory
@@ -326,7 +413,7 @@ class TransportRuntime:
         self,
         session_runtime: SessionRuntime,
         outcome: RuntimeOutcome,
-        stream: StreamKey,
+        stream: StreamKey | None,
         correlation: EventCorrelation,
     ) -> None:
         task = asyncio.create_task(
@@ -360,11 +447,24 @@ class TransportRuntime:
         self,
         session_runtime: SessionRuntime,
         outcome: RuntimeOutcome,
-        stream: StreamKey,
+        stream: StreamKey | None,
         correlation: EventCorrelation,
     ) -> None:
         bridge = self._onsite_bridge
-        if outcome.accepted and isinstance(bridge, OnsiteExplainerBridge):
+        if (
+            outcome.accepted
+            and outcome.turn_id is not None
+            and (stream is None or not isinstance(bridge, OnsiteExplainerBridge))
+        ):
+            session_runtime.fail_unavailable_speech(outcome.turn_id, correlation)
+            _ = await session_runtime.wait_for_operation_followup(outcome.turn_id)
+            session_runtime.fail_unavailable_speech(outcome.turn_id, correlation)
+            return
+        if (
+            outcome.accepted
+            and isinstance(bridge, OnsiteExplainerBridge)
+            and stream is not None
+        ):
             turn_id = outcome.turn_id
             if turn_id is None:
                 return
@@ -388,7 +488,7 @@ class TransportRuntime:
 
             _ = await session_runtime.run_agent_tts_for_turn(
                 turn_id,
-                lambda text, output_started: bridge.speak_response(
+                lambda text, output_started: self._speak_response(
                     stream,
                     text,
                     session_runtime.cancellation_epoch,
@@ -401,7 +501,7 @@ class TransportRuntime:
             if await session_runtime.wait_for_operation_followup(turn_id):
                 _ = await session_runtime.run_agent_tts_for_turn(
                     turn_id,
-                    lambda text, output_started: bridge.speak_response(
+                    lambda text, output_started: self._speak_response(
                         stream,
                         text,
                         session_runtime.cancellation_epoch,
@@ -411,6 +511,39 @@ class TransportRuntime:
                     correlation,
                     timeline_started,
                 )
+
+    def _on_output_removed(self, stream: StreamKey) -> None:
+        for task, owned_stream in tuple(self._speech_tasks.items()):
+            if owned_stream == stream:
+                _ = task.cancel()
+        runtime = self._runtime_for_session(stream.session_id)
+        if runtime is not None:
+            runtime.response_output_lost()
+
+    async def _speak_response(
+        self,
+        stream: StreamKey,
+        text: str,
+        epoch: CancellationEpoch,
+        turn_id: str,
+        output_started: Callable[[], bool],
+    ) -> bool:
+        bridge = self._onsite_bridge
+        if not isinstance(bridge, OnsiteExplainerBridge):
+            return False
+        task = asyncio.create_task(
+            bridge.speak_response(stream, text, epoch, turn_id, output_started)
+        )
+        self._speech_tasks[task] = stream
+        try:
+            return await task
+        except asyncio.CancelledError:
+            parent = asyncio.current_task()
+            if parent is not None and parent.cancelling():
+                raise
+            return False
+        finally:
+            _ = self._speech_tasks.pop(task, None)
 
     def set_observability(self, observability: OnsiteObservability) -> None:
         self._hub.set_observability(observability)
@@ -713,6 +846,10 @@ class TransportRuntime:
 
                         continue
 
+                    if event_type == "vtuber.cue.result":
+                        _ = self.accept_cue_result(message, connection)
+                        continue
+
                     presentation_result = parse_session_control(message)
                     if isinstance(presentation_result, PresentationResultControl):
                         _ = self.accept_presentation_result(
@@ -830,11 +967,11 @@ class TransportRuntime:
                     del self._frontend_connections[session_id]
 
             self._control_dispatch.remove_connection(connection)
-            for key, pending in tuple(self._pending_presentations.items()):
+            for key, pending in tuple(self._pending_frontend_results.items()):
                 if pending.owner is connection:
                     if not pending.future.done():
                         pending.future.set_result(False)
-                    _ = self._pending_presentations.pop(key, None)
+                    _ = self._pending_frontend_results.pop(key, None)
             if state.session_id is not None:
                 lease = self._session_leases.get(state.session_id)
                 if lease is not None:
@@ -901,11 +1038,11 @@ class TransportRuntime:
         _ = self._active_timelines.pop(session_id, None)
         self._hub.remove_session(session_id)
         self._control_dispatch.remove_session(session_id)
-        for key, pending in tuple(self._pending_presentations.items()):
+        for key, pending in tuple(self._pending_frontend_results.items()):
             if key[0] == session_id:
                 if not pending.future.done():
                     pending.future.set_result(False)
-                _ = self._pending_presentations.pop(key, None)
+                _ = self._pending_frontend_results.pop(key, None)
         for key, task in tuple(self._preoutput_agent_tts.items()):
             if key[0] == session_id:
                 _ = task.cancel()
@@ -990,7 +1127,7 @@ class TransportRuntime:
             return False
         command_id = str(intent.command.command_id)
         key = (session, command_id)
-        if key in self._pending_presentations:
+        if key in self._pending_frontend_results:
             return False
         remaining_seconds = min(
             5.0, max(0.0, (intent.deadline_ms - _monotonic_ms()) / 1_000)
@@ -999,7 +1136,7 @@ class TransportRuntime:
             return False
         loop = asyncio.get_running_loop()
         future: asyncio.Future[bool] = loop.create_future()
-        self._pending_presentations[key] = _PendingPresentation(connection, future)
+        self._pending_frontend_results[key] = _PendingPresentation(connection, future)
 
         def cancel_pending() -> None:
             _ = loop.call_soon_threadsafe(_cancel_future, future)
@@ -1013,7 +1150,7 @@ class TransportRuntime:
             return False
         finally:
             release()
-            _ = self._pending_presentations.pop(key, None)
+            _ = self._pending_frontend_results.pop(key, None)
 
     def accept_presentation_result(
         self,
@@ -1022,7 +1159,7 @@ class TransportRuntime:
     ) -> bool:
         session_id = str(control.correlation.session_id)
         key = (session_id, str(control.result.command_id))
-        pending = self._pending_presentations.get(key)
+        pending = self._pending_frontend_results.get(key)
         if (
             pending is None
             or pending.owner is not connection
@@ -1174,12 +1311,24 @@ class TransportRuntime:
             return
 
         while (proposal := ingress.take_next()) is not None:
-            _ = await session_runtime.receive_comment_async(
+            outcome = await session_runtime.receive_comment_async(
                 proposal,
                 admission_valid=self._comment_admission_guard(
                     connection, state, session_runtime, proposal.correlation.session_id
                 ),
             )
+            stream = self._hub.output_stream(
+                str(proposal.correlation.session_id),
+                EnvelopeCorrelation(
+                    str(proposal.correlation.trace_id),
+                    str(proposal.correlation.session_id),
+                    int(proposal.correlation.sequence),
+                ),
+            )
+            if outcome.accepted:
+                self._schedule_agent_tts(
+                    session_runtime, outcome, stream, proposal.correlation
+                )
 
     def _audience_owner_valid(
         self,

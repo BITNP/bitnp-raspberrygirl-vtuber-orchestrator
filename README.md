@@ -15,13 +15,13 @@
 - 阅读本地资料，根据已有知识进行讲解
 - 使用自然语音播报回答，并支持随时打断
 - 控制虚拟形象的逐字字幕、动作和场景
-- 通过受控协议请求加载、播放和翻页；当前 Frontend 尚未实现真实 PPT 渲染
+- 通过受控协议请求加载、播放和翻页；Frontend 渲染预先准备的版本化 PPT/PPTX 页面
 - 按需使用外部工具，扩展查询和处理能力
 - 整个技术栈开源，支持自由部署、按需定制和二次开发
 
 本仓库负责协调树莓娘的各项功能，让语音、评论、回答、播报、虚拟形象和演示内容顺畅配合。
 
-当前可直接运行的现场链路是 Mic 本地 VAD/ASR → Orchestrator Brain/TTS → Sound。Comments 当前提供 JSONL 回放入口；Frontend 已实现字幕 timeline、口型和动作，但演示命令会返回 `presentation_unavailable`。
+当前可直接运行的现场链路是 Mic 本地 VAD/ASR → Orchestrator Brain/TTS → Sound。Comments 当前提供 JSONL 回放入口；Frontend 已实现字幕 timeline、口型、独立无声动作和本地文稿页面渲染。
 
 ## 进一步阅读
 

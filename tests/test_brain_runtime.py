@@ -2,6 +2,7 @@
 import asyncio
 import json
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 import pytest
 
@@ -47,12 +48,14 @@ from orchestrator.transient_context import (
 class _Completion:
     responses: list[str]
     requests: list[LLMRequest] = field(default_factory=list)
+    schemas: list[dict[str, object]] = field(default_factory=list)
 
     def complete_json(
         self, request: LLMRequest, *, schema_name: str, schema: dict[str, object]
     ) -> str:
         _ = schema_name, schema
         self.requests.append(request)
+        self.schemas.append(schema)
         return self.responses.pop(0)
 
 
@@ -60,12 +63,14 @@ class _Completion:
 class _AsyncCompletion:
     responses: list[str]
     requests: list[LLMRequest] = field(default_factory=list)
+    schemas: list[dict[str, object]] = field(default_factory=list)
 
     async def complete_json(
         self, request: LLMRequest, *, schema_name: str, schema: dict[str, object]
     ) -> str:
         _ = schema_name, schema
         self.requests.append(request)
+        self.schemas.append(schema)
         return self.responses.pop(0)
 
 
@@ -173,7 +178,7 @@ def test_brain_system_prompt_defines_allowed_inline_actions() -> None:
     assert '<action name="emphasis"/>' in system
     for expression in ("nod", "shake_head", "wink"):
         assert f'<expression name="{expression}"/>' in system
-    assert "动作标记只是 speech 时间线提示，不是 operation" in system
+    assert "无声动作必须使用 available_operations 中允许的 avatar.cue" in system
 
 
 def test_malformed_brain_output_has_no_plain_text_fallback() -> None:
@@ -476,3 +481,19 @@ def test_presentation_operation_rejects_invalid_arguments(
         BrainDecision.ACCEPT, "执行操作", OperationProposal(intent, arguments)
     )
     assert coordinator.tool_request(proposal, snapshot) is None
+
+
+def test_provider_response_schema_matches_versioned_canonical_contract() -> None:
+    completion = _Completion(
+        ['{"schema_version":"2.0.0","decision":"accept","speech":"","operation":null}']
+    )
+    proposal = JsonResponseBrain(completion).respond(
+        _snapshot(), available_operations=()
+    )
+    canonical = (
+        Path(__file__).resolve().parents[1]
+        / "schemas/brain/response-proposal-v2.schema.json"
+    )
+    assert completion.schemas == [json.loads(canonical.read_text(encoding="utf-8"))]
+    assert proposal.speech == ""
+    assert "仍须给出非空 speech" not in completion.requests[0].prompt.system

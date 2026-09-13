@@ -286,7 +286,7 @@ def _with_unsupported_minor_version(events: list[JsonValue]) -> list[JsonValue]:
 
     event = _event_copy(events, 0)
 
-    event["schema_version"] = "1.2.0"
+    event["schema_version"] = "1.3.0"
 
     return [event]
 

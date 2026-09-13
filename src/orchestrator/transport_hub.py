@@ -112,6 +112,8 @@ class RtpHub:
 
         self._onsite_bridge: OnsiteBridge | None = onsite_bridge
 
+        self.output_removed: Callable[[StreamKey], None] | None = None
+
         self._output_fence: SchedulerOutputFence | None = None
 
         self._output_fences: dict[str, SchedulerOutputFence] = {}
@@ -157,16 +159,14 @@ class RtpHub:
         self._replacement_task_is_current: (
             Callable[[StreamKey, TaskId], bool] | None
         ) = None
-        self._replacement_task_complete: (
-            Callable[[StreamKey, TaskId], bool] | None
-        ) = None
-        self._replacement_task_fail: (
-            Callable[[StreamKey, TaskId, str], None] | None
-        ) = None
+        self._replacement_task_complete: Callable[[StreamKey, TaskId], bool] | None = (
+            None
+        )
+        self._replacement_task_fail: Callable[[StreamKey, TaskId, str], None] | None = (
+            None
+        )
 
-        self._voice_evidence_callbacks: dict[
-            str, Callable[[VoiceEvidence], bool]
-        ] = {}
+        self._voice_evidence_callbacks: dict[str, Callable[[VoiceEvidence], bool]] = {}
 
         self._last_asr_sequences: dict[StreamKey, int] = {}
 
@@ -405,9 +405,7 @@ class RtpHub:
 
         if bridge is not None:
             bridge.set_output_authorizer(self.authorize_onsite_output)
-            bridge.set_response_output_preparer(
-                self.prepare_onsite_response_output
-            )
+            bridge.set_response_output_preparer(self.prepare_onsite_response_output)
 
     def _fence_for(self, stream: StreamKey) -> SchedulerOutputFence | None:
         return self._output_fences.get(stream.session_id, self._output_fence)
@@ -542,9 +540,8 @@ class RtpHub:
             case SinkRegistration(
                 session_id=session_id, stream_id=stream_id, udp_port=udp_port
             ):
-                self._register_sink(
-                    StreamKey(session_id, stream_id), (peer_ip, udp_port), owner
-                )
+                stream = StreamKey(session_id, stream_id)
+                self._register_sink(stream, (peer_ip, udp_port), owner)
 
             case StreamState(
                 session_id=session_id,
@@ -554,9 +551,7 @@ class RtpHub:
                 self._remove_stream(StreamKey(session_id, stream_id))
 
             case VoiceEvidence():
-                callback = self._voice_evidence_callbacks.get(
-                    parsed_event.session_id
-                )
+                callback = self._voice_evidence_callbacks.get(parsed_event.session_id)
                 if callback is not None:
                     _ = callback(parsed_event)
 
@@ -715,6 +710,27 @@ class RtpHub:
     def input_epoch(self, stream: StreamKey) -> int:
         return self._route_generations.get(stream, 0)
 
+    def output_stream(
+        self, session_id: str, correlation: EnvelopeCorrelation
+    ) -> StreamKey | None:
+        """Select a registered output route without requiring Mic input."""
+        stream = next(
+            iter(
+                sorted(
+                    (
+                        stream
+                        for stream in self._sinks
+                        if stream.session_id == session_id
+                    ),
+                    key=lambda stream: stream.stream_id,
+                )
+            ),
+            None,
+        )
+        if stream is not None:
+            self._correlations[stream] = correlation
+        return stream
+
     def owns_mic_input(self, stream: StreamKey, owner: ConnectionId) -> bool:
         return self._mic_input_owners.get(stream) == owner
 
@@ -736,11 +752,21 @@ class RtpHub:
         self._remove_sink(stream)
 
     def _remove_sink(self, stream: StreamKey) -> None:
-        self._invalidate_stream(stream)
-
         _ = self._sinks.pop(stream, None)
 
         _ = self._sink_owners.pop(stream, None)
+        fence = self._fence_for(stream)
+        if fence is not None:
+            fence.revoke_stream(stream)
+        if self.output_removed is not None:
+            self.output_removed(stream)
+        # Output loss does not revoke the independently registered Mic input.
+        _LOGGER.debug(
+            "sound_route_removed session=%s stream=%s input_epoch=%s outcome=removed",
+            stream.session_id,
+            stream.stream_id,
+            self.input_epoch(stream),
+        )
 
     def _invalidate_stream(self, stream: StreamKey) -> None:
         next_generation = self._route_generations.get(stream, 0) + 1
@@ -751,6 +777,7 @@ class RtpHub:
             self._onsite_bridge.invalidate_stream(
                 stream, CancellationEpoch(next_generation)
             )
+
 
 def _is_canonical_rtp(data: bytes) -> bool:
     return (

@@ -189,8 +189,12 @@ def _bounded_observation_summary(observation: str) -> str:
 
 
 def _tool_observation(request: ToolRequest, output: str | None) -> str:
-    if request.kind == "mcp" and output is not None and output.startswith(
-        f"server_tool={request.name} status=success digest=sha256:"
+    if (
+        request.kind == "mcp"
+        and output is not None
+        and output.startswith(
+            f"server_tool={request.name} status=success digest=sha256:"
+        )
     ):
         return output
     status = "success" if output is not None else "failed"
@@ -198,8 +202,7 @@ def _tool_observation(request: ToolRequest, output: str | None) -> str:
     digest_source = "" if output is None else output
     digest = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()
     return (
-        f"server_tool={request.name} status={status} "
-        f"digest=sha256:{digest} text={text}"
+        f"server_tool={request.name} status={status} digest=sha256:{digest} text={text}"
     )
 
 
@@ -218,10 +221,14 @@ _PLAYBACK_HISTORY_CAPACITY = 32
 _ASR_ECHO_TAIL_MS = 1_000
 _BRAIN_CANDIDATE_LOG = "brain_candidate trace=%s session=%s seq=%s source=%s decision=%s speech=%r operation_intent=%s operation_arguments=%r"  # noqa: E501
 _BRAIN_POLICY_REJECTION_LOG = "brain_candidate_policy_rejected trace=%s session=%s seq=%s reason=%s input=%r speech=%r"  # noqa: E501
-_PREBRAIN_REJECTION_LOG = "audience_prebrain_rejected trace=%s session=%s seq=%s source=%s reason=%s text=%r"  # noqa: E501
+_PREBRAIN_REJECTION_LOG = (
+    "audience_prebrain_rejected trace=%s session=%s seq=%s source=%s reason=%s text=%r"
+)
 _OPERATION_REQUEST_LOG = "operation_request trace=%s session=%s turn=%s segment=%s kind=%s name=%s arguments=%r"  # noqa: E501
 _OPERATION_OBSERVATION_LOG = "operation_observation trace=%s session=%s turn=%s segment=%s kind=%s name=%s observation=%r"  # noqa: E501
-_TTS_FIRST_FRAME_LOG = "tts_first_frame_admitted trace=%s session=%s turn=%s segment=%s task=%s speech=%r"  # noqa: E501
+_TTS_FIRST_FRAME_LOG = (
+    "tts_first_frame_admitted trace=%s session=%s turn=%s segment=%s task=%s speech=%r"
+)
 _MEMORY_REJECTED_LOG = "memory_candidate_rejected trace=%s session=%s turn=%s segment=%s task=%s key=%r value=%r confidence=%d reason=%s"  # noqa: E501
 _MEMORY_COMMITTED_LOG = "memory_candidate_committed trace=%s session=%s turn=%s segment=%s task=%s revision=%d key=%r value=%r confidence=%d"  # noqa: E501
 
@@ -256,6 +263,7 @@ def _brain_candidate_policy_rejection(
     if (
         snapshot.input.source is BrainAudienceSource.ASR
         and snapshot.was_playing_1000ms_ago
+        and bool(proposal.speech)
         and not is_explicit_asr_interruption(snapshot.input)
     ):
         return "brain_playback_policy_violated"
@@ -341,6 +349,10 @@ class SessionRuntime:
     # Transport owns raw provider coroutines; the scheduler tells it only when
     # a TTS task is still pre-output and therefore safe to stop.
     preoutput_tts_cancellation: Callable[[TurnId], None] | None = None
+
+    avatar_dispatch: (
+        Callable[[BrainStateSnapshot, str, str], Awaitable[bool]] | None
+    ) = None
 
     response_task_timeout_ms: int = 30_000
 
@@ -740,6 +752,8 @@ class SessionRuntime:
         active_turn = self.turn_coordinator.state.phase not in {
             TurnPhase.IDLE,
             TurnPhase.COMPLETED,
+            TurnPhase.CANCELLED,
+            TurnPhase.FAILED,
         }
         return bool(
             active_task
@@ -762,8 +776,13 @@ class SessionRuntime:
         response is marked as a replacement, while actual Sound cutover stays
         fenced by ``SchedulerOutputFence`` and its flush task.
         """
+        for task in tuple(self._maintenance_tasks):
+            _ = task.cancel()
         previous = self.turn_coordinator.state
-        replacement = previous.phase is TurnPhase.PLAYING
+        replacement = (
+            self.output_fence.has_active_playback or previous.phase is TurnPhase.PLAYING
+        )
+        self.output_fence.retain_playback()
         epoch = int(self.cancellation_epoch)
         _ = self.turn_coordinator.enqueue(
             turn_id=str(turn_id), epoch=epoch, replacement=replacement
@@ -789,6 +808,24 @@ class SessionRuntime:
             turn_id=str(turn_id), epoch=int(self.cancellation_epoch)
         )
         return transition.state.phase is TurnPhase.CUTOVER_PENDING
+
+    def response_output_lost(self) -> None:
+        """End a disconnected output without changing the input epoch."""
+        state = self.turn_coordinator.state
+        if state.turn_id is not None and state.phase in {
+            TurnPhase.PLAYING,
+            TurnPhase.CUTOVER_PENDING,
+            TurnPhase.SYNTHESIZING,
+        }:
+            _ = self.turn_coordinator.output_lost(
+                turn_id=state.turn_id, epoch=state.epoch
+            )
+        if self._playback_started_at_ms is not None:
+            self._playback_intervals.append(
+                (self._playback_started_at_ms, self.clock())
+            )
+            self._playback_started_at_ms = None
+            self._echo_playback_ended_at_ms = self.clock()
 
     def response_cutover_failed(self, turn_id: TurnId) -> bool:
         """Keep the retained lease authoritative after a failed replacement."""
@@ -1105,7 +1142,9 @@ class SessionRuntime:
             allowed_actions=frozenset({"act_cute", "emphasis", "hello"}),
             allowed_expressions=frozenset({"nod", "shake_head", "wink"}),
         )
-        if compiled.rejected_cues or not compiled.spoken_text.strip():
+        if compiled.rejected_cues or (
+            initial.speech and not compiled.spoken_text.strip()
+        ):
             return self._reject(correlation, "brain_speech_invalid")
         if (
             self._ended
@@ -1171,9 +1210,7 @@ class SessionRuntime:
                 if presentation is not None
                 else self._planned_ppt_deck_id
             ),
-            ppt_deck_version=(
-                presentation[1] if presentation is not None else None
-            ),
+            ppt_deck_version=(presentation[1] if presentation is not None else None),
             ppt_page=(
                 presentation[2] if presentation is not None else self._planned_ppt_page
             ),
@@ -1352,7 +1389,52 @@ class SessionRuntime:
             if record is not None
         )
 
-    async def _run_operation_followup(  # noqa: C901, PLR0911, PLR0913
+    async def _run_operation_followup(  # noqa: PLR0913
+        self,
+        coordinator: AsyncResponseCoordinator,
+        request: object,
+        snapshot: BrainStateSnapshot,
+        audience_input: BrainAudienceInput,
+        envelope: ExecutionEnvelope,
+        correlation: EventCorrelation,
+        parent_task_id: TaskId,
+    ) -> None:
+        try:
+            await self._perform_operation_followup(
+                coordinator,
+                request,
+                snapshot,
+                audience_input,
+                envelope,
+                correlation,
+                parent_task_id,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "operation_failed session=%s turn=%s",
+                envelope.session_id,
+                envelope.turn_id,
+            )
+        finally:
+            for record in self.task_registry.records:
+                if record.request.turn_id == envelope.turn_id and str(
+                    record.request.task_id
+                ).startswith(("response-tool-", "response-brain-final-")):
+                    _ = self.task_registry.fail(
+                        record.request.task_id, reason="operation_ended_without_result"
+                    )
+                    if record.state in {TaskState.ADMITTED, TaskState.QUEUED}:
+                        _ = self.task_registry.cancel(
+                            record.request.task_id,
+                            reason="operation_ended_without_result",
+                        )
+            state = self.turn_coordinator.state
+            if state.phase in {TurnPhase.REASONING, TurnPhase.WAITING_TOOL}:
+                _ = self.turn_coordinator.fail(
+                    turn_id=str(envelope.turn_id), epoch=envelope.cancellation_epoch
+                )
+
+    async def _perform_operation_followup(  # noqa: C901, PLR0911, PLR0913
         self,
         coordinator: AsyncResponseCoordinator,
         request: object,
@@ -1375,14 +1457,15 @@ class SessionRuntime:
             request.arguments,
         )
         tool_task_id = TaskId(f"response-tool-{envelope.turn_id}")
-        timeout_ms = next(
+        operation_spec = next(
             (
-                spec.timeout_ms
+                spec
                 for spec in coordinator.router.specs
                 if spec.tool_name == request.name and spec.tool_kind == request.kind
             ),
             None,
         )
+        timeout_ms = None if operation_spec is None else operation_spec.timeout_ms
         deadline = envelope.deadline_ms
         if timeout_ms is not None:
             deadline = min(deadline, self.clock() + timeout_ms)
@@ -1395,7 +1478,9 @@ class SessionRuntime:
                 deadline_ms=TaskDeadlineMs(deadline),
                 snapshot_revision=envelope.revision,
                 idempotency_key=IdempotencyKey(str(tool_task_id)),
-                kind=TaskKind.DELIBERATIVE,
+                kind=TaskKind.DELIBERATIVE
+                if operation_spec is None
+                else TaskKind(operation_spec.lane),
                 segment_id=envelope.segment_id,
             ),
             correlation,
@@ -1429,6 +1514,7 @@ class SessionRuntime:
             )
             if not self._response_envelope_is_current(envelope):
                 return
+            record = self.task_registry.task(tool_task_id)
             tool_accepted = self.reduce_task(
                 TaskResult(
                     tool_task_id,
@@ -1441,7 +1527,9 @@ class SessionRuntime:
                 ),
                 correlation,
             )
-            if not tool_accepted.accepted:
+            if not tool_accepted.accepted and (
+                record is None or record.state is not TaskState.TIMED_OUT
+            ):
                 return
         final_parent_task_id = (
             tool_task_id
@@ -1458,7 +1546,7 @@ class SessionRuntime:
                 deadline_ms=TaskDeadlineMs(envelope.deadline_ms),
                 snapshot_revision=envelope.revision,
                 idempotency_key=IdempotencyKey(str(final_task_id)),
-                kind=TaskKind.INTERACTIVE,
+                kind=TaskKind.DELIBERATIVE,
                 segment_id=SegmentId(f"agent-{envelope.turn_id}-2"),
             ),
             correlation,
@@ -1467,17 +1555,28 @@ class SessionRuntime:
             return
         try:
             final = await self._await_response_provider(
-                final_task_id, coordinator.final_response(snapshot, observation)
+                final_task_id,
+                coordinator.final_response(
+                    replace(
+                        self._candidate_brain_snapshot(
+                            audience_input, correlation, was_playing_1000ms_ago=False
+                        ),
+                        turn_id=str(envelope.turn_id),
+                        knowledge_references=snapshot.knowledge_references,
+                    ),
+                    observation,
+                ),
             )
         except (_ResponseProviderCancelledError, TimeoutError, OSError, ValueError):
+            self._fail_final_response(final_task_id, envelope)
             return
         if (
             not isinstance(final, ResponseProposal)
             or final.decision is not BrainDecision.ACCEPT
             or final.operation is not None
-            or not final.speech.strip()
             or not self._response_envelope_is_current(envelope)
         ):
+            self._fail_final_response(final_task_id, envelope)
             return
         _LOGGER.debug(
             "brain_final trace=%s session=%s turn=%s segment=%s speech=%r",
@@ -1510,6 +1609,25 @@ class SessionRuntime:
             final_task_id,
             commit_input=False,
             terminal=True,
+        )
+
+    def _fail_final_response(
+        self, task_id: TaskId, envelope: ExecutionEnvelope
+    ) -> None:
+        _ = self.task_registry.fail(task_id, reason="brain_final_failed")
+        if self.turn_coordinator.state.phase in {
+            TurnPhase.REASONING,
+            TurnPhase.WAITING_TOOL,
+        }:
+            _ = self.turn_coordinator.fail(
+                turn_id=str(envelope.turn_id), epoch=envelope.cancellation_epoch
+            )
+        _LOGGER.debug(
+            "brain_final_failed session=%s turn=%s segment=%s task=%s outcome=failed",
+            envelope.session_id,
+            envelope.turn_id,
+            envelope.segment_id,
+            task_id,
         )
 
     def _response_envelope_is_current(self, envelope: ExecutionEnvelope) -> bool:
@@ -1594,15 +1712,18 @@ class SessionRuntime:
                 ),
             )
         )
-        if parsed.rejected_cues or not parsed.spoken_text.strip():
+        if parsed.rejected_cues or (
+            response.proposal.speech and not parsed.spoken_text.strip()
+        ):
             _ = self.turn_coordinator.fail(
                 turn_id=str(envelope.turn_id), epoch=envelope.cancellation_epoch
             )
             _LOGGER.debug("response_rejected_empty turn=%s", envelope.turn_id)
             return
-        _ = self.turn_coordinator.start_synthesizing(
-            turn_id=str(envelope.turn_id), epoch=envelope.cancellation_epoch
-        )
+        if parsed.spoken_text:
+            _ = self.turn_coordinator.start_synthesizing(
+                turn_id=str(envelope.turn_id), epoch=envelope.cancellation_epoch
+            )
         provenance = ContextProvenance(
             session_id=SessionId(audience_input.session_id),
             turn_id=envelope.turn_id,
@@ -1626,6 +1747,26 @@ class SessionRuntime:
         # admission makes the task stale against its own context write and
         # rejects output immediately after the first RTP frame.
         pending_commit = self._commit_response_context(task_id)
+        if not parsed.spoken_text:
+            if pending_commit is not None and terminal:
+                self._schedule_memory_extraction(
+                    pending_commit, parent_task_id, correlation
+                )
+                self._schedule_context_compaction(
+                    pending_commit, parent_task_id, correlation
+                )
+                _ = self.turn_coordinator.complete_without_output(
+                    turn_id=str(envelope.turn_id), epoch=envelope.cancellation_epoch
+                )
+            _LOGGER.debug(
+                "silent_response trace=%s session=%s turn=%s segment=%s final=%s",
+                correlation.trace_id,
+                correlation.session_id,
+                envelope.turn_id,
+                envelope.segment_id,
+                terminal,
+            )
+            return
         outcome = self.schedule_task(
             TaskRequest(
                 task_id=task_id,
@@ -1680,15 +1821,15 @@ class SessionRuntime:
                     _bounded_observation_summary(pending.observation),
                 )
             )
+        if not pending.spoken_text:
+            return pending
         self.interaction_ingress.data.consider_context(
             AcceptedOutput(pending.provenance, pending.spoken_text)
         )
         timeline_queue = self._started_timeline_text.setdefault(
             pending.provenance.turn_id, deque()
         )
-        timeline_queue.append(
-            (pending.marked_text, pending.provenance.segment_id)
-        )
+        timeline_queue.append((pending.marked_text, pending.provenance.segment_id))
         return pending
 
     def _schedule_context_compaction(
@@ -1736,7 +1877,9 @@ class SessionRuntime:
         correlation: EventCorrelation,
     ) -> None:
         try:
-            summary = await compactor.compact(composition)
+            summary = await asyncio.wait_for(
+                compactor.compact(composition), timeout=10.0
+            )
         except (OSError, TimeoutError, ValueError):
             _ = self.task_registry.fail(task_id, reason="context_compactor_failed")
             _LOGGER.exception("context_compactor_failed task=%s", task_id)
@@ -1818,8 +1961,11 @@ class SessionRuntime:
         correlation: EventCorrelation,
     ) -> None:
         try:
-            raw = await extractor.extract(
-                user_text=pending.input_text, reply_text=pending.spoken_text
+            raw = await asyncio.wait_for(
+                extractor.extract(
+                    user_text=pending.input_text, reply_text=pending.spoken_text
+                ),
+                timeout=10.0,
             )
         except (OSError, TimeoutError, ValueError):
             _ = self.task_registry.fail(task_id, reason="memory_extractor_failed")
@@ -1966,7 +2112,7 @@ class SessionRuntime:
         segment_id: SegmentId | None = None,
     ) -> tuple[TaskId, CaptionTimelineCommand] | None:
         """Register a media-admitted timeline delivery for the current turn."""
-        task_id = TaskId(f"caption-timeline-{turn_id}")
+        task_id = TaskId(f"caption-timeline-{turn_id}-{timeline.timeline_id}")
         outcome = self.schedule_task(
             TaskRequest(
                 task_id=task_id,
@@ -2112,6 +2258,29 @@ class SessionRuntime:
         _ = self.task_registry.fail(task_id, reason=reason)
         _ = self.response_cutover_failed(record.request.turn_id)
 
+    def fail_unavailable_speech(
+        self, turn_id: TurnId, correlation: EventCorrelation
+    ) -> None:
+        """A missing output route must not leave requested speech running forever."""
+        missing = False
+        for task_id in tuple(self._agent_tts_text):
+            record = self.task_registry.task(task_id)
+            if record is not None and record.request.turn_id == turn_id:
+                missing = True
+                _ = self.task_registry.fail(task_id, reason="sound_unavailable")
+                _ = self._agent_tts_text.pop(task_id, None)
+        if not missing:
+            return
+        _LOGGER.debug(
+            "speech_unavailable trace=%s session=%s turn=%s outcome=failed",
+            correlation.trace_id,
+            correlation.session_id,
+            turn_id,
+        )
+        _ = self.turn_coordinator.fail(
+            turn_id=str(turn_id), epoch=int(self.cancellation_epoch)
+        )
+
     async def run_agent_tts_for_turn(
         self,
         turn_id: TurnId,
@@ -2223,9 +2392,7 @@ class SessionRuntime:
     def _record_playback_started(self, text: str) -> None:
         now_ms = self.clock()
         if self._playback_started_at_ms is not None:
-            self._playback_intervals.append(
-                (self._playback_started_at_ms, now_ms)
-            )
+            self._playback_intervals.append((self._playback_started_at_ms, now_ms))
         self._playback_started_at_ms = now_ms
         self._echo_playback_text = text
         self._echo_playback_ended_at_ms = None
@@ -2583,6 +2750,35 @@ class SessionRuntime:
     ) -> EventCorrelation | None:
         """Return the reducer-owned correlation for one pending command."""
         return self._presentation_correlations.get(command_id)
+
+    async def execute_avatar_tool(
+        self, request: ToolRequest, snapshot: BrainStateSnapshot
+    ) -> str | None:
+        dispatch = self.avatar_dispatch
+        current = self.scheduler.snapshot
+        kind = request.arguments.get("kind")
+        name = request.arguments.get("name")
+        allowed = {
+            "action": {"hello", "act_cute", "emphasis"},
+            "expression": {"nod", "shake_head", "wink"},
+        }
+        if (
+            dispatch is None
+            or self._ended
+            or request.kind != "avatar"
+            or request.name != "cue"
+            or set(request.arguments) != {"kind", "name"}
+            or not isinstance(kind, str)
+            or not isinstance(name, str)
+            or name not in allowed.get(kind, set())
+            or "avatar.cue" not in self.agent_capabilities
+            or snapshot.session_id != str(current.session_id)
+            or snapshot.turn_id != str(current.active_turn_id)
+            or snapshot.revision != current.revision
+            or snapshot.cancellation_epoch != int(self.cancellation_epoch)
+        ):
+            return None
+        return "前端已接纳形象动作" if await dispatch(snapshot, kind, name) else None
 
     async def execute_presentation_tool(
         self, request: ToolRequest, snapshot: BrainStateSnapshot

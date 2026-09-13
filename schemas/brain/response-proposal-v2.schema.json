@@ -1,0 +1,46 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decision",
+    "speech",
+    "operation"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "2.0.0"
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "accept",
+        "discard"
+      ]
+    },
+    "speech": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "operation": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "intent",
+        "arguments"
+      ],
+      "properties": {
+        "intent": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "arguments": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

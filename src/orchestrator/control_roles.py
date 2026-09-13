@@ -44,7 +44,12 @@ ROLE_EVENTS: Final = {
     ),
     PeerRole.COMMENTS: frozenset({"audience.input"}),
     PeerRole.FRONTEND: frozenset(
-        {"frontend.register", "presentation.result", "action.result"}
+        {
+            "frontend.register",
+            "presentation.result",
+            "action.result",
+            "vtuber.cue.result",
+        }
     ),
     PeerRole.OPERATOR: frozenset(
         {"session.end.command", "profile.enroll.command", "profile.revoke.command"}

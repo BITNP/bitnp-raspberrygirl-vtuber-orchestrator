@@ -30,7 +30,7 @@ Orchestrator 拥有 session state、revisioned event history、active turn、tas
 
 知识库采用自动 RAG：Orchestrator 在首次 Brain 调用前，根据当前输入进行本地 BM25 检索，把相关摘录、来源和版本注入 `knowledge_references`。这属于上下文准备，不是 Brain 主动请求的操作，也不通过 MCP 调用；检索不会自动触发语音输出。
 
-**实现状态：待适配。** 当前解析器与系统提示词仍要求 accept 带非空 speech，并将处理流程与语音输出耦合；无声操作和独立形象动作尚不能按上述需求完整表达。下面描述的语音链路是当前实现路径，不是所有输入必须发声的产品约束。
+**实现状态：v2 已适配。** 版本化提案允许以空 speech 明确选择静默；初始与结果阶段统一执行。静默输入提交、操作执行、完成与维护独立于 TTS，独立形象动作经 `avatar.cue` 可信映射派发。下面的语音链路只用于实际请求 speech 的提案。
 
 ### 当前输入与媒体链路
 
@@ -62,13 +62,13 @@ Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口
 
 ### 精简回复契约与异步任务
 
-单一 Brain 同时完成输入取舍与回复，使用严格 `decision/speech/operation` 提案，不存在独立的 LLM Gate。当前实现要求 `discard` 为空 speech 且无操作、`accept` 有非空 speech，并可带至多一个具有独立 arguments 的非语音操作；强制非空 speech 是待迁移的实现限制，不是目标需求。speech 仅进入 TTS、context 和字幕，arguments 仅进入注册工具的 schema 校验与请求构造。畸形 JSON、未知 intent、非法参数或非法 cue 均无效果，也不进行文本回退或 JSON 修复。本地知识在首次 Brain 前完成有界检索；操作结果最多回填一次，最终 Brain 只能返回无操作 speech。
+单一 Brain 同时完成输入取舍与回复，使用严格 `decision/speech/operation` 提案，不存在独立的 LLM Gate。v2 要求 `schema_version="2.0.0"`；`discard` 为空 speech 且无操作，`accept` 可以用空 speech 静默接纳，并可带至多一个具有独立 arguments 的非语音操作。无版本旧提案保持非空 speech 限制。speech 仅进入 TTS、context 和字幕，arguments 仅进入注册工具的 schema 校验与请求构造。畸形 JSON、未知 intent、非法参数或非法 cue 均无效果，也不进行文本回退或 JSON 修复。本地知识在首次 Brain 前完成有界检索；操作结果最多回填一次，最终 Brain 在 deliberative 分道返回无操作的可选 speech；工具超时也进入一次有界结果决策。
 
 候选进入 Brain 前只执行确定性的低成本检查，例如单字符 ASR 噪声和最近回复回声；这些检查不生成内容，也不是另一个模型决策层。Brain 返回后，Orchestrator 再校验播放期间的打断语义、连接所有权、会话、重放状态、revision、操作和 cue。候选只有全部通过才原子创建正式 turn、推进取消代次并提交输入与 speech；被丢弃或校验失败的候选不会进入上下文。
 
 ASR 候选进入 session admission queue 时，Orchestrator 用自己的 monotonic clock 冻结 `was_playing_1000ms_ago`，不使用 Mic 的进程时钟，也不在候选排到队首后重新计算。该值为 true 时，Brain 的 `accept` 仍是不可信提案；reducer 只允许包含明确停止、等待、纠正或切换话题措辞的 ASR 通过，其余统一以 `brain_playback_policy_violated` 丢弃。确定性回声检查只参考实际开始播放的文本及播放结束后 1 秒尾窗，使用精确文本片段或整体相似度至少 0.88 的近似复述匹配；单字符 ASR 噪声在 Brain 前丢弃，Brain 对不清晰 ASR 生成的复述或“请重复”回复也在正式 turn 前 fail-closed。comment 不受这些规则影响。Mic control 接收循环只负责协议校验和快速投递候选任务，不等待 Brain 完成，因此慢模型不会把后续 ASR 堵在 WebSocket 缓冲区外，也不会改变其入队时播放判定。
 
-演示工具只在启动时配置非空 `ORCHESTRATOR_PPT_DECK_CATALOG` 后注册：`presentation.load` 只接受目录内 `deck_id`，`presentation.navigate` 只接受 1 到 10000 的整数 `page`，`presentation.play` 只接受空对象，且三者拒绝额外字段。Orchestrator 根据当前状态补入可信的 session、turn、command ID、deck version 和页码，模型参数不能覆盖这些字段。执行前再次验证实时 capability、revision、epoch 与当前 deck 前置条件；只有 session-owning Frontend 对精确 command ID 的一次回执可提交演示状态，错误 owner、重复或迟到回执均无效。当前 Frontend 尚无 deck 渲染器，合法演示命令会返回 `presentation_unavailable`，所以配置目录只会向 Brain 暴露操作契约，不会使 PPT 实际可用。
+演示工具只在启动时配置非空 `ORCHESTRATOR_PPT_DECK_CATALOG` 后注册：`presentation.load` 只接受目录内 `deck_id`，`presentation.navigate` 只接受 1 到 10000 的整数 `page`，`presentation.play` 只接受空对象，且三者拒绝额外字段。Orchestrator 根据当前状态补入可信的 session、turn、command ID、deck version 和页码，模型参数不能覆盖这些字段。执行前再次验证实时 capability、revision、epoch 与当前 deck 前置条件；只有 session-owning Frontend 对精确 command ID 的一次回执可提交演示状态，错误 owner、重复或迟到回执均无效。Frontend 部署侧还需准备允许文稿的版本化页面目录；真实渲染失败不会提交演示状态。
 
 回复可含 `<action name="..."/>` 和 `<expression name="..."/>`。动作 allowlist 为 `act_cute`、`emphasis`、`hello`；expression allowlist 为 `nod`（点头）、`shake_head`（摇头）、`wink`（单眼眨眼），播放旧前端录制的面捕参数序列。候选准入和最终回复阶段使用相同白名单；Orchestrator 拒绝含未知或非法控制标记的候选，TTS 接收去除合法 cue 后的文本。Frontend 使用 canonical `vtuber.caption.timeline.command` / `vtuber.caption.timeline.cancel` 事件按 `inline-cue/v1` 渲染字幕，通过 Live2D 驱动执行原生动作、录制面捕、眨眼和口型。录制面捕不会覆盖字幕驱动的嘴部开合，不开启实时摄像头。
 
@@ -118,7 +118,7 @@ lease 校验的 `finished` 事件触发；TTS provider 完成或重复/过期 fi
 
 独立 Gate、shadow/execute 模式和现场回退均已删除。缺少 Brain coordinator 时输入 fail-closed；现场 callback 对已丢弃和已接受输入都返回 handled，不能回落到旧 ASR/LLM 路径。
 
-Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 当前只提供 JSONL 回放和配置健康检查，不是直播平台生产接入器。Frontend 不参与 onsite audio loop，但已实现音频获准后的逐字字幕 timeline、口型和 cue 动作；它尚未实现真实 deck 渲染。
+Mic 和 Sound 的媒体边界保持固定的 16 kHz mono PCM16/L16 RTP。Comments 当前只提供 JSONL 回放和配置健康检查，不是直播平台生产接入器。Frontend 不参与 onsite audio loop，但已实现音频获准后的逐字字幕 timeline、口型和 cue 动作；它通过受控本地页面目录实现真实 deck 渲染。
 
 ## 关键技术细节
 
@@ -189,3 +189,9 @@ uv run mic-stream
 ## 知识库和外部 MCP
 
 生产装配在 transport_app 中一次构建只读中文 BM25 知识快照并注入所有会话。外部 MCP 使用原生异步 Streamable HTTP 请求，白名单与可信意图由本地配置登记。实现、限额和使用方式见 [知识库与 MCP](knowledge-mcp.zh-CN.md)。
+
+### 可选表达契约与回执
+
+Brain 新提案显式使用 `schema_version: "2.0.0"`，规范 schema 位于 `schemas/brain/response-proposal-v2.schema.json`。例如 `{"schema_version":"2.0.0","decision":"accept","speech":"","operation":null}` 表示静默接纳；operation 可请求允许的单个操作，操作前后 speech 各自独立决定。旧版无版本提案仍要求 accept 带有效语音，未知版本拒绝。所有入口均调度已请求语音，静默不创建 TTS、音频或字幕，不打断既有播放。最终 Brain 使用 deliberative lane，工具失败或超时也提供一次真实的最终决策机会。
+
+独立 `avatar.cue` 经协议 1.2.0 命令和所属 Frontend 的匹配结果确认；成功代表动作已被驱动接纳，拒绝/超时不冒充成功。Sound 断线清理输出租约、切换状态和语音任务，保留输出 epoch 高水位及独立 Mic input_epoch。PPT 的部署准备、静态页面限制见 Frontend 用户文档。

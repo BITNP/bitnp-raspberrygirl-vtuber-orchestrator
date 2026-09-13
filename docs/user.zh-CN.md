@@ -8,8 +8,8 @@
 - 智能回复：Orchestrator 通过单一 LLM Brain Pipeline 处理语音与评论，调用 LLM、TTS provider，并维护会话、轮次、任务和取消状态。
 - 语音输出：Sound 接收 Orchestrator 生成的 L16 RTP 音频并播放。
 - 观众输入：Comments 将观众评论规范化为 `audience.input` 事件提交给 Orchestrator。
-- 虚拟形象控制：Frontend 接收 Orchestrator 的字幕、动作、场景和演示控制命令；当前动作包括 `hello`、`act_cute` 和 `emphasis`，尚未开放 expression。
-- 演示协议：Orchestrator 已实现受控 deck 加载、播放、翻页及回执流程；当前 Frontend 尚无真实 deck 渲染器，会以 `presentation_unavailable` 拒绝合法命令。
+- 虚拟形象控制：Frontend 接收 Orchestrator 的字幕、动作、场景和演示控制命令；当前动作包括 `hello`、`act_cute` 和 `emphasis`，表情包括 `nod`、`shake_head`、`wink`，可随语音或作为无声动作执行。
+- 演示协议：Orchestrator 已实现受控 deck 加载、播放、翻页及回执流程；Frontend 从受控目录渲染预先转换的文稿页面，成功回执后提交状态。
 - 自适应交互：Orchestrator 根据会话状态、输入来源、可用能力和用户意图选择当前行为，不把产品拆成固定的三种模式。
 
 ## 快速开始
@@ -97,6 +97,6 @@ Mic input、Sound sink 或 Frontend 注册可以创建 session；Comments 与 op
 
 Orchestrator 向 Frontend 发送有限的字幕、动作、场景和演示命令，用同一个智能体覆盖讲解、宣讲、直播和观众互动等场景。LLM 输出只是候选提案，真正执行前会经过 typed command、能力 allowlist、当前状态和前置条件校验。
 
-部署者通过 `ORCHESTRATOR_PPT_DECK_CATALOG` 提供受控 deck ID 列表；未配置时 Brain 看不到演示操作。加载只允许目录中的 ID，翻页页码限制为 1 到 10000，播放不接受参数。这里的 ID 不是文件路径，Frontend 必须对每条命令返回匹配的成功结果，Orchestrator 才会更新演示状态。当前 Frontend 只实现协议拒绝与幂等回执，因此不能把配置了目录视为 PPT 已可播放。
+部署者通过 `ORCHESTRATOR_PPT_DECK_CATALOG` 提供受控 deck ID 列表；未配置时 Brain 看不到演示操作。加载只允许目录中的 ID，翻页页码限制为 1 到 10000，播放不接受参数。这里的 ID 不是文件路径，Frontend 必须对每条命令返回匹配的成功结果，Orchestrator 才会更新演示状态。还须按 Frontend 用户文档准备同名文稿的 v1 页面目录，并设置 `BITNP_PRESENTATION_ROOT`；仅配置允许列表不会创建文稿文件。
 
 模块专属操作请阅读各模块仓库内的用户文档。

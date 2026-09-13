@@ -181,6 +181,14 @@ class TurnCoordinator:
             StateEffect.FINISH_AUDIO,
         )
 
+    def output_lost(self, *, turn_id: str, epoch: int) -> StateTransition:
+        """A lost physical output is terminal, including during playback."""
+        return self._advance(
+            turn_id, epoch,
+            {TurnPhase.SYNTHESIZING, TurnPhase.CUTOVER_PENDING, TurnPhase.PLAYING},
+            TurnPhase.FAILED,
+        )
+
     def complete_without_output(
         self, *, turn_id: str, epoch: int
     ) -> StateTransition:
