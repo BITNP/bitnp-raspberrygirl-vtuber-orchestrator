@@ -67,6 +67,14 @@ class IntentSpec:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class OperationExecutionPolicy:
+    """Trusted scheduling metadata; authorization remains a reducer decision."""
+
+    lane: str
+    timeout_ms: int
+
+
 @final
 class IntentRouter:
     def __init__(self, specs: tuple[IntentSpec, ...]) -> None:
@@ -104,9 +112,12 @@ class IntentRouter:
             return None
         return ToolRequest(spec.tool_kind, spec.tool_name, arguments)
 
-    def timeout_for(self, intent_id: str) -> int | None:
-        spec = self._specs.get(intent_id)
-        return None if spec is None else spec.timeout_ms
+    def execution_policy(self, request: ToolRequest) -> OperationExecutionPolicy | None:
+        """Preserve registration-order matching of materialized tool requests."""
+        for spec in self._specs.values():
+            if spec.tool_kind == request.kind and spec.tool_name == request.name:
+                return OperationExecutionPolicy(spec.lane, spec.timeout_ms)
+        return None
 
     def permits_request(
         self, request: ToolRequest, capabilities: frozenset[str]

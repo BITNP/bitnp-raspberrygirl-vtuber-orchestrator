@@ -145,7 +145,10 @@ def test_static_config_wires_nested_schema_capabilities_and_timeout(
     snapshot = _snapshot(config.capabilities)
     request = coordinator.tool_request(proposal, snapshot)
     assert request is not None
-    assert coordinator.tool_timeout_ms(proposal) == 500
+    policy = coordinator.execution_policy(request)
+    assert policy is not None
+    assert policy.timeout_ms == 500
+    assert policy.lane == "deliberative"
     assert asyncio.run(coordinator.execute_tool(request, snapshot)) is not None
     assert requester.calls == 1
     assert (

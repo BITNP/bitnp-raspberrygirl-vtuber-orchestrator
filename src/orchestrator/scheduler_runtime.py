@@ -1457,15 +1457,8 @@ class SessionRuntime:
             request.arguments,
         )
         tool_task_id = TaskId(f"response-tool-{envelope.turn_id}")
-        operation_spec = next(
-            (
-                spec
-                for spec in coordinator.router.specs
-                if spec.tool_name == request.name and spec.tool_kind == request.kind
-            ),
-            None,
-        )
-        timeout_ms = None if operation_spec is None else operation_spec.timeout_ms
+        policy = coordinator.execution_policy(request)
+        timeout_ms = None if policy is None else policy.timeout_ms
         deadline = envelope.deadline_ms
         if timeout_ms is not None:
             deadline = min(deadline, self.clock() + timeout_ms)
@@ -1479,8 +1472,8 @@ class SessionRuntime:
                 snapshot_revision=envelope.revision,
                 idempotency_key=IdempotencyKey(str(tool_task_id)),
                 kind=TaskKind.DELIBERATIVE
-                if operation_spec is None
-                else TaskKind(operation_spec.lane),
+                if policy is None
+                else TaskKind(policy.lane),
                 segment_id=envelope.segment_id,
             ),
             correlation,

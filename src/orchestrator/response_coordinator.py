@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from orchestrator.brain_contracts import BrainStateSnapshot, ToolRequest
-    from orchestrator.intent_router import IntentRouter
+    from orchestrator.intent_router import IntentRouter, OperationExecutionPolicy
     from orchestrator.response_contracts import ResponseProposal
     from orchestrator.retrieval import VersionedRetrievalProvider
 
@@ -109,12 +109,8 @@ class AsyncResponseCoordinator:
             return None
         return self.router.request(proposal.operation, snapshot)
 
-    def tool_timeout_ms(self, proposal: ResponseProposal) -> int | None:
-        return (
-            None
-            if proposal.operation is None
-            else self.router.timeout_for(proposal.operation.intent)
-        )
+    def execution_policy(self, request: ToolRequest) -> OperationExecutionPolicy | None:
+        return self.router.execution_policy(request)
 
     async def execute_tool(
         self, request: ToolRequest, snapshot: BrainStateSnapshot

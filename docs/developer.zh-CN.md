@@ -197,3 +197,5 @@ Brain 新提案显式使用 `schema_version: "2.0.0"`，规范 schema 位于 `sc
 独立 `avatar.cue` 经协议 1.2.0 命令和所属 Frontend 的匹配结果确认；成功代表动作已被驱动接纳，拒绝/超时不冒充成功。Sound 断线清理输出租约、切换状态和语音任务，保留输出 epoch 高水位及独立 Mic input_epoch。PPT 的部署准备、静态页面限制见 Frontend 用户文档。
 
 回复提案的完整编排仅由 `SessionRuntime` 持有；`AsyncResponseCoordinator` 提供分步 provider 访问和可信映射，不提供另一套完整流程。行为测试通过受众输入入口验证 Brain 次数、操作结果和过期拒绝。
+
+操作的 lane 与 timeout 由 `IntentRouter.execution_policy` 根据可信注册提供；调度器取操作超时与轮次截止时间的较小值，并继续通过当前能力与 reducer 校验授权。

@@ -79,8 +79,9 @@ class _MemoryExtractor:
 
 
 @pytest.mark.parametrize("succeeded", [True, False])
+@pytest.mark.parametrize("timeout_ms", [500, 60_000])
 def test_first_speech_and_tool_run_concurrently_with_isolated_data_domains(
-    *, succeeded: bool
+    *, succeeded: bool, timeout_ms: int
 ) -> None:
     async def scenario() -> None:
         brain = _OperationBrain()
@@ -106,6 +107,7 @@ def test_first_speech_and_tool_run_concurrently_with_isolated_data_domains(
                         "web/search",
                         "mcp:web/search",
                         schema,
+                        timeout_ms=timeout_ms,
                     ),
                 )
             ),
@@ -118,6 +120,7 @@ def test_first_speech_and_tool_run_concurrently_with_isolated_data_domains(
             async_response_coordinator=coordinator,
             memory_candidate_extractor=extractor,
         )
+        runtime.clock = lambda: 1_000
         runtime.agent_capabilities |= {"mcp:web/search"}
         correlation = EventCorrelation(
             TraceId("trace-operation"),
@@ -131,6 +134,15 @@ def test_first_speech_and_tool_run_concurrently_with_isolated_data_domains(
         assert outcome.accepted
         assert outcome.turn_id is not None
         _ = await tool.started.wait()
+        operation_tasks = [
+            record.request for record in runtime.task_registry.records
+            if record.request.task_id.startswith("response-tool-")
+        ]
+        assert len(operation_tasks) == 1
+        assert operation_tasks[0].kind is TaskKind.DELIBERATIVE
+        assert operation_tasks[0].deadline_ms == 1_000 + min(
+            timeout_ms, runtime.response_task_timeout_ms
+        )
 
         spoken: list[str] = []
 
