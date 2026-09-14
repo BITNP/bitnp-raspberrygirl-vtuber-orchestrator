@@ -37,6 +37,7 @@ class ChoiceBrain:
     operation: bool = False
     invalid_final: bool = False
     observations: list[str] = field(default_factory=list)
+    calls: int = 0
 
     async def respond(
         self,
@@ -46,6 +47,7 @@ class ChoiceBrain:
         observation: str | None = None,
     ) -> ResponseProposal:
         _ = snapshot, available_operations
+        self.calls += 1
         if observation is not None:
             self.observations.append(observation)
             if self.invalid_final:
@@ -134,6 +136,7 @@ def test_silent_acceptance_commits_input_and_completes_without_audio(
         assert not any(
             "response-tts" in r.request.task_id for r in runtime.task_registry.records
         )
+        assert brain.calls == (2 if operation else 1)
         assert runtime.response_turn_state.phase == "completed"
         assert not runtime.has_active_work
         entries = runtime.interaction_ingress.data.context.snapshot.entries

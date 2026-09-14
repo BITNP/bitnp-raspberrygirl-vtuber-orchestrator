@@ -1,4 +1,4 @@
-"""At-most-two-call Brain coordination with one isolated operation."""
+"""Provider access and trusted mapping for scheduler-owned response orchestration."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
 from orchestrator.modes import AnswerCandidate, AudienceInput, AudienceSource
-from orchestrator.response_contracts import BrainDecision, ResponseProposal
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +33,7 @@ if TYPE_CHECKING:
 
     from orchestrator.brain_contracts import BrainStateSnapshot, ToolRequest
     from orchestrator.intent_router import IntentRouter
+    from orchestrator.response_contracts import ResponseProposal
     from orchestrator.retrieval import VersionedRetrievalProvider
 
 
@@ -51,10 +51,6 @@ class AsyncResponseToolExecutor(Protocol):
     async def execute(
         self, request: ToolRequest, snapshot: BrainStateSnapshot
     ) -> str | None: ...
-
-
-class ResponseSupersededError(RuntimeError):
-    """A provider returned after its immutable snapshot became stale."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,34 +132,3 @@ class AsyncResponseCoordinator:
         return await self.brain.respond(
             snapshot, available_operations=(), observation=observation
         )
-
-    async def respond(
-        self,
-        snapshot: BrainStateSnapshot,
-        *,
-        is_current: Callable[[], bool] | None = None,
-    ) -> CoordinatedResponse:
-        current = is_current if is_current is not None else lambda: True
-        initial = await self.initial_response(snapshot)
-        if not current():
-            raise ResponseSupersededError
-        if initial.decision is BrainDecision.DISCARD or initial.operation is None:
-            return CoordinatedResponse(initial)
-        request = self.tool_request(initial, snapshot)
-        observation = "status=rejected digest=none text=操作请求未通过校验"
-        if request is not None:
-            try:
-                result = await self.execute_tool(request, snapshot)
-            except (OSError, TimeoutError, ValueError):
-                result = None
-            observation = (
-                result
-                if result is not None
-                else "status=failed digest=none text=操作未成功完成"
-            )
-        if not current():
-            raise ResponseSupersededError
-        final = await self.final_response(snapshot, observation)
-        if not current():
-            raise ResponseSupersededError
-        return CoordinatedResponse(final, request, observation)

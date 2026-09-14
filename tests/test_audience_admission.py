@@ -189,20 +189,8 @@ def test_candidate_revalidates_scheduler_revision_before_admission() -> None:
                 ResponseProposal(BrainDecision.ACCEPT, "回答", None), started, release
             )
         )
-        coordinator = runtime.async_response_coordinator
-        assert coordinator is not None
         task = asyncio.create_task(
-            runtime._brain_and_enqueue_audience(  # pyright: ignore[reportPrivateUsage]
-                coordinator,
-                _input(1),
-                _correlation(1),
-                lambda _proposal, _snapshot: asyncio.sleep(
-                    0,
-                    result=RuntimeOutcome(
-                        accepted=True, correlation=_correlation(1)
-                    ),
-                ),
-            )
+            runtime.receive_comment_async(CommentProposal("查询", _correlation(1)))
         )
         _ = await started.wait()
         snapshot = runtime.scheduler.snapshot
@@ -211,6 +199,11 @@ def test_candidate_revalidates_scheduler_revision_before_admission() -> None:
         )
         _ = release.set()
         assert not (await task).accepted
+        assert runtime.scheduler.snapshot.active_turn_id == "turn-0001"
+        assert len(runtime.scheduler.event_history) == 1
+        assert not runtime.interaction_ingress.data.context.snapshot.entries
+        assert not runtime.observables.dispatches
+        assert not runtime.task_registry.records
 
     asyncio.run(scenario())
 

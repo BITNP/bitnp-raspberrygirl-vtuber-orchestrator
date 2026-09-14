@@ -195,3 +195,5 @@ uv run mic-stream
 Brain 新提案显式使用 `schema_version: "2.0.0"`，规范 schema 位于 `schemas/brain/response-proposal-v2.schema.json`。例如 `{"schema_version":"2.0.0","decision":"accept","speech":"","operation":null}` 表示静默接纳；operation 可请求允许的单个操作，操作前后 speech 各自独立决定。旧版无版本提案仍要求 accept 带有效语音，未知版本拒绝。所有入口均调度已请求语音，静默不创建 TTS、音频或字幕，不打断既有播放。最终 Brain 使用 deliberative lane，工具失败或超时也提供一次真实的最终决策机会。
 
 独立 `avatar.cue` 经协议 1.2.0 命令和所属 Frontend 的匹配结果确认；成功代表动作已被驱动接纳，拒绝/超时不冒充成功。Sound 断线清理输出租约、切换状态和语音任务，保留输出 epoch 高水位及独立 Mic input_epoch。PPT 的部署准备、静态页面限制见 Frontend 用户文档。
+
+回复提案的完整编排仅由 `SessionRuntime` 持有；`AsyncResponseCoordinator` 提供分步 provider 访问和可信映射，不提供另一套完整流程。行为测试通过受众输入入口验证 Brain 次数、操作结果和过期拒绝。
