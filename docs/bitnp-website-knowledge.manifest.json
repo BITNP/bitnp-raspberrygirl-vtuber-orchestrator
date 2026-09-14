@@ -1,0 +1,375 @@
+{
+  "format_version": 1,
+  "source_repository": "bitnp-website",
+  "source_commit": "bf71fdb781cc6448cd35a356377d97f417989a0d",
+  "extracted_on": "2026-09-14",
+  "source_files": {
+    "src/components/footers.vue": "c4320dee186b5e50a3d3bf23da3b96c9d7e54bd6e16aeffa31a909fc76f47a1d",
+    "src/router/main.js": "76ae89e0a7b9758075caedac71ef67daeaef29b869f9cc5c4f70bc2645eedc20",
+    "src/views/about-us/aboutUs.vue": "229604d4b6ee2be10fb7fb2d9b6d50e520c5eb0c014e8501bc5fb632f3f2569c",
+    "src/views/common-links/Common-Links.vue": "09d10dabf4bd73f7fe0c61e747f92dfc49ee3bcacda832718599d6f076551b92",
+    "src/views/home/home3.vue": "25d0686048cec02a843c0aec0f2b1b51177b1dd5db9ee560bd29a8ece0ddcc8d"
+  },
+  "documents": [
+    {
+      "file": "association.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "de757e68cc4101626e96ec444bebc0c53e31ea31c7791bb72400dd1fd20c9dbd"
+    },
+    {
+      "file": "department-presidium.md",
+      "source": "src/views/about-us/aboutUs.vue",
+      "sha256": "38e7c02e029b0013f587ed7e375802fa8da598d8e67d5bc2f1327a49ccd292f1"
+    },
+    {
+      "file": "department-digital-media.md",
+      "source": "src/views/about-us/aboutUs.vue",
+      "sha256": "5c661be52e00493ffe904177050184348d9e24372bb1006aaa134ed0a5feae90"
+    },
+    {
+      "file": "department-clinic-department.md",
+      "source": "src/views/about-us/aboutUs.vue",
+      "sha256": "001cc2b6cdfa5e8b80c24c507c45e67479e395878d00c1047d2e8e7b5283be0a"
+    },
+    {
+      "file": "department-technology.md",
+      "source": "src/views/about-us/aboutUs.vue",
+      "sha256": "98f2a9e1cfe24892791f2e2330d5eb31b395f5e3a7cdb478899fd4333b52c945"
+    },
+    {
+      "file": "department-organization.md",
+      "source": "src/views/about-us/aboutUs.vue",
+      "sha256": "3aa69519a994f03366be090807607abeed7fd14b12cad30018e4feb1640e7e39"
+    },
+    {
+      "file": "service-bit101.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "bb22deea265ee9120aa2186792a54bf0d4cde69d28f27acc6807c5fd12f9bec9"
+    },
+    {
+      "file": "service-clinic.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "527465d27d28e0d2a34178eb3686633f162468eabb9ebacf8e34053cf3c7369a"
+    },
+    {
+      "file": "service-nplive.md",
+      "source": "src/views/home/home3.vue；src/views/about-us/aboutUs.vue",
+      "sha256": "bed474d8ea3acbad5f01e8c92e8855a98ee3513734cf0d6c101664abae4cd814"
+    },
+    {
+      "file": "service-mirror.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "fedc6dae5654a4953091587781e8e2406f90b3017abbacc3d87671980ee40b0a"
+    },
+    {
+      "file": "service-bithesis.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "16a35c4de9584d14f3e9c31555f6b16bdb788580024813182cfd1d5f26b82102"
+    },
+    {
+      "file": "service-map.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "5c4d873b1034ca4e22f806ae8f068ec7df3bbf23fb4dc81822dc4cde41f4517e"
+    },
+    {
+      "file": "service-wiki.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "90c020a18d28b750782de41c5f6e153e4f16f3ae806cfb4ec9cd7fa4a237d2f7"
+    },
+    {
+      "file": "service-codimd.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "00ecc8830de7284bc85678fb91ad18c7286badd065a92e94f05d5c5ebc687b76"
+    },
+    {
+      "file": "contact.md",
+      "source": "src/components/footers.vue",
+      "sha256": "0a3d9662f4bce1beccc756551c1bb056e10056721c5c1be8ed35dc63507455a6"
+    },
+    {
+      "file": "archive-recruitment-2025.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "1e456b2ed1d1500d2f225fbe5984c0010a025fee210a0a3f4e7a65946cf95f2a"
+    },
+    {
+      "file": "archive-computer-guide-2025.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "94628a23b218aacb5c7a2891c9d4d29b41ca0476a51520cb1cd9d5ae9e34d4a8"
+    },
+    {
+      "file": "archive-network-guide-2022.md",
+      "source": "src/views/home/home3.vue",
+      "sha256": "482973841ee3a3d682a5183bbffa19b0657254d4557695b83d2b278a279cb262"
+    },
+    {
+      "file": "campus-01.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "915148fa9ec622bd2967dbea9ca57f8bdf787fd49d16896979557f351946ae16"
+    },
+    {
+      "file": "campus-02.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "fd74b0a1648c937a88a24dcf15a01fb65d3365e61d6891e2c708acf314f878ca"
+    },
+    {
+      "file": "campus-03.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "58825c91da7ff5fa655727d472d20f40ede37d672620814072a221d00a503325"
+    },
+    {
+      "file": "campus-05.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "6e351244c30d289c74f7b8c89c37cfd809418d5d1a28b96e05592e0233aca73b"
+    },
+    {
+      "file": "campus-06.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "5f5ef0108dba5b094896eb4dfc6abd817ab78f7a9a1a47dce5185bd2539f625f"
+    },
+    {
+      "file": "campus-07.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "411964e6a1401dac129a449c0aa650c7ea078f0c6342a21f04f1967ed3c2d336"
+    },
+    {
+      "file": "campus-08.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "d318304fe1f7cfc26871569d624870ec073dfc0893b473c6c512a7d395e7f12d"
+    },
+    {
+      "file": "campus-09.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "dab3c2798a4ceec838aa961625807fd8c738c4d9b47bfe2f9eb4803ebbd82a17"
+    },
+    {
+      "file": "campus-10.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "bd87bb2a15b013b3545431b37fe1b72727d46d43a287f92ae58d63141f0ac06c"
+    },
+    {
+      "file": "campus-11.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "3b22dd35efffc614724ae9bc63309d36791e7c2f382fce4e625504373c25f944"
+    },
+    {
+      "file": "campus-12.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "5e000a815eb84fb1aafb21a77520e4b585e63427b93b6a5bd8af1e5671732147"
+    },
+    {
+      "file": "campus-14.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "50f281af26916c9c10358e9a89b45516e1e7248edb684fbce5141c1ff8a5078f"
+    },
+    {
+      "file": "campus-15.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "dd0f6ef46a51c5a50a459d1c1217a92c1760f9b1ac53d9846d096e08c66f3374"
+    },
+    {
+      "file": "campus-16.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "1b68c181c074c98a4edc018a8dc92aa5e149473adc01d86fe260a1467369e4bf"
+    },
+    {
+      "file": "campus-17.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "6ac52aac72d82f379d65905de33dbd6f0ac38d74afde3a960041a45429668304"
+    },
+    {
+      "file": "campus-18.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "b232b7d35d342bc24b094888aeb60980771a370276e98c8e8d549af555c49a81"
+    },
+    {
+      "file": "campus-19.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "ae244edaf4918ae90c5285479729c5f9b7b9fd3dc3454783459b832c36089c0d"
+    },
+    {
+      "file": "campus-20.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "4ebeffa05cb03555f03419cea2484c1bd5c6fe8a76f74125e380f3b1cc108185"
+    },
+    {
+      "file": "campus-21.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "0b3a257ca23d4e430160952d168b494ccb12a7c9ab88eb4b6a3badcf9a0c2981"
+    },
+    {
+      "file": "campus-22.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "3bd2be876f2dd034c802e692e8dc273295e58789f50f18d5f8eca7512265395e"
+    },
+    {
+      "file": "campus-24.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "f1114ad35371f33cd60ae0235a13e59120afa99ca315543e83c6fe68133ab575"
+    },
+    {
+      "file": "campus-25.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "8307ead132c2fb12c5d56c3e7316499c2570c5a3646159d413bb324e9fd60492"
+    },
+    {
+      "file": "campus-26.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "280cf65860171b7270aeb6dcd13d15872832790ae294073ff87aaa8b626662bc"
+    },
+    {
+      "file": "campus-27.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "aef27acb637fd9cecb545f872bc19261923a3f7d1136a4720ac98c4943893f9e"
+    },
+    {
+      "file": "campus-28.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "c0d4d92513026dc0b333829733e3901f21d37534be2895d9ad104e66cc75f852"
+    },
+    {
+      "file": "campus-29.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "78937b5b710b11f8c5dad5f67e1c141d1f6831da76c67100a73a22463ebc3cbf"
+    },
+    {
+      "file": "campus-30.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "ea7615bab7af7e2599f849c7b886322a3fad4244d4d91d7452535c3b7c171669"
+    },
+    {
+      "file": "campus-31.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "d2daf1cfdac5a9a58395f45d4191ce058667c64265e4244cd0d807c574312c03"
+    },
+    {
+      "file": "campus-32.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "0ede34cae6ee2a6397b4d312f93427220b1ce73246be3562cfbaec514cdf0e2a"
+    },
+    {
+      "file": "campus-33.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "6367fc676c54f26595c4b314935161d9dd597f2305a598d5a40601d88b3f0e33"
+    },
+    {
+      "file": "campus-34.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "c951c2411535a03c2654cee43fdba6175509b35992d1053e8efb39e33e1262ee"
+    },
+    {
+      "file": "campus-35.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "8a42ff20382ef6ef2636dabacc4471c29a82c40cd7a36ce78a12cd0859a04dcb"
+    },
+    {
+      "file": "campus-36.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "b73e4cbaace28e31e855101acd8748bb79fc26d40ca7cdcb6bd89d9aa3a1f1f8"
+    },
+    {
+      "file": "campus-37.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "fad7ccd84f5b2978297781909a580ecb22b612daa147c64b2a16dfe37fa4bec0"
+    },
+    {
+      "file": "campus-39.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "d1b58895736845c662e98a1febb81ee7832139ea36165c009a3f4915bc2f26ee"
+    },
+    {
+      "file": "campus-40.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "631755adaf2931938623f8a515d7d53eaf2fae16e57fc70a2aaa8122e88d140e"
+    },
+    {
+      "file": "campus-41.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "6c2fff3fa8591c71fddb2903f24601ae834366e05929330c2654f4be2f13fc02"
+    },
+    {
+      "file": "campus-42.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "a4b13456d01ec26c00993bda77c9cb03d52db0fde65ffd4e71ddd25e5af2b8c7"
+    },
+    {
+      "file": "campus-44.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "08457b5a7415f811c3bb2be4ddcbb65c9a41a5dfed60c9f9e4ac70612d6fc426"
+    },
+    {
+      "file": "campus-46.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "3dfd6dd61bae45dcfb9a86365ef051fa018b53bfdd0f76ac2ddc6e226c0a304c"
+    },
+    {
+      "file": "campus-47.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "b1d45bbf61b49a9e8e76506c3ea42c05083fc5979ae5df70a2b6347f375f8709"
+    },
+    {
+      "file": "campus-48.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "dd6e84d4ff81a8518e1c15c526d1b5f4ff4ae29814d58ed4260b1a2a5b783911"
+    },
+    {
+      "file": "campus-49.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "010a9bb6ed2ee943786b1214abd0c9483c366ede4de526ca8b0aa1535d951f91"
+    },
+    {
+      "file": "campus-51.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "3c0a1b1cbca264d411354b1a6dc98ce6726d4dec75206f534e76309f1eb76817"
+    },
+    {
+      "file": "campus-52.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "8ad79dbc389c434f923914818cc906c8cfc0f6a347d7e49555ef7c6e0ddc572b"
+    },
+    {
+      "file": "campus-53.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "fec3559efd14d511c5827fad13578015b5bc947d94490b7b81744016e185dc6e"
+    },
+    {
+      "file": "campus-54.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "f63f6f1abd6d0891381e468072eb99c69a94f0d5f3fe0f424e9f8ee6ff1d4145"
+    },
+    {
+      "file": "campus-55.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "c8915c3d0a4cf7226d2d4ef254ef8fbe483828a3811242979d11fb2ccb7d637f"
+    },
+    {
+      "file": "campus-56.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "ba6eb2ed9dcf5e499385192eea622769b4d0fd3caa27273f76d12422a89fa2c2"
+    },
+    {
+      "file": "campus-57.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "b5d783cd9856c42c36f4e5634f14655ed45ddb4de66869b5a9f66fee6918d2b4"
+    },
+    {
+      "file": "campus-58.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "a746897e0afe4ebafc85d1a9f9f3b2f0013d5236b048b7e9e548ecf719a1976e"
+    },
+    {
+      "file": "campus-59.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "c483fe10152ea5606f1f9fe52253366d5e2289e187eaa260c9a8bbd51dd781ab"
+    },
+    {
+      "file": "campus-60.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "49dcbd7f2f5b544985e42fbcd4a016e347c953247455d1f0ce7c8aefd8d8c36c"
+    },
+    {
+      "file": "campus-webvpn.md",
+      "source": "src/views/common-links/Common-Links.vue",
+      "sha256": "f4449d0159501a33e86b3e876d9803dc69f3eada95a091b5025acc6e5a3c966f"
+    }
+  ]
+}

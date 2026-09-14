@@ -4,6 +4,8 @@
 
 ## 配置离线知识库
 
+仓库提供从 `bitnp-website` 提取的中文语料 `knowledge/bitnp-website/`，涵盖协会、部门、服务和校园导航；配置方法、来源和时效说明见[网站知识库快照](bitnp-website-knowledge.zh-CN.md)。
+
 在部署环境中设置：
 
 ```dotenv
