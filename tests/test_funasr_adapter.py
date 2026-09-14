@@ -116,7 +116,10 @@ def test_funasr_wss_uses_configured_ca_bundle(
 
     # Then: websockets receives the verified CA-based TLS context.
 
-    assert isinstance(connect_arguments[0]["ssl"], ssl.SSLContext)
+    context = connect_arguments[0]["ssl"]
+    assert isinstance(context, ssl.SSLContext)
+    assert context.check_hostname
+    assert context.verify_mode == ssl.CERT_REQUIRED
 
 
 def test_funasr_ws_omits_tls_context_even_with_configured_ca_bundle(

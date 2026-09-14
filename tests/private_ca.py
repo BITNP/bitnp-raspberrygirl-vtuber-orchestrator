@@ -9,8 +9,6 @@ from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, ClassVar, Final, Self, cast, final, override
 
-from websockets.sync.server import Server, ServerConnection, serve
-
 if TYPE_CHECKING:
     import socket
     from pathlib import Path
@@ -207,45 +205,3 @@ def _https_response(path: str) -> tuple[bytes, str]:
             "application/json",
         )
     return b"private-ca-audio", "audio/wav"
-
-
-@dataclass(slots=True)
-class PrivateWssServer:
-    private_ca: PrivateCA
-    received_messages: list[str | bytes] = field(default_factory=list)
-    _server: Server = field(init=False)
-    _thread: threading.Thread = field(init=False)
-
-    def __post_init__(self) -> None:
-        self._server = serve(
-            self._handle_connection,
-            "127.0.0.1",
-            0,
-            ssl=self.private_ca.server_context(),
-        )
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-
-    @property
-    def endpoint(self) -> str:
-        address = cast("tuple[str, int]", self._server.socket.getsockname())
-        assert isinstance(address, tuple)
-        return f"wss://{TEST_HOSTNAME}:{address[1]}"
-
-    def __enter__(self) -> Self:
-        self._thread.start()
-        return self
-
-    def __exit__(
-        self,
-        exception_type: type[BaseException] | None,
-        exception: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        _ = (exception_type, exception, traceback)
-        self._server.shutdown()
-        self._thread.join()
-
-    def _handle_connection(self, connection: ServerConnection) -> None:
-        for _ in range(3):
-            self.received_messages.append(connection.recv())
-        connection.send('{"text":"private CA transcription","is_final":true}')

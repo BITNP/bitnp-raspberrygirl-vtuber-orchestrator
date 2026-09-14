@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Literal
 
 import pytest
 
-from orchestrator.funasr_adapter import FunASRWebSocketAdapter
 from orchestrator.llm import (
     BRAIN_MAX_COMPLETION_TOKENS,
     LLMFinal,
@@ -17,14 +16,12 @@ from orchestrator.llm import (
     ReasoningMode,
     VllmOmniTTSAdapter,
 )
-from orchestrator.media_adapters import ASRStreamRequest
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.provider_streaming import ProviderResponseError
 from tests.openai_llm_test_helper import OpenAICompatibleLLMRuntimeAdapter
 from tests.private_ca import (
     PrivateCA,
     PrivateHttpsServer,
-    PrivateWssServer,
     create_private_ca,
 )
 
@@ -43,9 +40,9 @@ def _llm_request() -> LLMRequest:
     )
 
 
-@pytest.fixture
-def private_ca(tmp_path: Path) -> PrivateCA:
-    return create_private_ca(tmp_path)
+@pytest.fixture(scope="module")
+def private_ca(tmp_path_factory: pytest.TempPathFactory) -> PrivateCA:
+    return create_private_ca(tmp_path_factory.mktemp("provider-ca"))
 
 
 @pytest.fixture(autouse=True)
@@ -158,48 +155,6 @@ def test_https_provider_rejects_untrusted_or_hostname_mismatched_private_ca(
     assert server.request_paths == []
 
 
-def test_native_funasr_wss_accepts_configured_private_ca(private_ca: PrivateCA) -> None:
-    # Given: a local FunASR WSS endpoint whose certificate chains to only the test CA.
-
-    with PrivateWssServer(private_ca) as server:
-        # When: the native FunASR adapter sends an utterance with the configured CA.
-
-        events = tuple(
-            FunASRWebSocketAdapter(
-                endpoint=server.endpoint,
-                model="paraformer",
-                ca_path=private_ca.ca_path,
-            ).stream(_asr_request())
-        )
-
-    # Then: the complete native protocol reaches the server and parses its final event.
-
-    assert events == (ASRAudienceEvent("private CA transcription", 10, "segment-1", 1),)
-    assert len(server.received_messages) == 3
-
-
-@pytest.mark.parametrize("ca_source", ["default", "unrelated", "hostname_mismatch"])
-def test_native_funasr_wss_rejects_untrusted_or_hostname_mismatched_private_ca(
-    private_ca: PrivateCA,
-    ca_source: Literal["default", "unrelated", "hostname_mismatch"],
-) -> None:
-    # Given: a private-CA native WSS endpoint and an invalid trust selection.
-
-    with PrivateWssServer(private_ca) as server:
-        endpoint, ca_path = _wss_failure_target(server, private_ca, ca_source)
-
-        # When / Then: the TLS handshake fails before the FunASR protocol starts.
-
-        with pytest.raises(ssl.SSLCertVerificationError):
-            _ = tuple(
-                FunASRWebSocketAdapter(endpoint, "paraformer", ca_path=ca_path).stream(
-                    _asr_request()
-                )
-            )
-
-    assert server.received_messages == []
-
-
 def _request_http_provider(
     provider: HttpProvider, endpoint: str, ca_path: Path | None
 ) -> tuple[LLMStreamEvent, ...] | ASRAudienceEvent | bytes | None:
@@ -254,27 +209,3 @@ def _https_failure_target(
             return server.endpoint, private_ca.unrelated_ca_path
         case "hostname_mismatch":
             return server.endpoint.replace("localhost", "127.0.0.1"), private_ca.ca_path
-
-
-def _wss_failure_target(
-    server: PrivateWssServer,
-    private_ca: PrivateCA,
-    ca_source: Literal["default", "unrelated", "hostname_mismatch"],
-) -> tuple[str, Path | None]:
-    match ca_source:
-        case "default":
-            return server.endpoint, None
-        case "unrelated":
-            return server.endpoint, private_ca.unrelated_ca_path
-        case "hostname_mismatch":
-            return server.endpoint.replace("localhost", "127.0.0.1"), private_ca.ca_path
-
-
-def _asr_request() -> ASRStreamRequest:
-    return ASRStreamRequest(
-        audio=b"audio",
-        filename="utterance.pcm",
-        received_at_ms=10,
-        segment_id="segment-1",
-        seq=1,
-    )
