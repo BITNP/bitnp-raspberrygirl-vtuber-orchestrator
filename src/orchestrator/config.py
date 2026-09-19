@@ -81,7 +81,7 @@ AsrProvider = Literal["mock", "openai_compatible", "funasr"]
 
 TtsProvider = Literal["mock", "vllm_omni", "audio_cpp", "aliyun_cosyvoice"]
 
-TtsMode = Literal["final_only", "streaming_sse"]
+TtsMode = Literal["final_only", "streaming"]
 
 DEFAULT_TTS_MODE: Final = "final_only"
 
@@ -384,8 +384,15 @@ def _parse_tts_provider(raw_provider: str | None) -> TtsProvider:
 def _parse_tts_mode(raw_mode: str | None) -> TtsMode:
     mode = DEFAULT_TTS_MODE if raw_mode is None else raw_mode.strip()
     match mode:
-        case "final_only" | "streaming_sse":
+        case "final_only" | "streaming":
             return mode
+
+        # ``streaming_sse`` named the HTTP event-stream transport.  Streaming
+        # output now also covers provider-native realtime transports, so the
+        # legacy value stays accepted and normalizes to ``streaming``.
+        case "streaming_sse":
+            return "streaming"
+
         case _:
             raise ConfigParseError(field_name=TTS_MODE_KEY)
 

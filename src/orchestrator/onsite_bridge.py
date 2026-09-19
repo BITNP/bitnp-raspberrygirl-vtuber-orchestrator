@@ -499,7 +499,7 @@ class OnsiteExplainerBridge:
     ) -> Iterator[Pcm16leChunk] | None:
         if getattr(
             self.tts, "capability", "final_only"
-        ) != "streaming_sse" or not isinstance(self.tts, StreamingTtsAdapter):
+        ) != "streaming" or not isinstance(self.tts, StreamingTtsAdapter):
             return None
         return self.tts.stream_pcm16le(
             text=text,

@@ -1,16 +1,29 @@
 from __future__ import annotations
 
 import base64
-import binascii
+import io
 import json
 import logging
 import ssl
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NotRequired, TypedDict, cast, override
+from queue import Queue
+from threading import Event, Lock, Thread
+from typing import (
+    TYPE_CHECKING,
+    Literal,
+    NotRequired,
+    Protocol,
+    TypedDict,
+    cast,
+    override,
+)
 from urllib.parse import unquote, urlsplit
 
+import dashscope
 import httpx
+from dashscope.audio.tts_v2 import AudioFormat, ResultCallback, SpeechSynthesizer
 from openai import (
     NOT_GIVEN,
     APIConnectionError,
@@ -42,30 +55,56 @@ from orchestrator.provider_streaming import (
 from orchestrator.tts_rtp import Pcm16leChunk
 
 _LOGGER = logging.getLogger(__name__)
-_ALIYUN_RESPONSE_LOG = (
-    "tts_response provider=aliyun_cosyvoice transport=http media_type=audio/wav %s"
+_ALIYUN_REQUEST_LOG = (
+    "tts_request provider=aliyun_cosyvoice transport=dashscope-realtime"
+    " url=%s model=%s voice=%s mode=%s input=%r"
 )
-_ALIYUN_STREAM_RESPONSE_LOG_PREFIX = (
-    "tts_response provider=aliyun_cosyvoice transport=http-sse"
+_ALIYUN_PCM_RESPONSE_LOG = (
+    "tts_response provider=aliyun_cosyvoice transport=dashscope-realtime"
+    " media_type=audio/pcm %s"
 )
-_ALIYUN_STREAM_RESPONSE_LOG = (
-    f"{_ALIYUN_STREAM_RESPONSE_LOG_PREFIX} media_type=audio/pcm %s"
+_ALIYUN_WAV_RESPONSE_LOG = (
+    "tts_response provider=aliyun_cosyvoice transport=dashscope-realtime"
+    " media_type=audio/wav %s"
 )
-_ALIYUN_REQUEST_LOG = "tts_request provider=aliyun_cosyvoice url=%s request=%r"
+_ALIYUN_COMPLETE_LOG = (
+    "tts_response provider=aliyun_cosyvoice transport=dashscope-realtime"
+    " outcome=complete request_id=%s first_package_delay_ms=%.1f"
+)
 _ALIYUN_ERROR_LOG = (
-    "tts_response_error provider=aliyun_cosyvoice status=%d detail=%s"
+    "tts_response_error provider=aliyun_cosyvoice transport=dashscope-realtime"
+    " stage=%s detail=%s"
 )
-_MAX_ALIYUN_ERROR_BYTES = 4_096
-_MAX_ALIYUN_ERROR_CHARS = 512
+_ALIYUN_STALLED_LOG = (
+    "tts_response_error provider=aliyun_cosyvoice transport=dashscope-realtime"
+    " reason=worker_stalled thread=%s"
+)
+_ALIYUN_SAMPLE_RATE = 16_000
+_ALIYUN_CHANNELS = 1
+_ALIYUN_SAMPLE_BYTES = 2
+_ALIYUN_ERROR_CHARS = 512
+_ALIYUN_COMPLETE_TIMEOUT_MILLIS = 60_000
+_ALIYUN_CANCEL_TIMEOUT_MILLIS = 2_000
+_ALIYUN_WORKER_JOIN_SECONDS = 5.0
+_ALIYUN_SYNTHESIS_THREAD = "aliyun-cosyvoice-realtime"
+_ALIYUN_WEBSOCKET_SCHEMES = frozenset({"ws", "wss"})
+_ALIYUN_REALTIME_AUDIO_FORMAT = AudioFormat.PCM_16000HZ_MONO_16BIT
 
 
 @dataclass(frozen=True, slots=True)
 class MediaAdapterConfigError(ValueError):
     field_name: str
 
+    reason: Literal["blank", "invalid"] = "blank"
+
     @override
     def __str__(self) -> str:
-        return f"media adapter config field is blank: {self.field_name}"
+        match self.reason:
+            case "invalid":
+                return f"media adapter config field is invalid: {self.field_name}"
+
+            case _:
+                return f"media adapter config field is blank: {self.field_name}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,22 +166,6 @@ class AudioCppSpeechPayload(TypedDict):
     reference_text: NotRequired[str]
 
 
-class AliyunCosyVoiceInput(TypedDict):
-    text: str
-
-    voice: str
-
-    format: Literal["wav", "pcm"]
-
-    sample_rate: Literal[16_000]
-
-
-class AliyunCosyVoiceSpeechPayload(TypedDict):
-    model: str
-
-    input: AliyunCosyVoiceInput
-
-
 @dataclass(frozen=True, slots=True)
 class HttpSpeechRequest:
     method: Literal["POST"]
@@ -161,15 +184,6 @@ class AudioCppSpeechRequest:
     url: str
 
     json: AudioCppSpeechPayload
-
-
-@dataclass(frozen=True, slots=True)
-class AliyunCosyVoiceSpeechRequest:
-    method: Literal["POST"]
-
-    url: str
-
-    json: AliyunCosyVoiceSpeechPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,7 +437,7 @@ class VllmOmniTTSAdapter:
 
     timeout_seconds: float = 120.0
 
-    capability: Literal["final_only", "streaming_sse"] = "final_only"
+    capability: ProviderCapability = "final_only"
 
     def __post_init__(self) -> None:
         _require_endpoint_and_model(self.endpoint, self.model)
@@ -594,9 +608,153 @@ class VllmOmniTTSAdapter:
         )
 
 
+class _RealtimeSpeechSynthesizer(Protocol):
+    """DashScope realtime synthesizer surface this adapter drives."""
+
+    def streaming_call(self, text: str) -> None:
+        """Send synthesis input on the current realtime task."""
+
+        ...
+
+    def streaming_complete(self, complete_timeout_millis: int) -> None:
+        """Finish text input and wait for the remaining audio."""
+
+        ...
+
+    def streaming_cancel(self, complete_timeout_millis: int) -> None:
+        """Ask the server to drop the current task and its pending audio."""
+
+        ...
+
+    def close(self) -> None:
+        """Close the realtime WebSocket connection."""
+
+        ...
+
+    def get_last_request_id(self) -> str:
+        """Return the Model Studio request ID of the last task."""
+
+        ...
+
+    def get_first_package_delay(self) -> float:
+        """Return the first-package delay of the last task in milliseconds."""
+
+        ...
+
+
+class _AliyunCosyVoiceRealtimeCallback(ResultCallback):
+    """Bridge DashScope realtime callbacks onto a blocking event queue.
+
+    The SDK delivers audio and terminal events from its WebSocket receiver
+    thread, so the callbacks only enqueue plain data and never block it.
+    ``bytes`` items are PCM deltas, ``None`` ends the stream successfully, and
+    an ``Exception`` item reports a typed provider failure.
+    """
+
+    def __init__(self, events: Queue[bytes | Exception | None]) -> None:
+        self._events: Queue[bytes | Exception | None] = events
+
+        self._lock: Lock = Lock()
+
+        self._settled: bool = False
+
+    @property
+    def settled(self) -> bool:
+        with self._lock:
+            return self._settled
+
+    @override
+    def on_data(self, data: bytes) -> None:
+        if data == b"" or self.settled:
+            return
+        self._events.put(bytes(data))
+
+    @override
+    def on_complete(self) -> None:
+        self.finish(None)
+
+    @override
+    def on_error(self, message: str) -> None:
+        self.finish(_aliyun_task_failure(message))
+
+    @override
+    def on_close(self) -> None:
+        self.finish(ProviderResponseError(stage="tts", reason="closed"))
+
+    def finish(self, outcome: bytes | Exception | None) -> None:
+        """Publish one terminal outcome unless the stream already settled."""
+        with self._lock:
+            if self._settled:
+                return
+            self._settled = True
+        self._events.put(outcome)
+
+
+class _DashScopeRealtimeSynthesizer(SpeechSynthesizer):
+    """The official ``SpeechSynthesizer`` plus WebSocket-level termination.
+
+    ``ResultCallback`` reports task completion and server-side task failures,
+    but a socket that dies without a ``task-finished`` message only stops the
+    SDK receiver thread.  Relaying the WebSocket handlers lets the adapter fail
+    the stream immediately instead of waiting for its completion timeout.
+    """
+
+    def __init__(
+        self,
+        *,
+        callback: _AliyunCosyVoiceRealtimeCallback,
+        model: str,
+        voice: str,
+        audio_format: AudioFormat,
+        endpoint: str,
+    ) -> None:
+        # The SDK types its constructor parameters only partially, so this call
+        # is covered by the ``_RealtimeSpeechSynthesizer`` protocol instead.
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]
+            model=model,
+            voice=voice,
+            format=audio_format,
+            url=endpoint,
+            callback=callback,
+        )
+        self._realtime_callback: _AliyunCosyVoiceRealtimeCallback = callback
+
+    @override
+    def on_error(self, ws: object, error: object) -> None:
+        super().on_error(ws, error)  # pyright: ignore[reportUnknownMemberType]
+        self._realtime_callback.finish(
+            ProviderResponseError(stage="tts", reason="connect")
+        )
+
+    @override
+    def on_close(
+        self,
+        ws: object,
+        close_status_code: object,
+        close_msg: object,
+    ) -> None:
+        super().on_close(  # pyright: ignore[reportUnknownMemberType]
+            ws,
+            close_status_code,
+            close_msg,
+        )
+        self._realtime_callback.finish(
+            ProviderResponseError(stage="tts", reason="closed")
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class AliyunCosyVoiceTTSAdapter:
-    """Alibaba Cloud Model Studio CosyVoice SpeechSynthesizer adapter."""
+    """Alibaba Cloud Model Studio realtime CosyVoice adapter.
+
+    Synthesis runs through the official DashScope ``tts_v2`` SDK, which speaks
+    the Model Studio realtime duplex WebSocket protocol and returns audio
+    incrementally.  ``stream_pcm16le`` forwards those PCM deltas as they
+    arrive, and ``synthesize`` buffers one realtime clip into a 16 kHz mono
+    PCM16 WAV container so the buffered mode stays cancellable too.  Reference
+    material belongs to Model Studio's separate voice-cloning API: a synthesis
+    task only accepts the resulting system or cloned voice ID.
+    """
 
     endpoint: str
 
@@ -604,45 +762,20 @@ class AliyunCosyVoiceTTSAdapter:
 
     api_key: str | None = None
 
+    # The DashScope realtime SDK owns its WebSocket TLS configuration, so this
+    # shared adapter field is accepted without being applied.
     ca_path: Path | None = None
 
     timeout_seconds: float = 120.0
 
-    capability: Literal["final_only", "streaming_sse"] = "final_only"
+    capability: ProviderCapability = "final_only"
 
     def __post_init__(self) -> None:
         _require_endpoint_and_model(self.endpoint, self.model)
         if self.api_key is None or self.api_key.strip() == "":
             raise MediaAdapterConfigError(field_name="api_key")
-
-    def build_speech_request(
-        self,
-        *,
-        text: str,
-        voice: str,
-        ref_audio: str,
-        ref_text: str,
-        streaming: bool = False,
-    ) -> AliyunCosyVoiceSpeechRequest:
-        # Model Studio synthesis accepts a system or previously enrolled clone
-        # voice ID. Reference material belongs to its separate voice-cloning API.
-        _ = ref_audio, ref_text
-        normalized_voice = voice.strip()
-        if normalized_voice == "":
-            raise MediaAdapterConfigError(field_name="voice")
-        return AliyunCosyVoiceSpeechRequest(
-            method="POST",
-            url=self.endpoint.rstrip("/"),
-            json={
-                "model": self.model.strip(),
-                "input": {
-                    "text": text,
-                    "voice": normalized_voice,
-                    "format": "pcm" if streaming else "wav",
-                    "sample_rate": 16_000,
-                },
-            },
-        )
+        if urlsplit(self.endpoint).scheme not in _ALIYUN_WEBSOCKET_SCHEMES:
+            raise MediaAdapterConfigError(field_name="endpoint", reason="invalid")
 
     def synthesize(
         self,
@@ -653,40 +786,23 @@ class AliyunCosyVoiceTTSAdapter:
         ref_text: str,
         cancellation: ProviderCancellationHandle | None = None,
     ) -> SynthesizedAudio:
-        speech = self.build_speech_request(
-            text=text,
-            voice=voice,
-            ref_audio=ref_audio,
-            ref_text=ref_text,
+        pcm16le = b"".join(
+            chunk.data
+            for chunk in self.stream_pcm16le(
+                text=text,
+                voice=voice,
+                ref_audio=ref_audio,
+                ref_text=ref_text,
+                cancellation=cancellation,
+            )
         )
-        _log_aliyun_cosyvoice_tts_request(speech)
-        client = self._client()
-        release = _bind_cancellation(cancellation, client.close)
-        try:
-            response = client.post(
-                speech.url,
-                json=speech.json,
-                headers=self._headers(streaming=False),
-            )
-            _raise_aliyun_for_status(response)
-            if cancellation is not None and cancellation.cancelled:
-                return SynthesizedAudio(data=b"", media_type="application/octet-stream")
-            audio_url = _aliyun_audio_url(response.text)
-            data = b"".join(
-                self._download_audio(client, audio_url, cancellation=cancellation)
-            )
-            _LOGGER.debug(
-                _ALIYUN_RESPONSE_LOG,
-                binary_summary(data),
-            )
-            return SynthesizedAudio(data=data, media_type="audio/wav")
-        except httpx.HTTPError as error:
-            if cancellation is not None and cancellation.cancelled:
-                return SynthesizedAudio(data=b"", media_type="application/octet-stream")
-            raise _tts_provider_error(error) from error
-        finally:
-            release()
-            client.close()
+        if cancellation is not None and cancellation.cancelled:
+            return SynthesizedAudio(data=b"", media_type="application/octet-stream")
+        _LOGGER.debug(_ALIYUN_WAV_RESPONSE_LOG, binary_summary(pcm16le))
+        return SynthesizedAudio(
+            data=_pcm16le_wav(pcm16le),
+            media_type="audio/wav",
+        )
 
     def stream_pcm16le(
         self,
@@ -697,89 +813,79 @@ class AliyunCosyVoiceTTSAdapter:
         ref_text: str,
         cancellation: ProviderCancellationHandle | None = None,
     ) -> Iterator[Pcm16leChunk]:
-        speech = self.build_speech_request(
-            text=text,
-            voice=voice,
-            ref_audio=ref_audio,
-            ref_text=ref_text,
-            streaming=True,
+        # Model Studio's separate voice-cloning API owns reference material.
+        _ = ref_audio, ref_text
+        normalized_voice = voice.strip()
+        if normalized_voice == "":
+            raise MediaAdapterConfigError(field_name="voice")
+        events: Queue[bytes | Exception | None] = Queue()
+        callback = _AliyunCosyVoiceRealtimeCallback(events)
+        synthesizer = self._open_realtime_synthesizer(
+            voice=normalized_voice,
+            callback=callback,
         )
-        _log_aliyun_cosyvoice_tts_request(speech)
-        client = self._client()
-        release = _bind_cancellation(cancellation, client.close)
+        _LOGGER.debug(
+            _ALIYUN_REQUEST_LOG,
+            self.endpoint,
+            self.model.strip(),
+            normalized_voice,
+            self.capability,
+            text,
+        )
+        stopped = Event()
+        worker = Thread(
+            target=_run_aliyun_cosyvoice_task,
+            args=(synthesizer, text, callback, stopped),
+            name=_ALIYUN_SYNTHESIS_THREAD,
+            daemon=True,
+        )
+
+        def stop_consumer() -> None:
+            stopped.set()
+            events.put(None)
+
+        release = _bind_cancellation(cancellation, stop_consumer)
+        worker.start()
         try:
-            done = False
-            with client.stream(
-                "POST",
-                speech.url,
-                json=speech.json,
-                headers=self._headers(streaming=True),
-            ) as response:
-                _raise_aliyun_for_status(response)
-                for line in response.iter_lines():
+            while True:
+                event = events.get()
+                if event is None:
                     if cancellation is not None and cancellation.cancelled:
                         return
-                    data = _aliyun_sse_data(line)
-                    if data is None:
-                        continue
-                    chunk, event_done = _normalize_aliyun_tts_sse(data)
-                    if chunk:
-                        _LOGGER.debug(
-                            _ALIYUN_STREAM_RESPONSE_LOG,
-                            binary_summary(chunk),
-                        )
-                        yield Pcm16leChunk(chunk)
-                    if event_done:
-                        done = True
-                        break
-            if (cancellation is None or not cancellation.cancelled) and not done:
-                raise ProviderResponseError(stage="tts", reason="missing_done")
-        except httpx.HTTPError as error:
-            if cancellation is not None and cancellation.cancelled:
-                return
-            raise _tts_provider_error(error) from error
-        finally:
-            release()
-            client.close()
-
-    def _download_audio(
-        self,
-        client: httpx.Client,
-        audio_url: str,
-        *,
-        cancellation: ProviderCancellationHandle | None,
-    ) -> Iterator[bytes]:
-        downloaded = 0
-        with client.stream("GET", audio_url) as response:
-            _ = response.raise_for_status()
-            for chunk in response.iter_bytes():
+                    _LOGGER.debug(
+                        _ALIYUN_COMPLETE_LOG,
+                        synthesizer.get_last_request_id(),
+                        synthesizer.get_first_package_delay(),
+                    )
+                    break
+                if isinstance(event, Exception):
+                    if cancellation is not None and cancellation.cancelled:
+                        return
+                    raise event
                 if cancellation is not None and cancellation.cancelled:
                     return
-                downloaded += len(chunk)
-                if downloaded > 32 * 1024 * 1024:
-                    raise ProviderResponseError(stage="tts", reason="audio_size")
-                yield chunk
+                _LOGGER.debug(_ALIYUN_PCM_RESPONSE_LOG, binary_summary(event))
+                yield Pcm16leChunk(event)
+        finally:
+            release()
+            _stop_aliyun_cosyvoice_task(synthesizer, callback, stopped, worker)
 
-    def _client(self) -> httpx.Client:
-        verify: bool | ssl.SSLContext = (
-            True
-            if self.ca_path is None
-            else ssl.create_default_context(cafile=self.ca_path)
+    def _open_realtime_synthesizer(
+        self,
+        *,
+        voice: str,
+        callback: _AliyunCosyVoiceRealtimeCallback,
+    ) -> _RealtimeSpeechSynthesizer:
+        api_key = self.api_key
+        if api_key is None or api_key.strip() == "":
+            raise MediaAdapterConfigError(field_name="api_key")
+        return _build_aliyun_cosyvoice_synthesizer(
+            endpoint=self.endpoint,
+            api_key=api_key.strip(),
+            model=self.model.strip(),
+            voice=voice,
+            callback=callback,
         )
-        return httpx.Client(
-            verify=verify,
-            timeout=self.timeout_seconds,
-            trust_env=False,
-        )
-
-    def _headers(self, *, streaming: bool) -> dict[str, str]:
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        if streaming:
-            headers["X-DashScope-SSE"] = "enable"
-        return headers
 
 
 @dataclass(frozen=True, slots=True)
@@ -800,7 +906,7 @@ class AudioCppTTSAdapter:
 
     timeout_seconds: float = 120.0
 
-    capability: Literal["final_only", "streaming_sse"] = "final_only"
+    capability: ProviderCapability = "final_only"
 
     def __post_init__(self) -> None:
         _require_endpoint_and_model(self.endpoint, self.model)
@@ -1022,136 +1128,105 @@ def _audio_data_url(path: Path) -> str:
     return f"data:audio/wav;base64,{encoded}"
 
 
-def _aliyun_optional_audio_url(payload: str) -> str | None:
-    try:
-        value = parse_json_value(payload)
-    except JsonBoundaryError as error:
-        raise ProviderResponseError(stage="tts", reason="event") from error
-    if not isinstance(value, dict):
-        raise ProviderResponseError(stage="tts", reason="event")
-    output = value.get("output")
-    if not isinstance(output, dict):
-        raise ProviderResponseError(stage="tts", reason="event")
-    audio = output.get("audio")
-    if not isinstance(audio, dict):
-        raise ProviderResponseError(stage="tts", reason="event")
-    audio_url = audio.get("url")
-    if audio_url is None:
-        return None
-    if not isinstance(audio_url, str):
-        raise ProviderResponseError(stage="tts", reason="audio_url")
-    parsed = urlsplit(audio_url)
-    hostname = parsed.hostname
-    if (
-        parsed.scheme not in {"http", "https"}
-        or hostname is None
-        or not hostname.endswith(".aliyuncs.com")
-    ):
-        raise ProviderResponseError(stage="tts", reason="audio_url")
-    return audio_url
+def _build_aliyun_cosyvoice_synthesizer(
+    *,
+    endpoint: str,
+    api_key: str,
+    model: str,
+    voice: str,
+    callback: _AliyunCosyVoiceRealtimeCallback,
+) -> _RealtimeSpeechSynthesizer:
+    """Open one Model Studio realtime task through the official DashScope SDK.
 
-
-def _raise_aliyun_for_status(response: httpx.Response) -> None:
-    try:
-        _ = response.raise_for_status()
-    except httpx.HTTPStatusError:
-        detail = _aliyun_error_detail(_read_bounded_response(response))
-        _LOGGER.exception(_ALIYUN_ERROR_LOG, response.status_code, detail)
-        raise
-
-
-def _read_bounded_response(response: httpx.Response) -> bytes:
-    result = bytearray()
-    for chunk in response.iter_bytes():
-        remaining = _MAX_ALIYUN_ERROR_BYTES - len(result)
-        if remaining <= 0:
-            break
-        result.extend(chunk[:remaining])
-        if len(chunk) > remaining:
-            break
-    return bytes(result)
-
-
-def _aliyun_error_detail(body: bytes) -> str:
-    text = body.decode("utf-8", errors="replace")
-    candidates = [
-        data
-        for line in text.splitlines()
-        if (data := _aliyun_sse_data(line)) is not None
-    ]
-    candidates.append(text)
-    for candidate in candidates:
-        try:
-            value = parse_json_value(candidate)
-        except JsonBoundaryError:
-            continue
-        if not isinstance(value, dict):
-            continue
-        code = value.get("code")
-        message = value.get("message")
-        if isinstance(code, str) or isinstance(message, str):
-            normalized_code = code if isinstance(code, str) else ""
-            normalized_message = message if isinstance(message, str) else ""
-            return _bounded_error_text(
-                f"code={normalized_code!r} message={normalized_message!r}"
-            )
-    return _bounded_error_text(f"body={' '.join(text.split())!r}")
-
-
-def _bounded_error_text(value: str) -> str:
-    return value[:_MAX_ALIYUN_ERROR_CHARS]
-
-
-def _aliyun_audio_url(payload: str) -> str:
-    audio_url = _aliyun_optional_audio_url(payload)
-    if audio_url is None:
-        raise ProviderResponseError(stage="tts", reason="missing_audio_url")
-    return audio_url
-
-
-def _aliyun_sse_data(line: str) -> str | None:
-    if not line.startswith("data:"):
-        return None
-    return line.removeprefix("data:").lstrip()
-
-
-def _normalize_aliyun_tts_sse(payload: str) -> tuple[bytes, bool]:
-    try:
-        value = parse_json_value(payload)
-    except JsonBoundaryError as error:
-        raise ProviderResponseError(stage="tts", reason="event") from error
-    if not isinstance(value, dict):
-        raise ProviderResponseError(stage="tts", reason="event")
-    output = value.get("output")
-    if not isinstance(output, dict):
-        raise ProviderResponseError(stage="tts", reason="event")
-    if output.get("finish_reason") == "stop":
-        return b"", True
-    if output.get("type") != "sentence-synthesis":
-        return b"", False
-    audio = output.get("audio")
-    if not isinstance(audio, dict):
-        raise ProviderResponseError(stage="tts", reason="event")
-    encoded = audio.get("data")
-    if not isinstance(encoded, str) or encoded == "":
-        raise ProviderResponseError(stage="tts", reason="event")
-    try:
-        chunk = base64.b64decode(encoded, validate=True)
-    except (ValueError, binascii.Error) as error:
-        raise ProviderResponseError(stage="tts", reason="event") from error
-    if len(chunk) % 2 != 0:
-        raise ProviderResponseError(stage="tts", reason="event")
-    return chunk, False
-
-
-def _log_aliyun_cosyvoice_tts_request(
-    speech: AliyunCosyVoiceSpeechRequest,
-) -> None:
-    _LOGGER.debug(
-        _ALIYUN_REQUEST_LOG,
-        speech.url,
-        speech.json,
+    The SDK reads its credential from the ``dashscope.api_key`` module global
+    when a task starts, so the deployment key has to be installed here.  It is
+    never logged, echoed into a request payload, or stored on the adapter.
+    """
+    dashscope.api_key = api_key
+    return _DashScopeRealtimeSynthesizer(
+        callback=callback,
+        model=model,
+        voice=voice,
+        audio_format=_ALIYUN_REALTIME_AUDIO_FORMAT,
+        endpoint=endpoint,
     )
+
+
+def _run_aliyun_cosyvoice_task(
+    synthesizer: _RealtimeSpeechSynthesizer,
+    text: str,
+    callback: _AliyunCosyVoiceRealtimeCallback,
+    stopped: Event,
+) -> None:
+    """Drive one realtime task while the SDK streams PCM through the callback.
+
+    This thread owns task start-up and completion only.  Its completion wait is
+    bounded so an abandoned task cannot hold a thread forever, and every exit
+    publishes exactly one terminal event to the consumer queue.
+    """
+    try:
+        if stopped.is_set():
+            return
+        synthesizer.streaming_call(text)
+        _ = synthesizer.streaming_complete(
+            complete_timeout_millis=_ALIYUN_COMPLETE_TIMEOUT_MILLIS
+        )
+    except Exception as error:  # noqa: BLE001 - relayed as a typed provider error
+        _LOGGER.debug(_ALIYUN_ERROR_LOG, "task", _aliyun_detail(error))
+        callback.finish(_aliyun_sdk_error(error))
+    finally:
+        callback.finish(None)
+
+
+def _stop_aliyun_cosyvoice_task(
+    synthesizer: _RealtimeSpeechSynthesizer,
+    callback: _AliyunCosyVoiceRealtimeCallback,
+    stopped: Event,
+    worker: Thread,
+) -> None:
+    """Release the realtime task the consumer stopped reading."""
+    stopped.set()
+    if not callback.settled:
+        try:
+            _ = synthesizer.streaming_cancel(
+                complete_timeout_millis=_ALIYUN_CANCEL_TIMEOUT_MILLIS
+            )
+        except Exception as error:  # noqa: BLE001 - keep the stream outcome
+            _LOGGER.debug(_ALIYUN_ERROR_LOG, "cancel", _aliyun_detail(error))
+        finally:
+            callback.finish(None)
+    synthesizer.close()
+    worker.join(timeout=_ALIYUN_WORKER_JOIN_SECONDS)
+    if worker.is_alive():
+        _LOGGER.debug(_ALIYUN_STALLED_LOG, _ALIYUN_SYNTHESIS_THREAD)
+
+
+def _aliyun_sdk_error(error: BaseException) -> ProviderResponseError:
+    if isinstance(error, TimeoutError):
+        return ProviderResponseError(stage="tts", reason="read")
+    if isinstance(error, ConnectionError):
+        return ProviderResponseError(stage="tts", reason="connect")
+    return ProviderResponseError(stage="tts", reason="response")
+
+
+def _aliyun_task_failure(message: str) -> ProviderResponseError:
+    _LOGGER.error(_ALIYUN_ERROR_LOG, "server", _aliyun_detail(message))
+    return ProviderResponseError(stage="tts", reason="server")
+
+
+def _aliyun_detail(value: object) -> str:
+    return " ".join(str(value).split())[:_ALIYUN_ERROR_CHARS]
+
+
+def _pcm16le_wav(pcm16le: bytes) -> bytes:
+    """Wrap realtime PCM in the WAV container of the buffered media path."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as audio:
+        audio.setnchannels(_ALIYUN_CHANNELS)
+        audio.setsampwidth(_ALIYUN_SAMPLE_BYTES)
+        audio.setframerate(_ALIYUN_SAMPLE_RATE)
+        audio.writeframes(pcm16le)
+    return buffer.getvalue()
 
 
 def _log_tts_request(speech: HttpSpeechRequest) -> None:

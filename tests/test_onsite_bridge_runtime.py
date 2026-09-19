@@ -136,7 +136,7 @@ class _StreamingTts:
     release_second_chunk: threading.Event = field(default_factory=threading.Event)
     third_chunk_requested: threading.Event = field(default_factory=threading.Event)
 
-    capability: str = "streaming_sse"
+    capability: str = "streaming"
 
     def stream_pcm16le(
         self,
@@ -165,13 +165,13 @@ class _StreamingTts:
         cancellation: ProviderCancellationHandle | None = None,
     ) -> SynthesizedAudio:
         _ = (text, voice, ref_audio, ref_text, cancellation)
-        message = "streaming_sse must not fall back to full-clip synthesis"
+        message = "streaming must not fall back to full-clip synthesis"
         raise AssertionError(message)
 
 
 @dataclass(frozen=True, slots=True)
 class _ShortStreamingTts:
-    capability: str = "streaming_sse"
+    capability: str = "streaming"
 
     def stream_pcm16le(
         self,
@@ -202,7 +202,7 @@ class _ShortStreamingTts:
 class _BreakingStreamingTts:
     """Long enough to commit the first frame, then the provider dies."""
 
-    capability: str = "streaming_sse"
+    capability: str = "streaming"
 
     def stream_pcm16le(
         self,
@@ -228,7 +228,7 @@ class _BreakingStreamingTts:
         cancellation: ProviderCancellationHandle | None = None,
     ) -> SynthesizedAudio:
         _ = (text, voice, ref_audio, ref_text, cancellation)
-        message = "streaming_sse must not fall back to full-clip synthesis"
+        message = "streaming must not fall back to full-clip synthesis"
         raise AssertionError(message)
 
 
@@ -237,7 +237,7 @@ class _CancellableStreamingTts:
     next_started: threading.Event = field(default_factory=threading.Event)
     release_next: threading.Event = field(default_factory=threading.Event)
 
-    capability: str = "streaming_sse"
+    capability: str = "streaming"
 
     def stream_pcm16le(
         self,
@@ -281,7 +281,7 @@ class _SlowCancellationStreamingTts:
     release_next: threading.Event = field(default_factory=threading.Event)
     closed: threading.Event = field(default_factory=threading.Event)
 
-    capability: str = "streaming_sse"
+    capability: str = "streaming"
 
     def stream_pcm16le(
         self,

@@ -10,6 +10,7 @@ dependencies = [
     "llama-index-core>=0.14.23,<0.15",
     "openai>=2,<3",
     "websockets==16.1.1",
+    "dashscope>=1.25.2",
 ]
 
 [project.scripts]
@@ -39,7 +40,13 @@ addopts = [
     "--strict-config",
     "--strict-markers",
 ]
-filterwarnings = ["error"]
+# The official dashscope SDK warns about its deprecated Assistants API while the
+# package initializes.  Realtime speech synthesis is the only surface used here,
+# and the third-party deprecation is not actionable from this repository.
+filterwarnings = [
+    "error",
+    "ignore:^The Assistants API.*deprecated:DeprecationWarning:dashscope",
+]
 markers = [
     "asyncio: tests requiring the shared Sound asyncio fixture",
     "real_adapter: opt-in smoke tests for live or fake-local real adapter boundaries",

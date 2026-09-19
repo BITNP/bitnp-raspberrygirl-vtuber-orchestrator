@@ -221,3 +221,10 @@ v3.5 改用另一个端点、请求头或字段层级的变更。[1]
 5. [上传本地文件获取临时 URL](https://docs.bailian.console.aliyun.com/zh/model-studio/get-temporary-file-url)
 6. [CosyVoice 系统音色列表](https://docs.bailian.console.aliyun.com/zh/model-studio/cosyvoice-voice-list)
 7. [声音复刻用户指南（当前入口）](https://docs.bailian.console.aliyun.com/zh/model-studio/cosyvoice-clone-design-api)
+
+## 后续状态（2026-09-19）
+
+`aliyun_cosyvoice` provider 已改用官方实时语音合成（WebSocket + DashScope SDK），
+不再使用本文描述的 HTTP `SpeechSynthesizer` + `X-DashScope-SSE` 协议。本文保留为当时的
+协议调研记录；音色与模型必须成对匹配等结论仍然有效。新的接入方式、端点要求与取消语义见
+[aliyun-cosyvoice-realtime-tts.md](aliyun-cosyvoice-realtime-tts.md)。

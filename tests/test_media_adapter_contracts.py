@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import ssl
+import wave
+from queue import Queue
+from threading import Event
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Self, final
 
-import httpx
+import dashscope
 import pytest
 
 from orchestrator import media_adapters
@@ -18,8 +22,14 @@ from orchestrator.llm import (
     OpenAICompatibleASRAdapter,
     VllmOmniTTSAdapter,
 )
+from orchestrator.media_adapters import MediaAdapterConfigError
 from orchestrator.pipeline_contracts import ASRAudienceEvent
-from orchestrator.provider_streaming import ProviderResponseError
+from orchestrator.provider_streaming import (
+    ProviderCancellationHandle,
+    ProviderCapability,
+    ProviderResponseError,
+)
+from orchestrator.tts_rtp import Pcm16leChunk
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -31,6 +41,116 @@ def ca_path(tmp_path: Path) -> Path:
     path = tmp_path / "ca.pem"
     _ = path.write_text(ssl.DER_cert_to_PEM_cert(certificate), encoding="ascii")
     return path
+
+
+_FAKE_REALTIME_WAIT_SECONDS = 5.0
+
+
+@final
+class _FakeRealtimeSynthesizer:
+    """Scripted stand-in for the DashScope realtime ``SpeechSynthesizer``.
+
+    The class attributes hold the script so a test can reshape the fake before
+    the adapter's generator opens it; instances record what the adapter did.
+    """
+
+    pcm: tuple[bytes, ...] = ()
+
+    failure: str | None = None
+
+    completes: bool = True
+
+    def __init__(
+        self,
+        callback: media_adapters._AliyunCosyVoiceRealtimeCallback,  # pyright: ignore[reportPrivateUsage]
+    ) -> None:
+        self.callback = callback
+
+        self.submitted: list[str] = []
+
+        self.completion_timeouts: list[int] = []
+
+        self.cancellation_timeouts: list[int] = []
+
+        self.running = Event()
+
+        self.closed = Event()
+
+    def streaming_call(self, text: str) -> None:
+        self.submitted.append(text)
+        for chunk in self.pcm:
+            self.callback.on_data(chunk)
+        if self.failure is not None:
+            self.callback.on_error(self.failure)
+        elif self.completes:
+            self.callback.on_complete()
+
+    def streaming_complete(self, complete_timeout_millis: int) -> None:
+        self.completion_timeouts.append(complete_timeout_millis)
+        if not self.completes:
+            _ = self.running.wait(timeout=_FAKE_REALTIME_WAIT_SECONDS)
+
+    def streaming_cancel(self, complete_timeout_millis: int) -> None:
+        self.cancellation_timeouts.append(complete_timeout_millis)
+        self.running.set()
+
+    def close(self) -> None:
+        self.closed.set()
+        self.running.set()
+
+    def get_last_request_id(self) -> str:
+        return "request-test"
+
+    def get_first_package_delay(self) -> float:
+        return 12.5
+
+
+def _install_realtime_synthesizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[dict[str, str]], list[_FakeRealtimeSynthesizer]]:
+    """Replace the DashScope realtime factory with a scripted fake."""
+    opened: list[dict[str, str]] = []
+
+    synthesizers: list[_FakeRealtimeSynthesizer] = []
+
+    def build(
+        *,
+        endpoint: str,
+        api_key: str,
+        model: str,
+        voice: str,
+        callback: media_adapters._AliyunCosyVoiceRealtimeCallback,  # pyright: ignore[reportPrivateUsage]
+    ) -> _FakeRealtimeSynthesizer:
+        synthesizer = _FakeRealtimeSynthesizer(callback)
+        opened.append(
+            {
+                "endpoint": endpoint,
+                "api_key": api_key,
+                "model": model,
+                "voice": voice,
+            }
+        )
+        synthesizers.append(synthesizer)
+        return synthesizer
+
+    monkeypatch.setattr(media_adapters, "_build_aliyun_cosyvoice_synthesizer", build)
+    return opened, synthesizers
+
+
+_REALTIME_ENDPOINT = (
+    "wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
+)
+
+
+def _realtime_adapter(
+    *, capability: ProviderCapability = "streaming"
+) -> AliyunCosyVoiceTTSAdapter:
+    return AliyunCosyVoiceTTSAdapter(
+        endpoint=_REALTIME_ENDPOINT,
+        model="cosyvoice-v3-flash",
+        api_key="test-api-key",
+        capability=capability,
+    )
 
 
 def test_default_mock_media_providers_need_no_credentials_or_network() -> None:
@@ -157,163 +277,122 @@ def test_vllm_omni_builds_opt_in_fake_local_speech_request() -> None:
     }
 
 
-def test_aliyun_cosyvoice_builds_native_speechsynthesizer_request() -> None:
-    adapter = AliyunCosyVoiceTTSAdapter(
-        endpoint=(
-            "https://workspace.cn-beijing.maas.aliyuncs.com"
-            "/api/v1/services/audio/tts/SpeechSynthesizer"
-        ),
-        model="cosyvoice-v3.5-flash",
-        api_key="test-api-key",
-    )
+def test_aliyun_cosyvoice_requires_realtime_websocket_endpoint() -> None:
+    # Given: the non-realtime HTTP SpeechSynthesizer resource of the old client.
 
-    request = adapter.build_speech_request(
-        text="你好。我是树莓娘。",
-        voice="cosyvoice-clone-id",
-        ref_audio="data:audio/wav;base64,ignored",
-        ref_text="已通过声音复刻 API 创建音色。",
-    )
+    # When / Then: it is rejected before any realtime task can be opened.
 
-    assert request.url.endswith("/api/v1/services/audio/tts/SpeechSynthesizer")
-    assert request.json == {
-        "model": "cosyvoice-v3.5-flash",
-        "input": {
-            "text": "你好。我是树莓娘。",
-            "voice": "cosyvoice-clone-id",
-            "format": "wav",
-            "sample_rate": 16_000,
-        },
-    }
+    with pytest.raises(MediaAdapterConfigError, match="endpoint"):
+        _ = AliyunCosyVoiceTTSAdapter(
+            endpoint=(
+                "https://workspace.cn-beijing.maas.aliyuncs.com"
+                "/api/v1/services/audio/tts/SpeechSynthesizer"
+            ),
+            model="cosyvoice-v3-flash",
+            api_key="test-api-key",
+        )
+
+    # Then: the realtime WebSocket inference endpoint is accepted.
+
+    assert _realtime_adapter().capability == "streaming"
 
 
-def test_aliyun_cosyvoice_streams_native_sse_pcm_without_openai_path(
+def test_aliyun_cosyvoice_requires_an_api_key() -> None:
+    with pytest.raises(MediaAdapterConfigError, match="api_key"):
+        _ = AliyunCosyVoiceTTSAdapter(
+            endpoint=_REALTIME_ENDPOINT,
+            model="cosyvoice-v3-flash",
+        )
+
+
+def test_aliyun_cosyvoice_builds_official_dashscope_realtime_synthesizer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    endpoint = (
-        "https://workspace.cn-beijing.maas.aliyuncs.com"
-        "/api/v1/services/audio/tts/SpeechSynthesizer"
+    # Given: the deployment credential the official SDK reads from its globals.
+
+    monkeypatch.setattr(dashscope, "api_key", None)
+    events: Queue[bytes | Exception | None] = Queue()
+    callback = media_adapters._AliyunCosyVoiceRealtimeCallback(  # pyright: ignore[reportPrivateUsage]
+        events
     )
-    adapter = AliyunCosyVoiceTTSAdapter(
-        endpoint=endpoint,
-        model="cosyvoice-v3.5-flash",
+
+    # When: the adapter opens a CosyVoice realtime task.
+
+    synthesizer = media_adapters._build_aliyun_cosyvoice_synthesizer(  # pyright: ignore[reportPrivateUsage]
+        endpoint=_REALTIME_ENDPOINT,
         api_key="test-api-key",
-        capability="streaming_sse",
+        model="cosyvoice-v3-flash",
+        voice="longanyang",
+        callback=callback,
     )
-    calls: list[dict[str, object]] = []
+
+    # Then: it drives the official SpeechSynthesizer with 16 kHz PCM output.
+
+    assert dashscope.api_key == "test-api-key"
+    assert isinstance(
+        synthesizer,
+        media_adapters._DashScopeRealtimeSynthesizer,  # pyright: ignore[reportPrivateUsage]
+    )
+    assert synthesizer.aformat == "pcm"
+    assert synthesizer.sample_rate == 16_000
+
+
+def test_aliyun_cosyvoice_streams_realtime_pcm_through_dashscope_sdk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pcm = b"\x10\x20" * 320
-
-    @final
-    class Response:
-        def __enter__(self) -> Self:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def raise_for_status(self) -> None:
-            return
-
-        def iter_lines(self) -> list[str]:
-            return [
-                'data:{"output":{"type":"sentence-begin"}}',
-                "data:"
-                + json.dumps(
-                    {
-                        "output": {
-                            "type": "sentence-synthesis",
-                            "audio": {"data": base64.b64encode(pcm).decode()},
-                        }
-                    }
-                ),
-                'data:{"output":{"finish_reason":"stop"}}',
-            ]
-
-    @final
-    class Client:
-        def stream(self, method: str, url: str, **kwargs: object) -> Response:
-            calls.append({"method": method, "url": url, **kwargs})
-            return Response()
-
-        def close(self) -> None:
-            return
-
-    def build_client(_adapter: AliyunCosyVoiceTTSAdapter) -> Client:
-        return Client()
-
-    monkeypatch.setattr(AliyunCosyVoiceTTSAdapter, "_client", build_client)
+    monkeypatch.setattr(_FakeRealtimeSynthesizer, "pcm", (pcm[:320], pcm[320:]))
+    opened, synthesizers = _install_realtime_synthesizer(monkeypatch)
+    adapter = _realtime_adapter()
 
     chunks = tuple(
         adapter.stream_pcm16le(
             text="你好。我是树莓娘。",
-            voice="cosyvoice-clone-id",
+            voice="longanyang",
             ref_audio="data:audio/wav;base64,not-sent",
             ref_text="不随合成请求发送",
         )
     )
 
-    assert [chunk.data for chunk in chunks] == [pcm]
-    assert calls == [
+    assert [chunk.data for chunk in chunks] == [pcm[:320], pcm[320:]]
+    assert [chunk.sample_rate for chunk in chunks] == [16_000, 16_000]
+    assert opened == [
         {
-            "method": "POST",
-            "url": endpoint,
-            "json": {
-                "model": "cosyvoice-v3.5-flash",
-                "input": {
-                    "text": "你好。我是树莓娘。",
-                    "voice": "cosyvoice-clone-id",
-                    "format": "pcm",
-                    "sample_rate": 16_000,
-                },
-            },
-            "headers": {
-                "Authorization": "Bearer test-api-key",
-                "Content-Type": "application/json",
-                "X-DashScope-SSE": "enable",
-            },
+            "endpoint": _REALTIME_ENDPOINT,
+            "api_key": "test-api-key",
+            "model": "cosyvoice-v3-flash",
+            "voice": "longanyang",
         }
     ]
+    assert synthesizers[0].submitted == ["你好。我是树莓娘。"]
+    assert synthesizers[0].completion_timeouts == [60_000]
+    assert synthesizers[0].closed.is_set()
 
 
-def test_aliyun_cosyvoice_logs_bounded_sse_error_detail(
+def test_aliyun_cosyvoice_reports_realtime_task_failure(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    error_body = (
-        "id:1\n"
-        "event:result\n"
-        ":HTTP_STATUS/400\n"
-        'data:{"request_id":"request-test","code":"InvalidParameter",'
-        '"message":"[cosyvoice:]Engine return error code: 418"}\n\n'
+    failure_message = json.dumps(
+        {
+            "header": {
+                "event": "task-failed",
+                "error_code": "InvalidParameter",
+                "error_message": "[cosyvoice:]Engine return error code: 418",
+            }
+        }
     )
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert b"ref_audio" not in request.content
-        assert b"ref_text" not in request.content
-        return httpx.Response(
-            400,
-            headers={"Content-Type": "text/event-stream; charset=utf-8"},
-            text=error_body,
-        )
-
-    def build_client(_adapter: AliyunCosyVoiceTTSAdapter) -> httpx.Client:
-        return httpx.Client(transport=httpx.MockTransport(handler))
-
-    monkeypatch.setattr(AliyunCosyVoiceTTSAdapter, "_client", build_client)
-    adapter = AliyunCosyVoiceTTSAdapter(
-        endpoint="https://workspace.example.test/SpeechSynthesizer",
-        model="cosyvoice-v3.5-flash",
-        api_key="test-api-key",
-        capability="streaming_sse",
-    )
+    monkeypatch.setattr(_FakeRealtimeSynthesizer, "failure", failure_message)
+    _opened, synthesizers = _install_realtime_synthesizer(monkeypatch)
 
     with (
         caplog.at_level(logging.ERROR, logger="orchestrator.media_adapters"),
-        pytest.raises(ProviderResponseError, match="status_400"),
+        pytest.raises(ProviderResponseError, match="server"),
     ):
         _ = tuple(
-            adapter.stream_pcm16le(
+            _realtime_adapter().stream_pcm16le(
                 text="测试。",
-                voice="longanhuan_v3",
+                voice="cosyvoice-v3-flash-raspberry-clone",
                 ref_audio="should-not-be-sent",
                 ref_text="should-not-be-sent",
             )
@@ -322,82 +401,64 @@ def test_aliyun_cosyvoice_logs_bounded_sse_error_detail(
     assert "InvalidParameter" in caplog.text
     assert "Engine return error code: 418" in caplog.text
     assert "test-api-key" not in caplog.text
+    assert synthesizers[0].closed.is_set()
 
 
-def test_aliyun_cosyvoice_final_only_downloads_wav_without_forwarding_api_key(
+def test_aliyun_cosyvoice_cancels_realtime_task_when_the_stream_is_abandoned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    endpoint = (
-        "https://workspace.cn-beijing.maas.aliyuncs.com"
-        "/api/v1/services/audio/tts/SpeechSynthesizer"
+    # Given: a realtime task that is still producing audio when input supersedes it.
+
+    pcm = b"\x10\x20" * 320
+    monkeypatch.setattr(_FakeRealtimeSynthesizer, "pcm", (pcm,))
+    monkeypatch.setattr(_FakeRealtimeSynthesizer, "completes", False)
+    _opened, synthesizers = _install_realtime_synthesizer(monkeypatch)
+    cancellation = ProviderCancellationHandle()
+    stream = _realtime_adapter().stream_pcm16le(
+        text="你好。",
+        voice="longanyang",
+        ref_audio="",
+        ref_text="",
+        cancellation=cancellation,
     )
-    audio_url = (
-        "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com"
-        "/pre/result.wav?signature=test"
-    )
-    adapter = AliyunCosyVoiceTTSAdapter(
-        endpoint=endpoint,
-        model="cosyvoice-v3.5-flash",
-        api_key="test-api-key",
-    )
-    calls: list[dict[str, object]] = []
 
-    @final
-    class SynthesisResponse:
-        text = json.dumps(
-            {
-                "output": {
-                    "finish_reason": "stop",
-                    "audio": {"url": audio_url},
-                }
-            }
-        )
+    # When: the first chunk is delivered and the turn is cancelled.
 
-        def raise_for_status(self) -> None:
-            return
+    assert next(stream) == Pcm16leChunk(pcm)
+    _ = cancellation.cancel(reason="superseded")
 
-    @final
-    class AudioResponse:
-        def __enter__(self) -> Self:
-            return self
+    # Then: the adapter stops the realtime task and releases its socket.
 
-        def __exit__(self, *_args: object) -> None:
-            return None
+    with pytest.raises(StopIteration):
+        _ = next(stream)
 
-        def raise_for_status(self) -> None:
-            return
+    assert synthesizers[0].cancellation_timeouts == [2_000]
+    assert synthesizers[0].closed.is_set()
 
-        def iter_bytes(self) -> list[bytes]:
-            return [b"RIFF", b"downloaded-wav"]
 
-    @final
-    class Client:
-        def post(self, url: str, **kwargs: object) -> SynthesisResponse:
-            calls.append({"method": "POST", "url": url, **kwargs})
-            return SynthesisResponse()
+def test_aliyun_cosyvoice_buffers_realtime_pcm_into_wav_for_final_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pcm = b"\x01\x02" * 160
+    monkeypatch.setattr(_FakeRealtimeSynthesizer, "pcm", (pcm,))
+    _opened, synthesizers = _install_realtime_synthesizer(monkeypatch)
 
-        def stream(self, method: str, url: str, **kwargs: object) -> AudioResponse:
-            calls.append({"method": method, "url": url, **kwargs})
-            return AudioResponse()
-
-        def close(self) -> None:
-            return
-
-    def build_client(_adapter: AliyunCosyVoiceTTSAdapter) -> Client:
-        return Client()
-
-    monkeypatch.setattr(AliyunCosyVoiceTTSAdapter, "_client", build_client)
-
-    result = adapter.synthesize(
+    result = _realtime_adapter(capability="final_only").synthesize(
         text="你好",
-        voice="cosyvoice-clone-id",
+        voice="longanyang",
         ref_audio="",
         ref_text="",
     )
 
-    assert result.data == b"RIFFdownloaded-wav"
-    assert calls[0]["url"] == endpoint
-    assert calls[1] == {"method": "GET", "url": audio_url}
+    assert result.media_type == "audio/wav"
+    with wave.open(io.BytesIO(result.data), "rb") as audio:
+        assert (
+            audio.getnchannels(),
+            audio.getsampwidth(),
+            audio.getframerate(),
+        ) == (1, 2, 16_000)
+        assert audio.readframes(audio.getnframes()) == pcm
+    assert synthesizers[0].completion_timeouts == [60_000]
 
 
 def test_audio_cpp_builds_non_streaming_request_using_model_default_voice() -> None:
@@ -498,7 +559,7 @@ def test_audio_cpp_streaming_uses_sse_shape_and_resamples_pcm(
     adapter = AudioCppTTSAdapter(
         endpoint="http://127.0.0.1:8080/v1",
         model="voxcpm2-stream",
-        capability="streaming_sse",
+        capability="streaming",
     )
     calls: list[dict[str, object]] = []
     encoded = base64.b64encode(b"\x10\x20" * 480).decode()
@@ -679,7 +740,7 @@ def test_tts_sse_uses_unbuffered_openai_streaming_response(
     adapter = VllmOmniTTSAdapter(
         endpoint="http://127.0.0.1:8001/v1",
         model="vllm-omni",
-        capability="streaming_sse",
+        capability="streaming",
     )
     calls: list[dict[str, object]] = []
     pcm_24khz = base64.b64encode(b"\x10\x20" * 480).decode()

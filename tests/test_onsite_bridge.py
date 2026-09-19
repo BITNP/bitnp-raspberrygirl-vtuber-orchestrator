@@ -221,10 +221,7 @@ def test_build_onsite_bridge_supports_audio_cpp_model_default_voice() -> None:
 
 
 def test_build_onsite_bridge_supports_aliyun_cosyvoice_voice_id() -> None:
-    endpoint = (
-        "https://workspace.cn-beijing.maas.aliyuncs.com"
-        "/api/v1/services/audio/tts/SpeechSynthesizer"
-    )
+    endpoint = "wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
     config = load_config_from_env(
         {
             "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
@@ -234,8 +231,9 @@ def test_build_onsite_bridge_supports_aliyun_cosyvoice_voice_id() -> None:
             "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
             "ORCHESTRATOR_TTS_PROVIDER": "aliyun_cosyvoice",
             "ORCHESTRATOR_TTS_ENDPOINT": endpoint,
-            "ORCHESTRATOR_TTS_MODEL": "cosyvoice-v3.5-flash",
+            "ORCHESTRATOR_TTS_MODEL": "cosyvoice-v3-flash",
             "ORCHESTRATOR_TTS_API_KEY": "aliyun-test-key",
+            "ORCHESTRATOR_TTS_MODE": "streaming",
         }
     )
 
@@ -248,4 +246,5 @@ def test_build_onsite_bridge_supports_aliyun_cosyvoice_voice_id() -> None:
 
     assert isinstance(bridge.tts, AliyunCosyVoiceTTSAdapter)
     assert bridge.tts.endpoint == endpoint
+    assert bridge.tts.capability == "streaming"
     assert bridge.voice == "cosyvoice-clone-id"
