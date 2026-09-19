@@ -15,6 +15,7 @@ from orchestrator.media_adapters import (
     AliyunCosyVoiceTTSAdapter,
     AudioCppTTSAdapter,
     MediaAdapterConfigError,
+    Qwen3TtsCppTTSAdapter,
     VllmOmniTTSAdapter,
 )
 from orchestrator.onsite_bridge_contracts import (
@@ -519,6 +520,7 @@ def build_onsite_bridge(
 ) -> OnsiteExplainerBridge:
     if config.tts_provider not in {
         "vllm_omni",
+        "qwen3ttscpp",
         "audio_cpp",
         "aliyun_cosyvoice",
     }:
@@ -540,6 +542,9 @@ def build_onsite_bridge(
         ref_audio.strip() == "" or ref_text.strip() == ""
     ):
         raise OnsiteBridgeConfigError(field_name="voice_reference")
+
+    if config.tts_provider == "qwen3ttscpp" and voice.strip() == "":
+        raise OnsiteBridgeConfigError(field_name="qwen3ttscpp_voice")
 
     if config.tts_provider == "aliyun_cosyvoice" and (
         config.tts_api_key is None or voice.strip() == ""
@@ -563,6 +568,7 @@ def build_onsite_bridge(
         tts={
             "audio_cpp": AudioCppTTSAdapter,
             "aliyun_cosyvoice": AliyunCosyVoiceTTSAdapter,
+            "qwen3ttscpp": Qwen3TtsCppTTSAdapter,
             "vllm_omni": VllmOmniTTSAdapter,
         }[config.tts_provider](
             config.tts_endpoint,

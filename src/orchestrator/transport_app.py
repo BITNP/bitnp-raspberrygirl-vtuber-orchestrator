@@ -155,6 +155,7 @@ async def run_transport() -> None:
 def _onsite_bridge_enabled(config: OrchestratorConfig) -> bool:
     return config.llm_provider == "openai_compatible" and config.tts_provider in {
         "vllm_omni",
+        "qwen3ttscpp",
         "audio_cpp",
         "aliyun_cosyvoice",
     }

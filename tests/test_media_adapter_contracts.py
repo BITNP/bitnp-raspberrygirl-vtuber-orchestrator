@@ -20,9 +20,10 @@ from orchestrator.llm import (
     AliyunCosyVoiceTTSAdapter,
     AudioCppTTSAdapter,
     OpenAICompatibleASRAdapter,
+    Qwen3TtsCppTTSAdapter,
     VllmOmniTTSAdapter,
 )
-from orchestrator.media_adapters import MediaAdapterConfigError
+from orchestrator.media_adapters import MediaAdapterConfigError, SynthesizedAudio
 from orchestrator.pipeline_contracts import ASRAudienceEvent
 from orchestrator.provider_streaming import (
     ProviderCancellationHandle,
@@ -32,6 +33,7 @@ from orchestrator.provider_streaming import (
 from orchestrator.tts_rtp import Pcm16leChunk
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
 
@@ -800,6 +802,229 @@ def test_tts_sse_uses_unbuffered_openai_streaming_response(
     assert len(chunks) == 1
     assert len(chunks[0].data) == 640
     assert calls[0]["stream_format"] == "sse"
+
+
+def test_qwen3ttscpp_builds_registered_voice_requests_for_both_transfers() -> None:
+    # Given: the qwentts.cpp engine, whose speaker registry owns voice choice.
+
+    adapter = Qwen3TtsCppTTSAdapter(
+        endpoint="http://127.0.0.1:9766/v1",
+        model="local-qwen3-tts",
+    )
+
+    # When: Orchestrator builds the buffered and chunked requests.
+
+    buffered = adapter.build_speech_request(
+        text="欢迎来到 BitNet 讲解。",
+        voice="paimeng",
+        ref_audio="file:///unused-clone-reference.wav",
+        ref_text="未使用的克隆参考文本",
+    )
+    streaming = adapter.build_speech_request(
+        text="欢迎来到 BitNet 讲解。",
+        voice="paimeng",
+        ref_audio="",
+        ref_text="",
+        streaming=True,
+    )
+
+    # Then: the speaker id is sent directly and no clone fields reach the engine.
+
+    assert buffered.url == "http://127.0.0.1:9766/v1/audio/speech"
+    assert buffered.json == {
+        "model": "local-qwen3-tts",
+        "input": "欢迎来到 BitNet 讲解。",
+        "response_format": "wav",
+        "voice": "paimeng",
+    }
+    assert streaming.json == {
+        "model": "local-qwen3-tts",
+        "input": "欢迎来到 BitNet 讲解。",
+        "response_format": "pcm",
+        "voice": "paimeng",
+    }
+
+
+def test_qwen3ttscpp_buffered_synthesis_returns_provider_wav(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: an engine that answers ``response_format: "wav"`` with one clip.
+
+    adapter = Qwen3TtsCppTTSAdapter(
+        endpoint="http://127.0.0.1:9766/v1",
+        model="local-qwen3-tts",
+    )
+    calls: list[dict[str, object]] = []
+
+    class Response:
+        content: bytes = b"RIFFqwen3ttscpp"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class Client:
+        def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, object],
+            headers: dict[str, str],
+        ) -> Response:
+            calls.append({"url": url, "json": json, "headers": headers})
+            return Response()
+
+        def close(self) -> None:
+            return None
+
+    def build_client(_adapter: Qwen3TtsCppTTSAdapter) -> Client:
+        return Client()
+
+    monkeypatch.setattr(Qwen3TtsCppTTSAdapter, "_client", build_client)
+
+    # When: the buffered synthesis path runs.
+
+    audio = adapter.synthesize(
+        text="欢迎来到 BitNet 讲解。",
+        voice="paimeng",
+        ref_audio="",
+        ref_text="",
+    )
+
+    # Then: the engine clip is returned and the request used the WAV transfer.
+
+    assert audio == SynthesizedAudio(data=b"RIFFqwen3ttscpp", media_type="audio/wav")
+    assert calls[0]["url"] == "http://127.0.0.1:9766/v1/audio/speech"
+    assert calls[0]["json"] == {
+        "model": "local-qwen3-tts",
+        "input": "欢迎来到 BitNet 讲解。",
+        "response_format": "wav",
+        "voice": "paimeng",
+    }
+    assert calls[0]["headers"] == {
+        "Accept": "audio/wav",
+    }
+
+
+def test_qwen3ttscpp_streams_raw_chunked_pcm_across_split_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a chunked PCM body whose chunks split a little-endian sample.
+
+    adapter = Qwen3TtsCppTTSAdapter(
+        endpoint="http://127.0.0.1:9766/v1",
+        model="local-qwen3-tts",
+        capability="streaming",
+    )
+    pcm_24khz = b"\x10\x20" * 480
+    delivered = [pcm_24khz[:3], pcm_24khz[3:5], pcm_24khz[5:]]
+
+    class Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_bytes(self) -> Iterator[bytes]:
+            return iter(delivered)
+
+    class Client:
+        def stream(
+            self,
+            method: str,
+            url: str,
+            *,
+            json: dict[str, object],
+            headers: dict[str, str],
+        ) -> Response:
+            _ = (method, url, json, headers)
+            return Response()
+
+        def close(self) -> None:
+            return None
+
+    def build_client(_adapter: Qwen3TtsCppTTSAdapter) -> Client:
+        return Client()
+
+    monkeypatch.setattr(Qwen3TtsCppTTSAdapter, "_client", build_client)
+
+    # When: the dialect consumes the unframed body.
+
+    chunks = tuple(
+        adapter.stream_pcm16le(
+            text="欢迎来到 BitNet 讲解。",
+            voice="paimeng",
+            ref_audio="",
+            ref_text="",
+        )
+    )
+
+    # Then: every whole sample is resampled 24 kHz to 16 kHz without a terminator.
+
+    assert sum(len(chunk.data) for chunk in chunks) == 640
+    assert all(chunk.sample_rate == 16_000 for chunk in chunks)
+
+
+def test_qwen3ttscpp_rejects_body_that_ends_mid_sample(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: a chunked body that stops in the middle of one sample.
+
+    adapter = Qwen3TtsCppTTSAdapter(
+        endpoint="http://127.0.0.1:9766/v1",
+        model="local-qwen3-tts",
+        capability="streaming",
+    )
+
+    class Response:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_bytes(self) -> Iterator[bytes]:
+            return iter([b"\x01\x02", b"\x03"])
+
+    class Client:
+        def stream(
+            self,
+            method: str,
+            url: str,
+            *,
+            json: dict[str, object],
+            headers: dict[str, str],
+        ) -> Response:
+            _ = (method, url, json, headers)
+            return Response()
+
+        def close(self) -> None:
+            return None
+
+    def build_client(_adapter: Qwen3TtsCppTTSAdapter) -> Client:
+        return Client()
+
+    monkeypatch.setattr(Qwen3TtsCppTTSAdapter, "_client", build_client)
+
+    # When / Then: the truncated sample fails closed instead of reaching RTP.
+
+    with pytest.raises(ProviderResponseError) as error:
+        _ = tuple(
+            adapter.stream_pcm16le(
+                text="欢迎来到 BitNet 讲解。",
+                voice="paimeng",
+                ref_audio="",
+                ref_text="",
+            )
+        )
+
+    assert error.value.reason == "incomplete_pcm"
 
 
 def test_media_adapters_retain_configured_ca_path_for_provider_requests(

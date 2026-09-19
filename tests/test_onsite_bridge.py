@@ -7,6 +7,7 @@ from orchestrator.config import load_config_from_env
 from orchestrator.llm import (
     AliyunCosyVoiceTTSAdapter,
     AudioCppTTSAdapter,
+    Qwen3TtsCppTTSAdapter,
     VllmOmniTTSAdapter,
 )
 from orchestrator.onsite_bridge import OnsiteBridgeConfigError, build_onsite_bridge
@@ -218,6 +219,58 @@ def test_build_onsite_bridge_supports_audio_cpp_model_default_voice() -> None:
     assert isinstance(bridge.tts, AudioCppTTSAdapter)
     assert bridge.tts.endpoint == "http://127.0.0.1:8080/v1"
     assert bridge.tts.capability == "final_only"
+
+
+def test_build_onsite_bridge_supports_qwen3ttscpp_registered_voice() -> None:
+    # Given: the qwentts.cpp engine, which selects one registered speaker id.
+    config = load_config_from_env(
+        {
+            "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
+            "ORCHESTRATOR_LLM_ENDPOINT": "https://llm.example.test/v1",
+            "ORCHESTRATOR_LLM_MODEL": "onsite-model",
+            "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
+            "ORCHESTRATOR_TTS_PROVIDER": "qwen3ttscpp",
+            "ORCHESTRATOR_TTS_ENDPOINT": "http://127.0.0.1:9766/v1",
+            "ORCHESTRATOR_TTS_MODEL": "local-qwen3-tts",
+            "ORCHESTRATOR_TTS_MODE": "streaming",
+        }
+    )
+
+    # When: the bridge is composed without any cloning reference pair.
+    bridge = build_onsite_bridge(
+        config,
+        voice="paimeng",
+        ref_audio="",
+        ref_text="",
+    )
+
+    # Then: the engine dialect owns speaker selection and streams raw PCM.
+    assert isinstance(bridge.tts, Qwen3TtsCppTTSAdapter)
+    assert bridge.tts.endpoint == "http://127.0.0.1:9766/v1"
+    assert bridge.tts.capability == "streaming"
+
+
+def test_build_onsite_bridge_requires_qwen3ttscpp_registered_voice() -> None:
+    # Given: a qwentts.cpp deployment without the speaker id it selects by.
+    config = load_config_from_env(
+        {
+            "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
+            "ORCHESTRATOR_LLM_ENDPOINT": "https://llm.example.test/v1",
+            "ORCHESTRATOR_LLM_MODEL": "onsite-model",
+            "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
+            "ORCHESTRATOR_TTS_PROVIDER": "qwen3ttscpp",
+            "ORCHESTRATOR_TTS_ENDPOINT": "http://127.0.0.1:9766/v1",
+            "ORCHESTRATOR_TTS_MODEL": "local-qwen3-tts",
+        }
+    )
+
+    # When / Then: onsite composition fails closed instead of guessing a speaker.
+    with pytest.raises(OnsiteBridgeConfigError) as error:
+        _ = build_onsite_bridge(config, voice="", ref_audio="", ref_text="")
+
+    assert error.value.field_name == "qwen3ttscpp_voice"
 
 
 def test_build_onsite_bridge_supports_aliyun_cosyvoice_voice_id() -> None:

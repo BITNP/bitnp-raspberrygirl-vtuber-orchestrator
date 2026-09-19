@@ -13,6 +13,7 @@ from orchestrator.llm import (
     LLMStreamEvent,
     LLMWorkload,
     OpenAICompatibleASRAdapter,
+    Qwen3TtsCppTTSAdapter,
     ReasoningMode,
     VllmOmniTTSAdapter,
 )
@@ -126,6 +127,32 @@ def test_vllm_omni_tts_https_accepts_configured_private_ca(
             voice="raspberry",
             ref_audio="file:///voice.wav",
             ref_text="reference",
+        )
+
+    # Then: the provider response is received on the live HTTPS path.
+
+    assert audio.data == b"private-ca-audio"
+    assert audio.media_type == "audio/wav"
+    assert server.request_paths == ["/v1/audio/speech"]
+
+
+def test_qwen3ttscpp_tts_https_accepts_configured_private_ca(
+    private_ca: PrivateCA,
+) -> None:
+    # Given: a local qwentts.cpp endpoint behind the test-only private CA.
+
+    with PrivateHttpsServer(private_ca) as server:
+        # When: the buffered synthesis path runs through HTTPS.
+
+        audio = Qwen3TtsCppTTSAdapter(
+            endpoint=server.endpoint,
+            model="local-qwen3-tts",
+            ca_path=private_ca.ca_path,
+        ).synthesize(
+            text="hello",
+            voice="paimeng",
+            ref_audio="",
+            ref_text="",
         )
 
     # Then: the provider response is received on the live HTTPS path.

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator import transport_app
+from orchestrator.config import load_config_from_env
 from orchestrator.ids import SessionId
 from orchestrator.interaction_ingress import SessionInteractionIngress
 from orchestrator.llm import LLMRequest
@@ -162,6 +163,32 @@ def test_transport_composes_one_scheduler_control_ingress_before_listening(
     assert runtime.ingress is not None
 
     assert runtime.closed is True
+
+
+@pytest.mark.parametrize(
+    "tts_provider",
+    ["vllm_omni", "qwen3ttscpp", "audio_cpp", "aliyun_cosyvoice"],
+)
+def test_transport_enables_onsite_bridge_for_every_real_tts_dialect(
+    tts_provider: str,
+) -> None:
+    # Given: real LLM and TTS provider dialects selected by configuration.
+    config = load_config_from_env(
+        {
+            "ORCHESTRATOR_LLM_PROVIDER": "openai_compatible",
+            "ORCHESTRATOR_LLM_ENDPOINT": "https://llm.example.test/v1",
+            "ORCHESTRATOR_LLM_MODEL": "onsite-model",
+            "ORCHESTRATOR_LLM_API_KEY": "onsite-test-key",
+            "ORCHESTRATOR_LLM_REASONING_DIALECT": "deepseek",
+            "ORCHESTRATOR_TTS_PROVIDER": tts_provider,
+            "ORCHESTRATOR_TTS_ENDPOINT": "https://tts.example.test/v1",
+            "ORCHESTRATOR_TTS_MODEL": "tts-model",
+        }
+    )
+
+    # Then: transport startup composes the onsite bridge for each dialect.
+    enabled = transport_app._onsite_bridge_enabled(config)  # pyright: ignore[reportPrivateUsage]
+    assert enabled is True
 
 
 def test_transport_skips_onsite_bridge_for_mock_provider_config(

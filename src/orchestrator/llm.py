@@ -7,6 +7,7 @@ from orchestrator.media_adapters import (
     AliyunCosyVoiceTTSAdapter,
     AudioCppTTSAdapter,
     OpenAICompatibleASRAdapter,
+    Qwen3TtsCppTTSAdapter,
     VllmOmniTTSAdapter,
 )
 from orchestrator.modes import AnswerCandidate
@@ -23,6 +24,7 @@ __all__ = [
     "AliyunCosyVoiceTTSAdapter",
     "AudioCppTTSAdapter",
     "OpenAICompatibleASRAdapter",
+    "Qwen3TtsCppTTSAdapter",
     "VllmOmniTTSAdapter",
 ]
 

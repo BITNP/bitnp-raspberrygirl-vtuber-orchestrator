@@ -35,7 +35,7 @@ from openai import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
 
     from openai.types.audio import TranscriptionStreamEvent
 
@@ -89,6 +89,13 @@ _ALIYUN_WORKER_JOIN_SECONDS = 5.0
 _ALIYUN_SYNTHESIS_THREAD = "aliyun-cosyvoice-realtime"
 _ALIYUN_WEBSOCKET_SCHEMES = frozenset({"ws", "wss"})
 _ALIYUN_REALTIME_AUDIO_FORMAT = AudioFormat.PCM_16000HZ_MONO_16BIT
+
+_PCM16_SAMPLE_BYTES = 2
+
+_QWEN3TTSCPP_STREAM_RESPONSE_LOG = (
+    "tts_response provider=qwen3ttscpp transport=http media_type=audio/pcm"
+    " stream=chunked outcome=complete pcm16le_bytes=%d"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +173,16 @@ class AudioCppSpeechPayload(TypedDict):
     reference_text: NotRequired[str]
 
 
+class Qwen3TtsCppSpeechPayload(TypedDict):
+    model: str
+
+    input: str
+
+    response_format: Literal["wav", "pcm"]
+
+    voice: NotRequired[str]
+
+
 @dataclass(frozen=True, slots=True)
 class HttpSpeechRequest:
     method: Literal["POST"]
@@ -184,6 +201,15 @@ class AudioCppSpeechRequest:
     url: str
 
     json: AudioCppSpeechPayload
+
+
+@dataclass(frozen=True, slots=True)
+class Qwen3TtsCppSpeechRequest:
+    method: Literal["POST"]
+
+    url: str
+
+    json: Qwen3TtsCppSpeechPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -1055,6 +1081,164 @@ class AudioCppTTSAdapter:
         return headers
 
 
+@dataclass(frozen=True, slots=True)
+class Qwen3TtsCppTTSAdapter:
+    """qwentts.cpp OpenAI-compatible speech adapter.
+
+    The engine owns a registry of named speakers, so the dialect selects the
+    speaker with ``voice`` and needs no cloning reference.  ``response_format``
+    alone decides the transfer: ``wav`` buffers one complete sentence, while
+    ``pcm`` answers with chunked raw s16le 24 kHz mono audio.  That chunked
+    body carries no event framing or terminator; the end of the body is the
+    end of speech.
+    """
+
+    endpoint: str
+
+    model: str
+
+    api_key: str | None = None
+
+    ca_path: Path | None = None
+
+    timeout_seconds: float = 120.0
+
+    capability: ProviderCapability = "final_only"
+
+    def __post_init__(self) -> None:
+        _require_endpoint_and_model(self.endpoint, self.model)
+
+    def build_speech_request(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        streaming: bool = False,
+    ) -> Qwen3TtsCppSpeechRequest:
+        # Speaker selection belongs to the engine registry in this dialect, so
+        # a locally configured cloning pair stays unused on purpose.
+        _ = ref_audio, ref_text
+        payload: Qwen3TtsCppSpeechPayload = {
+            "model": self.model.strip(),
+            "input": text,
+            "response_format": "pcm" if streaming else "wav",
+        }
+        if voice.strip() != "":
+            payload["voice"] = voice.strip()
+        return Qwen3TtsCppSpeechRequest(
+            method="POST",
+            url=f"{self.endpoint.rstrip('/')}/audio/speech",
+            json=payload,
+        )
+
+    def synthesize(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> SynthesizedAudio:
+        speech = self.build_speech_request(
+            text=text,
+            voice=voice,
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+        )
+        _log_qwen3ttscpp_tts_request(speech)
+        client = self._client()
+        release = _bind_cancellation(cancellation, client.close)
+        try:
+            response = client.post(
+                speech.url,
+                json=speech.json,
+                headers=self._headers(accept="audio/wav"),
+            )
+            _ = response.raise_for_status()
+            if cancellation is not None and cancellation.cancelled:
+                return SynthesizedAudio(data=b"", media_type="application/octet-stream")
+            data = response.content
+            _LOGGER.debug(
+                "tts_response provider=qwen3ttscpp transport=http media_type=%s %s",
+                "audio/wav",
+                binary_summary(data),
+            )
+            return SynthesizedAudio(data=data, media_type="audio/wav")
+        except httpx.HTTPError as error:
+            if cancellation is not None and cancellation.cancelled:
+                return SynthesizedAudio(data=b"", media_type="application/octet-stream")
+            raise _tts_provider_error(error) from error
+        finally:
+            release()
+            client.close()
+
+    def stream_pcm16le(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> Iterator[Pcm16leChunk]:
+        """Consume raw chunked PCM while the engine is still synthesizing it."""
+        speech = self.build_speech_request(
+            text=text,
+            voice=voice,
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+            streaming=True,
+        )
+        _log_qwen3ttscpp_tts_request(speech)
+        client = self._client()
+        release = _bind_cancellation(cancellation, client.close)
+        try:
+            with client.stream(
+                "POST",
+                speech.url,
+                json=speech.json,
+                headers=self._headers(accept="audio/pcm"),
+            ) as response:
+                _ = response.raise_for_status()
+                resampler = _Pcm24khzTo16khzResampler()
+                emitted = 0
+                for pcm in _raw_pcm16le_chunks(response.iter_bytes(), cancellation):
+                    converted = resampler.push(pcm)
+                    if converted:
+                        emitted += len(converted)
+                        yield Pcm16leChunk(converted)
+                if cancellation is None or not cancellation.cancelled:
+                    _LOGGER.debug(_QWEN3TTSCPP_STREAM_RESPONSE_LOG, emitted)
+        except httpx.HTTPError as error:
+            if cancellation is not None and cancellation.cancelled:
+                return
+            raise _tts_provider_error(error) from error
+        finally:
+            release()
+            client.close()
+
+    def _client(self) -> httpx.Client:
+        verify: bool | ssl.SSLContext = (
+            True
+            if self.ca_path is None
+            else ssl.create_default_context(cafile=self.ca_path)
+        )
+        return httpx.Client(
+            verify=verify,
+            timeout=self.timeout_seconds,
+            trust_env=False,
+        )
+
+    def _headers(self, *, accept: str) -> dict[str, str]:
+        headers = {"Accept": accept}
+        if self.api_key is not None and self.api_key.strip() != "":
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+
 def _require_endpoint_and_model(endpoint: str, model: str) -> None:
     if endpoint.strip() == "":
         raise MediaAdapterConfigError(field_name="endpoint")
@@ -1258,6 +1442,18 @@ def _log_audio_cpp_tts_request(speech: AudioCppSpeechRequest) -> None:
     )
 
 
+def _log_qwen3ttscpp_tts_request(speech: Qwen3TtsCppSpeechRequest) -> None:
+    """Log the request shape while keeping credentials out of the record."""
+    _LOGGER.debug(
+        "tts_request provider=qwen3ttscpp url=%s model=%s mode=%s voice=%r input=%r",
+        speech.url,
+        speech.json["model"],
+        "streaming_pcm" if speech.json["response_format"] == "pcm" else "final_only",
+        speech.json.get("voice"),
+        speech.json["input"],
+    )
+
+
 def _normalize_tts_sse(
     data: str,
     *,
@@ -1295,6 +1491,32 @@ def _sse_data(line: str) -> str | None:
     if line == "" or not line.startswith("data: "):
         return None
     return line.removeprefix("data: ")
+
+
+def _raw_pcm16le_chunks(
+    chunks: Iterable[bytes],
+    cancellation: ProviderCancellationHandle | None,
+) -> Iterator[bytes]:
+    """Yield whole PCM16 samples from a body that carries no event framing.
+
+    A chunked HTTP body is an arbitrary byte partition, so a chunk may end in
+    the middle of one little-endian sample.  Hold that byte until its neighbour
+    arrives, and fail closed when the body ends mid-sample instead of letting a
+    truncated sample reach the RTP packetizer.
+    """
+    pending = b""
+    for chunk in chunks:
+        if cancellation is not None and cancellation.cancelled:
+            return
+        pending += chunk
+        usable = len(pending) - len(pending) % _PCM16_SAMPLE_BYTES
+        if usable == 0:
+            continue
+        ready = pending[:usable]
+        pending = pending[usable:]
+        yield ready
+    if pending != b"":
+        raise ProviderResponseError(stage="tts", reason="incomplete_pcm")
 
 
 class _Pcm24khzTo16khzResampler:
