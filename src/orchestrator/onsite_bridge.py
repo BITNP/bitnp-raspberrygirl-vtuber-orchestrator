@@ -8,7 +8,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from threading import Lock
 from time import perf_counter
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final, NoReturn, cast
 
 from orchestrator.llm import CancellationToken
 from orchestrator.media_adapters import (
@@ -95,6 +95,11 @@ async def _discard_replacement(
 ) -> CancellationEpoch | None:
     _ = (stream, segment_id)
     return None
+
+
+def _raise_provider_error(error: Exception) -> NoReturn:
+    """Surface a provider failure from inside the chunk pump."""
+    raise error
 
 
 __all__ = (
@@ -245,34 +250,84 @@ class OnsiteExplainerBridge:
                     output_started,
                 )
             chunks = await run_blocking_provider(self.synthesize, text, cancellation)
-            output_epoch = await self.prepare_response_output(stream, epoch, turn_id)
-            if not chunks or output_epoch is None:
-                return False
-            packetizer = TtsPcmRtpPacketizer(
-                stream=stream, cancellation_epoch=output_epoch
+            return await self._speak_buffered_response(
+                stream, chunks, epoch, turn_id, output_started
             )
-            packets = tuple(
-                packet for chunk in chunks for packet in packetizer.push(chunk)
-            )
-            packets += packetizer.finish()
-            if not packets:
-                return False
-            loop = asyncio.get_running_loop()
-            deadline = loop.time()
+        except asyncio.CancelledError:
+            _ = cancellation.cancel(reason="response_tts_cancelled")
+            raise
+
+    async def _speak_buffered_response(
+        self,
+        stream: StreamKey,
+        chunks: tuple[Pcm16leChunk, ...] | None,
+        epoch: CancellationEpoch,
+        turn_id: str,
+        output_started: ResponseOutputStarted,
+    ) -> bool:
+        """Pace one finalized clip and close its stream exactly once."""
+        output_epoch = await self.prepare_response_output(stream, epoch, turn_id)
+        if not chunks or output_epoch is None:
+            return False
+        packetizer = TtsPcmRtpPacketizer(stream=stream, cancellation_epoch=output_epoch)
+        packets = tuple(packet for chunk in chunks for packet in packetizer.push(chunk))
+        packets += packetizer.finish()
+        if not packets:
+            return False
+        loop = asyncio.get_running_loop()
+        deadline = loop.time()
+        committed = False
+        try:
             for index, packet in enumerate(packets):
                 await self.output(stream, output_epoch, packet)
-                if index == 0 and not output_started():
-                    return False
+                if index == 0:
+                    committed = output_started()
+                    if not committed:
+                        return False
                 deadline += 0.02
                 delay = deadline - loop.time()
                 if delay > 0:
                     await asyncio.sleep(delay)
-            await self.output_finished(stream, output_epoch)
         except asyncio.CancelledError:
-            _ = cancellation.cancel(reason="response_tts_cancelled")
             raise
-        else:
-            return True
+        except Exception:
+            await self._close_unfinished_stream(
+                stream, output_epoch, committed=committed
+            )
+            raise
+        await self.output_finished(stream, output_epoch)
+        return True
+
+    async def _close_unfinished_stream(
+        self,
+        stream: StreamKey,
+        output_epoch: CancellationEpoch | None,
+        *,
+        committed: bool,
+    ) -> None:
+        """End an audible but truncated stream so Sound can release its lease.
+
+        Sound keeps an output lease until the stream ends, and the Orchestrator
+        keeps its playback window until Sound confirms that finish.  A stream
+        that stops mid-reply without this end marker leaves both believing the
+        agent is still speaking, which silently discards every later input.
+        """
+        if not committed or output_epoch is None:
+            return
+        try:
+            await self.output_finished(stream, output_epoch)
+        except Exception:  # noqa: BLE001 - closing must not mask the real failure
+            _LOGGER.debug(
+                "onsite_tts_stream_close_failed stream=%s epoch=%d",
+                stream.stream_id,
+                int(output_epoch),
+            )
+            return
+        _LOGGER.debug(
+            "onsite_tts_stream_closed stream=%s epoch=%d outcome=truncated",
+            stream.stream_id,
+            int(output_epoch),
+        )
 
     async def _speak_streaming_response(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915
         self,
@@ -377,7 +432,7 @@ class OnsiteExplainerBridge:
             while not cancellation.cancelled:
                 item = await received_chunks.get()
                 if isinstance(item, Exception):
-                    raise item
+                    _raise_provider_error(item)
                 if item is None:
                     break
                 chunk = item
@@ -398,6 +453,9 @@ class OnsiteExplainerBridge:
                 if not await emit(packets):
                     return False
             if cancellation.cancelled:
+                await self._close_unfinished_stream(
+                    stream, output_epoch, committed=committed
+                )
                 return False
             await receiver_task
             if packetizer is None:
@@ -416,6 +474,13 @@ class OnsiteExplainerBridge:
                 return False
         except asyncio.CancelledError:
             _ = cancellation.cancel(reason="response_tts_cancelled")
+            raise
+        except Exception:
+            # The provider died after the first frame was audible: drain what
+            # Sound already holds and let it report the verified finish.
+            await self._close_unfinished_stream(
+                stream, output_epoch, committed=committed
+            )
             raise
         finally:
             if not receiver_task.done():

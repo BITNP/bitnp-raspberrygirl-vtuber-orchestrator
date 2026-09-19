@@ -68,6 +68,8 @@ Mic 在本地对 20 ms PCM16 帧进行 VAD、CAM++、端点检测，并将窗口
 
 ASR 候选进入 session admission queue 时，Orchestrator 用自己的 monotonic clock 冻结 `was_playing_1000ms_ago`，不使用 Mic 的进程时钟，也不在候选排到队首后重新计算。该值为 true 时，Brain 的 `accept` 仍是不可信提案；reducer 只允许包含明确停止、等待、纠正或切换话题措辞的 ASR 通过，其余统一以 `brain_playback_policy_violated` 丢弃。确定性回声检查只参考实际开始播放的文本及播放结束后 1 秒尾窗，使用精确文本片段或整体相似度至少 0.88 的近似复述匹配；单字符 ASR 噪声在 Brain 前丢弃，Brain 对不清晰 ASR 生成的复述或“请重复”回复也在正式 turn 前 fail-closed。comment 不受这些规则影响。Mic control 接收循环只负责协议校验和快速投递候选任务，不等待 Brain 完成，因此慢模型不会把后续 ASR 堵在 WebSocket 缓冲区外，也不会改变其入队时播放判定。
 
+`was_playing_1000ms_ago` 只覆盖真实音频窗口：窗口在首个获准 RTP 帧提交时开启，仅在 Sound 校验过的 `finished`、输出路由丢失，或所属 TTS 任务在首帧后异常结束时关闭。TTS 任务的 deadline 只约束首帧之前的 provider 工作；首帧提交后按 20 ms 节奏播放的剩余音频属于媒体时间，长回答不会被轮次 deadline 中途截断。首帧提交后 provider 失败或流中止时，bridge 为该流补发 `media.stream.end`，让 Sound 排空已缓冲音频并回报 `finished`，Orchestrator 同时释放播放窗口并 fail-closed 结束该轮，因此会话不会长期误判“仍在播放”而丢弃后续输入。
+
 演示工具只在启动时配置非空 `ORCHESTRATOR_PPT_DECK_CATALOG` 后注册：`presentation.load` 只接受目录内 `deck_id`，`presentation.navigate` 只接受 1 到 10000 的整数 `page`，`presentation.play` 只接受空对象，且三者拒绝额外字段。Orchestrator 根据当前状态补入可信的 session、turn、command ID、deck version 和页码，模型参数不能覆盖这些字段。执行前再次验证实时 capability、revision、epoch 与当前 deck 前置条件；只有 session-owning Frontend 对精确 command ID 的一次回执可提交演示状态，错误 owner、重复或迟到回执均无效。Frontend 部署侧还需准备允许文稿的版本化页面目录；真实渲染失败不会提交演示状态。
 
 回复可含 `<action name="..."/>` 和 `<expression name="..."/>`。动作 allowlist 为 `act_cute`、`emphasis`、`hello`；expression allowlist 为 `nod`（点头）、`shake_head`（摇头）、`wink`（单眼眨眼），播放旧前端录制的面捕参数序列。候选准入和最终回复阶段使用相同白名单；Orchestrator 拒绝含未知或非法控制标记的候选，TTS 接收去除合法 cue 后的文本。Frontend 使用 canonical `vtuber.caption.timeline.command` / `vtuber.caption.timeline.cancel` 事件按 `inline-cue/v1` 渲染字幕，通过 Live2D 驱动执行原生动作、录制面捕、眨眼和口型。录制面捕不会覆盖字幕驱动的嘴部开合，不开启实时摄像头。
@@ -113,6 +115,10 @@ task 的结果栅栏允许切换。
 任务。每段替换播放必须先获首帧和匹配的 Sound flush ACK；成功时先取消旧字幕 timeline，
 失败则旧音频与旧 timeline 都保持。`PLAYING → COMPLETED` 只能由 Sound 已通过输出
 lease 校验的 `finished` 事件触发；TTS provider 完成或重复/过期 finished 都不能结束逻辑 turn。
+唯一的例外是所属 TTS 任务在首帧提交后异常结束：此时不会再出现可验证的 `finished`，
+Orchestrator 释放播放窗口并将该轮转为 `FAILED`，bridge 同时为该流补发
+`media.stream.end`，使 Sound 排空缓冲并释放输出租约，而不是让会话停留在无音频却仍在
+“播放”的状态。`was_playing_1000ms_ago` 与回声尾窗都跟随同一窗口关闭。
 如果 replacement flush 被拒绝、超时或失效，`TurnCoordinator` 会恢复已保留旧 lease 的
 `PLAYING` 状态；新 turn 不得写入 context、memory 或 timeline。
 

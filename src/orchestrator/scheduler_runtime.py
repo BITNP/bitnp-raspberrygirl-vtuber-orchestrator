@@ -229,6 +229,9 @@ _OPERATION_OBSERVATION_LOG = "operation_observation trace=%s session=%s turn=%s 
 _TTS_FIRST_FRAME_LOG = (
     "tts_first_frame_admitted trace=%s session=%s turn=%s segment=%s task=%s speech=%r"
 )
+_OUTPUT_UNVERIFIED_LOG = (
+    "response_output_unverified session=%s turn=%s reason=%s closed=%s phase=%s"
+)
 _MEMORY_REJECTED_LOG = "memory_candidate_rejected trace=%s session=%s turn=%s segment=%s task=%s key=%r value=%r confidence=%d reason=%s"  # noqa: E501
 _MEMORY_COMMITTED_LOG = "memory_candidate_committed trace=%s session=%s turn=%s segment=%s task=%s revision=%d key=%r value=%r confidence=%d"  # noqa: E501
 
@@ -820,12 +823,44 @@ class SessionRuntime:
             _ = self.turn_coordinator.output_lost(
                 turn_id=state.turn_id, epoch=state.epoch
             )
-        if self._playback_started_at_ms is not None:
-            self._playback_intervals.append(
-                (self._playback_started_at_ms, self.clock())
-            )
-            self._playback_started_at_ms = None
-            self._echo_playback_ended_at_ms = self.clock()
+        _ = self._close_playback_window()
+
+    def response_output_unverified(self, turn_id: TurnId, *, reason: str) -> bool:
+        """Release a started playback that can no longer report a verified end.
+
+        The owning TTS task is the only witness for its stream.  When it ends
+        after the first committed frame without Sound confirming the physical
+        finish, the session must not stay audible: an open playback window
+        makes every later ASR final look like speech that arrived during the
+        agent's own audio, so each one is discarded as barge-in and the agent
+        stops answering entirely.
+        """
+        state = self.turn_coordinator.state
+        if state.turn_id != str(turn_id):
+            return False
+        closed = self._close_playback_window()
+        _ = self.turn_coordinator.output_lost(turn_id=str(turn_id), epoch=state.epoch)
+        _LOGGER.debug(
+            _OUTPUT_UNVERIFIED_LOG,
+            self.scheduler.snapshot.session_id,
+            turn_id,
+            reason,
+            closed,
+            self.turn_coordinator.state.phase,
+        )
+        return closed
+
+    def _close_playback_window(self) -> bool:
+        """Close the audible window this session opened for a response."""
+        if self._playback_started_at_ms is None:
+            return False
+        now_ms = self.clock()
+        self._playback_intervals.append((self._playback_started_at_ms, now_ms))
+        while len(self._playback_intervals) > _PLAYBACK_HISTORY_CAPACITY:
+            _ = self._playback_intervals.popleft()
+        self._playback_started_at_ms = None
+        self._echo_playback_ended_at_ms = now_ms
+        return True
 
     def response_cutover_failed(self, turn_id: TurnId) -> bool:
         """Keep the retained lease authoritative after a failed replacement."""
@@ -853,13 +888,7 @@ class SessionRuntime:
         # The exact physical lease has finished even if a replacement turn is
         # still reasoning or synthesizing. End its echo window independently
         # without completing that newer logical turn.
-        if self._playback_started_at_ms is not None:
-            now_ms = self.clock()
-            self._echo_playback_ended_at_ms = now_ms
-            self._playback_intervals.append((self._playback_started_at_ms, now_ms))
-            self._playback_started_at_ms = None
-            while len(self._playback_intervals) > _PLAYBACK_HISTORY_CAPACITY:
-                _ = self._playback_intervals.popleft()
+        _ = self._close_playback_window()
         state = self.turn_coordinator.state
         if (
             state.turn_id is None
@@ -2317,6 +2346,7 @@ class SessionRuntime:
             _ = self._agent_tts_text.pop(task_id, None)
             return False
         committed = False
+        output_started = asyncio.Event()
         _ = self.turn_coordinator.start_synthesizing(
             turn_id=str(record.request.turn_id),
             epoch=record.request.cancellation_epoch,
@@ -2353,13 +2383,16 @@ class SessionRuntime:
                     turn_id=str(record.request.turn_id),
                     epoch=record.request.cancellation_epoch,
                 )
+                output_started.set()
                 if execution.output_started is not None:
                     execution.output_started()
             return committed
 
         try:
             emitted = await self._await_preoutput_tts_provider(
-                task_id, synthesize(text, accept_output_started)
+                task_id,
+                synthesize(text, accept_output_started),
+                output_started=output_started,
             )
         except _TtsProviderCancelledError:
             emitted = False
@@ -2371,16 +2404,36 @@ class SessionRuntime:
             emitted = False
             _LOGGER.exception("agent_tts_execution_failed task=%s", task_id)
         if not emitted or not committed:
-            _ = self.cancel_task(task_id, correlation)
-            _ = self._agent_tts_text.pop(task_id, None)
-            _ = self._pending_response_commits.pop(task_id, None)
-            _ = self.turn_coordinator.fail(
-                turn_id=str(record.request.turn_id),
-                epoch=record.request.cancellation_epoch,
+            self._abandon_agent_tts_task(
+                task_id, record, correlation, committed=committed
             )
             return False
         _ = self._agent_tts_text.pop(task_id, None)
         return True
+
+    def _abandon_agent_tts_task(
+        self,
+        task_id: TaskId,
+        record: TaskRecord,
+        correlation: EventCorrelation,
+        *,
+        committed: bool,
+    ) -> None:
+        """Close a TTS task whose audio never reached a stable end."""
+        _ = self.cancel_task(task_id, correlation)
+        _ = self._agent_tts_text.pop(task_id, None)
+        _ = self._pending_response_commits.pop(task_id, None)
+        if committed:
+            # The first frame is already audible, so no provider deadline or
+            # later result can release its playback window.
+            _ = self.response_output_unverified(
+                record.request.turn_id, reason="tts_task_failed_after_output"
+            )
+            return
+        _ = self.turn_coordinator.fail(
+            turn_id=str(record.request.turn_id),
+            epoch=record.request.cancellation_epoch,
+        )
 
     def _record_playback_started(self, text: str) -> None:
         now_ms = self.clock()
@@ -2400,9 +2453,19 @@ class SessionRuntime:
         return ""
 
     async def _await_preoutput_tts_provider(
-        self, task_id: TaskId, operation: Awaitable[bool]
+        self,
+        task_id: TaskId,
+        operation: Awaitable[bool],
+        *,
+        output_started: asyncio.Event,
     ) -> bool:
-        """Run TTS under the task deadline until audio crosses its result gate."""
+        """Run TTS under the task deadline until audio crosses its result gate.
+
+        The deadline bounds provider work before the first committed frame.
+        Once that frame is audible, the rest of the reply is paced media time
+        rather than provider latency, so a long answer is allowed to finish
+        instead of being cut off mid-sentence by the turn deadline.
+        """
         record = self.task_registry.task(task_id)
         if record is None or record.state is not TaskState.RUNNING:
             raise _TtsProviderCancelledError
@@ -2411,12 +2474,18 @@ class SessionRuntime:
             _ = self.task_registry.timeout(task_id)
             raise TimeoutError
         provider_task = asyncio.ensure_future(operation)
+        gate_waiter = asyncio.ensure_future(output_started.wait())
         self._active_preoutput_tts_provider_tasks[task_id] = provider_task
         try:
-            return await asyncio.wait_for(provider_task, timeout=remaining_ms / 1_000)
-        except TimeoutError:
+            done, _ = await asyncio.wait(
+                {provider_task, gate_waiter}, timeout=remaining_ms / 1_000
+            )
+            if provider_task in done:
+                return provider_task.result()
+            if gate_waiter in done:
+                return await provider_task
             _ = self.task_registry.timeout(task_id)
-            raise
+            raise TimeoutError
         except asyncio.CancelledError:
             current_task = asyncio.current_task()
             if current_task is not None and current_task.cancelling():
@@ -2426,6 +2495,8 @@ class SessionRuntime:
             _ = self._active_preoutput_tts_provider_tasks.pop(task_id, None)
             if not provider_task.done():
                 _ = provider_task.cancel()
+            if not gate_waiter.done():
+                _ = gate_waiter.cancel()
 
     def receive_control(self, raw_message: str) -> bool:
         parsed = parse_presentation_result_control(

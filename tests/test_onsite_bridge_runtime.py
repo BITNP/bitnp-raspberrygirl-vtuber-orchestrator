@@ -8,6 +8,8 @@ import wave
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import pytest
+
 from orchestrator.ids import ConnectionId, SessionId
 from orchestrator.media_adapters import SynthesizedAudio
 from orchestrator.onsite_bridge import OnsiteExplainerBridge
@@ -196,6 +198,40 @@ class _ShortStreamingTts:
         raise AssertionError
 
 
+@dataclass(frozen=True, slots=True)
+class _BreakingStreamingTts:
+    """Long enough to commit the first frame, then the provider dies."""
+
+    capability: str = "streaming_sse"
+
+    def stream_pcm16le(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> Iterator[Pcm16leChunk]:
+        _ = (text, voice, ref_audio, ref_text, cancellation)
+        yield Pcm16leChunk(b"\x10\x20" * 16_000)
+        message = "sse stream broke"
+        raise OSError(message)
+
+    def synthesize(
+        self,
+        *,
+        text: str,
+        voice: str,
+        ref_audio: str,
+        ref_text: str,
+        cancellation: ProviderCancellationHandle | None = None,
+    ) -> SynthesizedAudio:
+        _ = (text, voice, ref_audio, ref_text, cancellation)
+        message = "streaming_sse must not fall back to full-clip synthesis"
+        raise AssertionError(message)
+
+
 @dataclass(slots=True)
 class _CancellableStreamingTts:
     next_started: threading.Event = field(default_factory=threading.Event)
@@ -382,6 +418,49 @@ def test_response_tts_waits_for_one_second_startup_watermark() -> None:
 
 def test_response_tts_plays_short_stream_when_it_ends_below_watermark() -> None:
     asyncio.run(_short_response_streaming_proof())
+
+
+def test_response_tts_failure_after_first_frame_ends_the_stream() -> None:
+    asyncio.run(_streaming_failure_proof())
+
+
+async def _streaming_failure_proof() -> None:
+    """A provider that dies after the first frame must still close its stream.
+
+    Sound keeps the output lease until the stream ends, so an unterminated
+    truncated stream would leave the whole session looking like it is still
+    playing its answer.
+    """
+
+    bridge = _bridge(_DelayedAsr())
+    bridge.tts = _BreakingStreamingTts()
+    packets: list[bytes] = []
+    finished: list[CancellationEpoch] = []
+
+    async def output(
+        _stream: StreamKey, _epoch: CancellationEpoch, packet: bytes
+    ) -> None:
+        packets.append(packet)
+
+    async def output_finished(
+        _stream: StreamKey, epoch: CancellationEpoch
+    ) -> None:
+        finished.append(epoch)
+
+    bridge.set_output_callback(output)
+    bridge.set_output_finished_callback(output_finished)
+
+    with pytest.raises(OSError, match="sse stream broke"):
+        _ = await bridge.speak_response(
+            StreamKey("session-broken", "stream-broken"),
+            "agent reply",
+            CancellationEpoch(0),
+            "turn-broken",
+            lambda: True,
+        )
+
+    assert packets
+    assert finished == [CancellationEpoch(0)]
 
 
 def test_response_tts_cancellation_waits_for_active_generator_next() -> None:
